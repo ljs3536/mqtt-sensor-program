@@ -1,0 +1,1412 @@
+# -*- coding: utf-8 -*-
+"""MQTT single-device waveform replay generator v0.01.
+Use one input file per sensor; navigate a packet by packet preview; play from
+selected packet to the last record and loop to the *selected packet*.
+"""
+import csv
+import math
+from datetime import datetime
+import json
+import os
+import queue
+import random
+import threading
+import time
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+from pathlib import Path
+
+import numpy as np
+import paho.mqtt.client as mqtt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
+from matplotlib import font_manager, rcParams
+
+# 한글 그래프 레이블용 글꼴: 설치된 글꼴을 우선 선택한다.
+# Windows 기본 "맑은 고딕"을 우선하고, 다른 OS에서도 실행 가능하도록 대체 글꼴을 허용한다.
+def configure_korean_plot_font():
+    candidates = ('Malgun Gothic', '맑은 고딕', 'NanumGothic',
+                  'NanumSquare', 'Noto Sans CJK KR', 'AppleGothic', 'UnDotum')
+    for family in candidates:
+        try:
+            font_manager.findfont(family, fallback_to_default=False)
+        except (ValueError, OSError):
+            continue
+        rcParams['font.family'] = [family]
+        rcParams['axes.unicode_minus'] = False
+        rcParams['pdf.fonttype'] = 42
+        rcParams['ps.fonttype'] = 42
+        return family
+    rcParams['axes.unicode_minus'] = False
+    return None
+
+KOREAN_PLOT_FONT = configure_korean_plot_font()
+
+APP_TITLE = 'MQTT H/ADXL/PIEZO 발생기 v0.15 — 좌+휠 X / 우+휠 Y'
+TYPE_NIBBLE = {'PIEZO': 0, 'X': 1, 'Y': 2, 'Z': 3}
+
+def sensor_type_from_seq(seq: str) -> str:
+    try:
+        high = int(str(seq), 16) // 16
+    except Exception:
+        return "UNKNOWN"
+
+    if high == 0:
+        return "PIEZO"
+    if high == 1:
+        return "X"
+    if high == 2:
+        return "Y"
+    if high == 3:
+        return "Z"
+    return "UNKNOWN"
+
+
+def period_ms_from_payload(obj: dict) -> float:
+    try:
+        rate = float(obj.get("samplerate", 0))
+        count = float(obj.get("numofsample", 0))
+        if rate > 0 and count > 0:
+            return count / rate * 1000.0
+    except Exception:
+        pass
+    return 0.0
+
+
+def parse_json_objects(text: str) -> list[dict]:
+    """
+    다음 입력 형태를 모두 처리:
+    - JSONL
+    - pretty JSON 1개
+    - x / y / z 라벨 + JSON
+    - 여러 JSON object가 연속으로 존재하는 TXT
+    """
+    decoder = json.JSONDecoder()
+    objects = []
+    pos = 0
+
+    while pos < len(text):
+        start = text.find("{", pos)
+        if start < 0:
+            break
+
+        try:
+            obj, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            pos = start + 1
+            continue
+
+        if isinstance(obj, dict):
+            objects.append(obj)
+
+        pos = start + end
+
+    return objects
+
+
+def load_json_objects(path: str) -> list[dict]:
+    text = Path(path).read_text(encoding="utf-8-sig", errors="strict")
+    objects = parse_json_objects(text)
+
+    if not objects:
+        raise ValueError("JSON object를 찾지 못했습니다.")
+
+    return objects
+
+
+def load_adxl_templates(path: str) -> dict[str, list[dict]]:
+    objects = load_json_objects(path)
+
+    axes = {"X": [], "Y": [], "Z": []}
+    for obj in objects:
+        st = sensor_type_from_seq(obj.get("seq", ""))
+        if st in axes:
+            axes[st].append(obj)
+
+    missing = [axis for axis in ("X", "Y", "Z") if not axes[axis]]
+    if missing:
+        raise ValueError(
+            "ADXL 파일에서 다음 축 JSON을 찾지 못했습니다: " + ", ".join(missing)
+        )
+
+    return axes
+
+
+def _adxl_csv_events(paths):
+    """Load every axis row, preserving invalid rows as markers for alignment.
+
+    Source data is NEVER repaired, padded, shortened, or modified. Bad packets
+    remain synchronization markers but are excluded from preview and publish.
+    """
+    events = []
+    warnings = []
+    counts = {}
+    for axis in ('X', 'Y', 'Z'):
+        path = str(paths.get(axis, '')).strip()
+        if not path:
+            raise ValueError(f'ADXL-{axis} CSV를 선택하세요.')
+        with Path(path).open('r', encoding='utf-8-sig', newline='') as f:
+            reader = csv.DictReader(f)
+            fields = reader.fieldnames or []
+            if not ('sensorData_hex' in fields or 'sensorData' in fields):
+                raise ValueError(f'ADXL-{axis}: sensorData_hex 컬럼이 필요합니다.')
+            count = 0
+            for row_num, row in enumerate(reader, start=2):
+                value = ''.join(str(row.get('sensorData_hex') or row.get('sensorData') or '').split())
+                seq = str(row.get('seq') or '').strip()
+                when = str(row.get('received_at') or '').strip()
+                try:
+                    timestamp = datetime.fromisoformat(when.replace('Z', '+00:00')).timestamp() if when else None
+                except ValueError:
+                    timestamp = None
+                if not seq:
+                    warnings.append(f'{axis} {row_num}행: seq 없음, 동기화 불가 → 제외')
+                    continue
+                try:
+                    seq_number = int(seq.removeprefix('0x').removeprefix('0X'), 16)
+                    if (seq_number >> 4) != TYPE_NIBBLE[axis]:
+                        raise ValueError('seq 축 불일치')
+                except ValueError:
+                    warnings.append(f'{axis} {row_num}행: seq={seq!r} 축 정보 오류 → 제외')
+                    continue
+                error = None
+                try:
+                    raw = bytes.fromhex(value)
+                    n = int(row.get('numofsample') or len(raw)//2)
+                    fs = float(row.get('samplerate') or 3200)
+                    if n <= 0 or fs <= 0 or len(raw) != n*2:
+                        raise ValueError(f'HEX {len(raw)} bytes / N={n} / Fs={fs:g}')
+                    label = str(row.get('axis') or '').strip().upper()
+                    if label and label not in (axis, 'ADXL-'+axis):
+                        raise ValueError(f'축 라벨={label}')
+                    obj = {
+                        'gwMacAddr': str(row.get('gwMacAddr') or 'HALOW').strip(),
+                        'dvicMacAddr': str(row.get('dvicMacAddr') or '').strip(),
+                        'batteryRmin': str(row.get('batteryRmin') or '0').strip(),
+                        'seq': seq, 'samplerate': str(row.get('samplerate') or '3200').strip(),
+                        'numofsample': str(n), 'sensorData': value.upper(),
+                    }
+                    if str(row.get('g_range') or '').strip():
+                        obj['g_range'] = str(row['g_range']).strip()
+                    if str(row.get('tick') or '').strip():
+                        obj['tick'] = str(row['tick']).strip()
+                except (ValueError, TypeError) as exc:
+                    error = str(exc)
+                    obj = None
+                    warnings.append(f'{axis} {row_num}행 seq={seq}: 데이터 오류({error}) → 해당 축만 제외')
+                events.append({'axis': axis, 'low': seq_number & 15, 'seq': seq,
+                               'time': timestamp, 'row': row_num, 'obj': obj})
+                count += 1
+            counts[axis] = count
+    return events, warnings, counts
+
+
+def load_adxl_csv_xyz(paths: dict[str, str], return_report=False):
+    """Sequence-aware sparse XYZ grouping; no invented samples or padding.
+
+    Sequence low nibble increments by 1 for each transmitted axis; the high
+    nibble identifies X/Y/Z. A missing axis leaves a sparse set. Timestamp is
+    only used to order records, never used to synthesize or replace seq.
+    """
+    events, warnings, counts = _adxl_csv_events(paths)
+    if not events:
+        raise ValueError('ADXL CSV에서 seq를 가진 행을 찾지 못했습니다.')
+    # With timestamps, merge chronological per-axis CSVs. If timestamps are
+    # absent, use row-order/axis ordering as a conservative fallback.
+    if any(e['time'] is not None for e in events):
+        events.sort(key=lambda e: (e['time'] is None, e['time'] or 0, e['row'], ('X','Y','Z').index(e['axis'])))
+    else:
+        events.sort(key=lambda e: (e['row'], ('X','Y','Z').index(e['axis'])))
+    sets = []
+    current = {}
+    last_axis = None
+    last_low = None
+    last_time = None
+    for e in events:
+        axis = e['axis']
+        idx = ('X','Y','Z').index(axis)
+        if current:
+            prev_idx = ('X','Y','Z').index(last_axis)
+            expected = (last_low + (idx - prev_idx)) & 15
+            # If the stream order/rolling seq doesn't match, do not force the
+            # packet into this set; start a new partial set instead.
+            mismatch = idx <= prev_idx or expected != e['low']
+            if mismatch:
+                sets.append(current)
+                current = {}
+        if e['obj'] is not None:
+            # A malformed axis is represented by its absence, not fake zeros.
+            current[axis] = e['obj']
+        last_axis, last_low, last_time = axis, e['low'], e['time']
+    if current:
+        sets.append(current)
+    # A completely bad set has no drawable/transmittable axes.
+    useful = [item for item in sets if item]
+    skipped = len(sets) - len(useful)
+    if skipped:
+        warnings.append(f'유효한 축이 없는 세트 {skipped}건 제외')
+    if not useful:
+        raise ValueError('전송 가능한 ADXL 데이터가 없습니다. HEX와 N을 확인하세요.')
+    report = {'rows': counts, 'set_count': len(useful),
+              'partial': sum(len(x)<3 for x in useful), 'warnings': warnings,
+              'axis_packets': {a:sum(a in x for x in useful) for a in ('X','Y','Z')}}
+    return (useful, report) if return_report else useful
+
+
+def load_piezo_csv(path: str) -> list[dict]:
+    """
+    vibration_comm_speed_test 계열에서 저장한 PIEZO HEX CSV를
+    MQTT 송신용 PIEZO JSON template 목록으로 변환한다.
+
+    지원 컬럼:
+      - sensorData_hex (필수, sensorData도 호환)
+      - samplerate
+      - numofsample
+      - gwMacAddr / dvicMacAddr / batteryRmin / seq / tick
+
+    CSV의 부가 컬럼(packet_no, received_at, payload_bytes 등)은
+    MQTT payload에는 포함하지 않는다.
+    """
+    templates = []
+
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+
+        if not reader.fieldnames:
+            raise ValueError("PIEZO CSV 헤더를 찾지 못했습니다.")
+
+        has_sensor_hex = (
+            "sensorData_hex" in reader.fieldnames
+            or "sensorData" in reader.fieldnames
+        )
+        if not has_sensor_hex:
+            raise ValueError(
+                "PIEZO CSV에 sensorData_hex 또는 sensorData 컬럼이 필요합니다."
+            )
+
+        for row_no, row in enumerate(reader, start=2):
+            sensor_hex = str(
+                row.get("sensorData_hex")
+                or row.get("sensorData")
+                or ""
+            ).strip()
+
+            if not sensor_hex:
+                continue
+
+            # 공백이 섞여 있어도 허용
+            sensor_hex = "".join(sensor_hex.split())
+
+            try:
+                raw = bytes.fromhex(sensor_hex)
+            except ValueError as e:
+                raise ValueError(
+                    f"PIEZO CSV {row_no}행 sensorData HEX 오류: {e}"
+                ) from e
+
+            if len(raw) % 2:
+                raise ValueError(
+                    f"PIEZO CSV {row_no}행 sensorData byte 길이가 홀수입니다: "
+                    f"{len(raw)} bytes"
+                )
+
+            samplerate = str(row.get("samplerate") or "25600").strip()
+            numofsample = str(row.get("numofsample") or "").strip()
+
+            if not numofsample:
+                numofsample = str(len(raw) // 2)
+
+            try:
+                expected_bytes = int(numofsample) * 2
+            except ValueError as e:
+                raise ValueError(
+                    f"PIEZO CSV {row_no}행 numofsample 값 오류: {numofsample}"
+                ) from e
+
+            if expected_bytes != len(raw):
+                raise ValueError(
+                    f"PIEZO CSV {row_no}행 길이 불일치: "
+                    f"sensorData={len(raw)} bytes, "
+                    f"numofsample={numofsample} -> {expected_bytes} bytes"
+                )
+
+            seq = str(row.get("seq") or "00").strip()
+            if sensor_type_from_seq(seq) != "PIEZO":
+                raise ValueError(
+                    f"PIEZO CSV {row_no}행 seq={seq}가 PIEZO 형식이 아닙니다."
+                )
+
+            obj = {
+                "gwMacAddr": str(row.get("gwMacAddr") or "HALOW").strip(),
+                "dvicMacAddr": str(row.get("dvicMacAddr") or "").strip(),
+                "batteryRmin": str(row.get("batteryRmin") or "0").strip(),
+                "seq": seq,
+                "samplerate": samplerate,
+                "numofsample": numofsample,
+                "sensorData": sensor_hex.upper(),
+            }
+
+            tick = str(row.get("tick") or "").strip()
+            if tick:
+                obj["tick"] = tick
+
+            templates.append(obj)
+
+    if not templates:
+        raise ValueError("PIEZO CSV에서 전송 가능한 데이터 행을 찾지 못했습니다.")
+
+    return templates
+
+
+def load_piezo_templates(path: str) -> list[dict]:
+    """
+    PIEZO 입력은 기존 JSON/TXT/JSONL과
+    vibration_comm_speed_test에서 저장한 HEX CSV를 모두 지원한다.
+    """
+    if Path(path).suffix.lower() == ".csv":
+        return load_piezo_csv(path)
+
+    objects = load_json_objects(path)
+
+    piezo = [
+        obj for obj in objects
+        if sensor_type_from_seq(obj.get("seq", "")) == "PIEZO"
+        and "samplerate" in obj
+        and "numofsample" in obj
+    ]
+
+    if not piezo:
+        raise ValueError(
+            "PIEZO JSON을 찾지 못했습니다. "
+            "seq high nibble=0이며 samplerate/numofsample 필드가 있어야 합니다."
+        )
+
+    return piezo
+
+
+def load_ultrasonic_templates(path: str) -> list[dict]:
+    """
+    초음파는 현재 제공된 실제 형식처럼 samplerate/numofsample가 없는
+    일반 JSON payload를 그대로 사용한다.
+    """
+    objects = load_json_objects(path)
+
+    usable = []
+    for obj in objects:
+        if "sensorData" not in obj:
+            continue
+        usable.append(obj)
+
+    if not usable:
+        raise ValueError("초음파 JSON에서 sensorData 필드를 찾지 못했습니다.")
+
+    return usable
+
+
+class SequenceState:
+    """
+    진동용 seq:
+      high nibble = PIEZO/X/Y/Z 종류
+      low nibble  = 0~F rolling counter
+    """
+    def __init__(self, start=0):
+        self.value = start & 0xF
+        self.lock = threading.Lock()
+
+    def next_seq(self, sensor_type: str) -> str:
+        with self.lock:
+            low = self.value
+            self.value = (self.value + 1) & 0xF
+
+        high = TYPE_NIBBLE[sensor_type]
+        return f"{high:X}{low:X}"
+
+
+
+def decode_packet(sensor_kind, obj):
+    """Decode a single selected packet for preview. Never rewrite MQTT data."""
+    raw_hex = str(obj.get('sensorData','')).strip()
+    raw = bytes.fromhex(''.join(raw_hex.split()))
+    if sensor_kind == 'PIEZO':
+        if len(raw) % 2: raise ValueError('PIEZO bytes 길이는 짝수여야 합니다')
+        samples=np.frombuffer(raw,dtype='>i2').astype(np.float64)
+        fs=float(obj.get('samplerate') or 25600)
+        return samples, fs, 'Count'
+    if sensor_kind == 'ADXL':
+        if len(raw) % 2: raise ValueError('ADXL bytes 길이는 짝수여야 합니다')
+        samples=np.frombuffer(raw,dtype='>i2').astype(np.float64)
+        fs=float(obj.get('samplerate') or 3200)
+        return samples, fs, 'Count'
+    # Ultrasonic H data: source payload contains float32 samples after optional prefix.
+    # Without knowing the concrete H binary envelope, preview must not invent a decoder.
+    raise ValueError('초음파 H는 현재 RAW 바이너리 포맷 미확정: 송신은 지원, 그래프는 미지원')
+
+
+def spectral_filter(x, fs, *, hpf=False, hp_cutoff=10.0, hp_order=4,
+                    lpf=False, lp_cutoff=3000.0, lp_order=4,
+                    notch=False, notch_center=975.0, notch_width=20.0):
+    data=np.asarray(x,dtype=np.float64)
+    if data.size<2 or not (hpf or lpf or notch): return data.copy()
+    bins=np.fft.rfftfreq(len(data), d=1/fs)
+    resp=np.ones_like(bins)
+    if hpf:
+        if not 0 < hp_cutoff < fs/2: raise ValueError('HPF 컷오프는 Fs/2보다 작아야 합니다')
+        p=np.zeros_like(bins); mask=bins>0
+        p[mask]=1/np.sqrt(1+(hp_cutoff/bins[mask])**(2*hp_order))
+        resp*=p
+    if lpf:
+        if not 0 < lp_cutoff < fs/2: raise ValueError('LPF 컷오프는 Fs/2보다 작아야 합니다')
+        resp*=1/np.sqrt(1+(bins/lp_cutoff)**(2*lp_order))
+    if notch:
+        if not (0 < notch_center < fs/2 and 0 < notch_width < fs/2):
+            raise ValueError('Notch 주파수/폭은 0~Fs/2 안으로 설정하세요')
+        sigma=notch_width/(2*np.sqrt(2*np.log(2)))
+        resp*=1-np.exp(-.5*((bins-notch_center)/sigma)**2)
+    return np.fft.irfft(np.fft.rfft(data)*resp, n=len(data))
+
+
+FFT_WINDOWS=('Rectangular','Hann','Hamming','Blackman','Blackman-Harris','Flat Top','Bartlett','Kaiser')
+
+def fft_window(n, name='Hann', beta=8.6):
+    if name=='Rectangular': return np.ones(n)
+    if name=='Hamming': return np.hamming(n)
+    if name=='Blackman': return np.blackman(n)
+    if name=='Bartlett': return np.bartlett(n)
+    if name=='Kaiser': return np.kaiser(n,beta)
+    if name=='Blackman-Harris':
+        a=np.arange(n)*2*np.pi/max(1,n-1)
+        return .35875-.48829*np.cos(a)+.14128*np.cos(2*a)-.01168*np.cos(3*a)
+    if name=='Flat Top':
+        a=np.arange(n)*2*np.pi/max(1,n-1)
+        return .21557895-.41663158*np.cos(a)+.277263158*np.cos(2*a)-.083578947*np.cos(3*a)+.006947368*np.cos(4*a)
+    return np.hanning(n)
+
+def fft_peak(x,fs,window='Hann',window_size=None,beta=8.6):
+    x=np.asarray(x,dtype=np.float64)
+    n=len(x) if window_size is None else min(len(x),max(2,int(window_size)))
+    if n<2: return np.array([]),np.array([])
+    offset=(len(x)-n)//2
+    x=x[offset:offset+n]
+    x=x-np.mean(x)
+    win=fft_window(n,window,beta)
+    scale=win.sum()
+    if scale<=0: raise ValueError('FFT 창 함수 합계가 0입니다.')
+    mag=2*np.abs(np.fft.rfft(x*win))/scale
+    mag[0]/=2
+    if n%2==0: mag[-1]/=2
+    return np.fft.rfftfreq(n,d=1/fs),mag
+
+def rotating_candidates(freqs, amps, rpm, min_count=2, max_count=48):
+    """Receiver-style relative harmonic matching; exploratory, not a diagnosis."""
+    f=np.asarray(freqs); a=np.asarray(amps)
+    if rpm<=0 or len(f)<5: return []
+    peaks=np.where((a[1:-1]>a[:-2])&(a[1:-1]>=a[2:]))[0]+1
+    if len(peaks)==0: return []
+    floor=np.median(a[a>0]) if np.any(a>0) else 0
+    peaks=peaks[a[peaks]>=max(3*floor, .015*np.max(a))]
+    peaks=peaks[np.argsort(a[peaks])[-120:]]
+    df=float(np.median(np.diff(f))); rot=rpm/60
+    results=[]
+    for count in range(min_count,max_count+1):
+        base=rot*count
+        if base>=f[-1]-df: continue
+        score=0.; matched=[]
+        for h in range(1,min(5,int(f[-1]//base))+1):
+            target=base*h; tol=max(1.5*df,.015*target)
+            idx=peaks[np.abs(f[peaks]-target)<=tol]
+            if len(idx)==0: continue
+            j=idx[np.argmax(a[idx])]
+            ratio=float(a[j]/max(np.max(a),1e-12))
+            proximity=max(0,1-abs(f[j]-target)/tol)
+            score+=(ratio**.5)*(.5+.5*proximity)/h**.6
+            matched.append((h,round(float(f[j]),2)))
+        if matched:
+            score*=1 if any(h==1 for h,_ in matched) else .35
+            score*=1+.18*min(len(matched)-1,3)
+            results.append((score,count,base,matched))
+    return sorted(results,reverse=True)[:5]
+
+
+class Generator:
+    def __init__(self,root):
+        self.root=root; root.title(APP_TITLE); root.geometry('1360x960'); root.minsize(980,760)
+        self.client=None; self.connected=False; self.connect_event=threading.Event()
+        self.stop_event=threading.Event(); self.threads=[]; self.uiq=queue.Queue()
+        self.templates={}; self.current_index={'PIEZO':0,'ADXL':0,'초음파':0}
+        self.start_indices={}; self.seq_state=SequenceState()
+        self.sent=0; self.acked=0; self.dropped=0; self.counter={'PIEZO':0,'ADXL':0,'초음파':0}
+        self.counter_lock=threading.Lock(); self.status=tk.StringVar(value='대기')
+        self._ui(); self.root.after(125,self._drain)
+        root.protocol('WM_DELETE_WINDOW',self.close)
+
+    def _ui(self):
+        self.host=tk.StringVar(value='127.0.0.1'); self.port=tk.StringVar(value='1883')
+        self.qos=tk.StringVar(value='1'); self.user=tk.StringVar(); self.password=tk.StringVar()
+        self.device=tk.StringVar(value='S01'); self.mac=tk.StringVar(value='TEST00000001')
+        self.rewrite_mac=tk.BooleanVar(value=False); self.seq_auto=tk.BooleanVar(value=True)
+        self.jitter_on=tk.BooleanVar(value=False); self.loss_on=tk.BooleanVar(value=False)
+        self.files={s:tk.StringVar() for s in ('PIEZO','ADXL','초음파')}
+        self.adxl_csv_files={a:tk.StringVar() for a in ('X','Y','Z')}
+        self.adxl_input_mode='json'
+        self.enabled={s:tk.BooleanVar(value=(s=='PIEZO')) for s in self.files}
+        self.topics={'PIEZO':tk.StringVar(value='V/{mac}'),
+                     'ADXL':tk.StringVar(value='V/{mac}'),
+                     '초음파':tk.StringVar(value='D/{mac}')}
+        self.period={'PIEZO':tk.StringVar(value='320'),'ADXL':tk.StringVar(value='2560'),'초음파':tk.StringVar(value='10000')}
+        self.auto_period={'PIEZO':tk.BooleanVar(value=True),'ADXL':tk.BooleanVar(value=True)}
+        self.jitter={s:tk.StringVar(value='0') for s in self.files}
+        self.loss={s:tk.StringVar(value='0') for s in self.files}
+        self.xyz_gap=tk.StringVar(value='5'); self.tick_step=tk.StringVar(value='0')
+        main=ttk.Frame(self.root,padding=8); main.pack(fill='both',expand=True)
+        broker=ttk.LabelFrame(main,text='MQTT Broker / 장치 1개 고정'); broker.pack(fill='x',pady=3)
+        specs=[('IP',self.host,16),('Port',self.port,6),('QoS',self.qos,4),('User',self.user,12),('Password',self.password,12),('Device ID',self.device,9),('MAC',self.mac,17)]
+        for i,(label,var,width) in enumerate(specs):
+            ttk.Label(broker,text=label).grid(row=0,column=i*2,padx=(5,2),pady=5)
+            ttk.Entry(broker,textvariable=var,width=width,show='*' if label=='Password' else '').grid(row=0,column=i*2+1,padx=(0,5))
+        opts=ttk.Frame(broker); opts.grid(row=1,column=0,columnspan=14,sticky='w')
+        ttk.Checkbutton(opts,text='MAC 덮어쓰기',variable=self.rewrite_mac).pack(side='left',padx=6)
+        ttk.Checkbutton(opts,text='진동 seq 자동',variable=self.seq_auto).pack(side='left',padx=6)
+        ttk.Checkbutton(opts,text='Jitter',variable=self.jitter_on).pack(side='left',padx=6)
+        ttk.Checkbutton(opts,text='패킷 손실',variable=self.loss_on).pack(side='left',padx=6)
+        ttk.Button(opts,text='연결 테스트',command=self.test_connection).pack(side='left',padx=12)
+        data=ttk.LabelFrame(main,text='센서별 파일 1개 선택 / 체크 해제 시 송신하지 않음'); data.pack(fill='x',pady=5)
+        for i,s in enumerate(('PIEZO','ADXL','초음파')):
+            ttk.Checkbutton(data,text=s,variable=self.enabled[s]).grid(row=i,column=0,padx=4,pady=3,sticky='w')
+            ttk.Entry(data,textvariable=self.files[s],width=48).grid(row=i,column=1,sticky='ew',padx=4)
+            ttk.Button(data,text='파일 선택',command=lambda s=s:self.choose_file(s)).grid(row=i,column=2,padx=2)
+            ttk.Label(data,text='Topic').grid(row=i,column=3,padx=(12,2))
+            ttk.Entry(data,textvariable=self.topics[s],width=27).grid(row=i,column=4,padx=2)
+            ttk.Label(data,text='주기(ms)').grid(row=i,column=5,padx=2)
+            ttk.Entry(data,textvariable=self.period[s],width=8).grid(row=i,column=6,padx=2)
+            if s!='초음파':
+                ttk.Checkbutton(data,text='자동주기',variable=self.auto_period[s]).grid(row=i,column=7)
+            ttk.Label(data,text='±Jitter').grid(row=i,column=8)
+            ttk.Entry(data,textvariable=self.jitter[s],width=5).grid(row=i,column=9)
+            ttk.Label(data,text='Loss%').grid(row=i,column=10)
+            ttk.Entry(data,textvariable=self.loss[s],width=5).grid(row=i,column=11)
+        adxl_csv_row=ttk.Frame(data)
+        adxl_csv_row.grid(row=4,column=0,columnspan=12,sticky='ew',pady=(2,5))
+        ttk.Label(adxl_csv_row,text='ADXL CSV 3개 (기존 JSON/JSONL 선택도 유지)').pack(side='left',padx=4)
+        for axis in ('X','Y','Z'):
+            ttk.Label(adxl_csv_row,text=axis).pack(side='left',padx=(8,2))
+            ttk.Entry(adxl_csv_row,textvariable=self.adxl_csv_files[axis],width=17).pack(side='left',padx=2)
+            ttk.Button(adxl_csv_row,text='CSV',command=lambda a=axis:self.choose_adxl_csv(a)).pack(side='left',padx=2)
+        ttk.Button(adxl_csv_row,text='XYZ CSV 로드',command=self.load_adxl_csv_selected).pack(side='left',padx=6)
+        data.columnconfigure(1,weight=1)
+        extras=ttk.Frame(data); extras.grid(row=3,column=0,columnspan=12,sticky='w',pady=3)
+        ttk.Label(extras,text='ADXL XYZ gap(ms)').pack(side='left',padx=4)
+        ttk.Entry(extras,textvariable=self.xyz_gap,width=7).pack(side='left')
+        ttk.Label(extras,text='초음파 tick 증가').pack(side='left',padx=(18,4))
+        ttk.Entry(extras,textvariable=self.tick_step,width=7).pack(side='left')
+        ttk.Label(extras,text='(기본 Jitter / Loss OFF, 재생 위치는 센서별로 유지)').pack(side='left',padx=15)
+        playback=ttk.LabelFrame(main,text='파일 패킷 미리보기 / 선택한 위치에서 재생'); playback.pack(fill='x',pady=3)
+        self.sensor=tk.StringVar(value='PIEZO')
+        ttk.Label(playback,text='그래프 센서').pack(side='left',padx=4)
+        cmb=ttk.Combobox(playback,textvariable=self.sensor,values=('PIEZO','ADXL','초음파'),width=10,state='readonly')
+        cmb.pack(side='left'); cmb.bind('<<ComboboxSelected>>',lambda e:self.preview())
+        ttk.Button(playback,text='◀ 이전 패킷',command=lambda:self.navigate(-1)).pack(side='left',padx=8)
+        ttk.Button(playback,text='다음 패킷 ▶',command=lambda:self.navigate(1)).pack(side='left',padx=4)
+        self.index=tk.StringVar(value='1'); ttk.Entry(playback,textvariable=self.index,width=8).pack(side='left',padx=4)
+        ttk.Button(playback,text='번호 이동',command=self.goto_index).pack(side='left')
+        self.position=tk.StringVar(value='파일을 선택하세요')
+        ttk.Label(playback,textvariable=self.position).pack(side='left',padx=12)
+        actions=ttk.Frame(main); actions.pack(fill='x',pady=3)
+        self.start_btn=ttk.Button(actions,text='▶ 선택 위치부터 전송 시작',command=self.start)
+        self.start_btn.pack(side='left',padx=4)
+        self.stop_btn=ttk.Button(actions,text='■ 중지',command=self.stop,state='disabled')
+        self.stop_btn.pack(side='left',padx=4)
+        ttk.Label(actions,textvariable=self.status).pack(side='left',padx=18)
+        self.stats=tk.StringVar(value='Publish 0 / PUBACK 0 / Drop 0')
+        ttk.Label(actions,textvariable=self.stats).pack(side='right',padx=6)
+        self.preview_options=ttk.Frame(main)
+        self.preview_options.pack(fill='x')
+        self._plot_controls(self.preview_options)
+        graphframe=ttk.Frame(main); graphframe.pack(fill='both',expand=True,pady=4)
+        self.fig=Figure(figsize=(11,5.5),dpi=95)
+        self.ax_raw=self.fig.add_subplot(211); self.ax_fft=self.fig.add_subplot(212)
+        self.fig.tight_layout(pad=2.2)
+        self.canvas=FigureCanvasTkAgg(self.fig,master=graphframe)
+        self.canvas.get_tk_widget().pack(fill='both',expand=True)
+        self.canvas.mpl_connect('scroll_event',self._graph_scroll)
+        self.canvas.mpl_connect('button_press_event',self._graph_click)
+        self.canvas.mpl_connect('motion_notify_event',self._graph_motion)
+        self.canvas.mpl_connect('button_release_event',self._graph_release)
+        self._cursor_mark=None; self._cursor_text=None; self._hover_mark=None; self._hover_text=None; self._pin=None; self._drag=None
+        self._held_graph_buttons=set()
+        self._wheel_during_right_press=False
+        self._wheel_during_left_press=False
+        self._right_press_event=None
+        self._last_spectrum={}; self._full_axes={}
+        logframe=ttk.LabelFrame(main,text='송신 로그')
+        logframe.pack(fill='both',pady=3)
+        self.log=tk.Text(logframe,height=5,wrap='none'); self.log.pack(fill='both',expand=True)
+        self.preview()
+
+    def _plot_controls(self,parent):
+        p=ttk.LabelFrame(parent,text='PIEZO 그래프 옵션 (수신기 방식 · 미리보기만 변경)')
+        p.pack(fill='x',pady=3)
+        self.unit=tk.StringVar(value='mV')
+        self.piezo_vmax=tk.StringVar(value='3.890000')
+        self.piezo_amax=tk.StringVar(value='4096')
+        self.piezo_sensitivity=tk.StringVar(value='100')
+        self.window=tk.StringVar(value='Hann')
+        self.auto_zero_value=tk.StringVar(value='자동 Count: —')
+        self.piezo_formula=tk.StringVar(value='PIEZO 계산식: 파일을 선택하세요')
+        units=ttk.Frame(p);units.grid(row=0,column=0,columnspan=16,sticky='w',padx=4,pady=3)
+        ttk.Label(units,text='표시 단위').pack(side='left',padx=3)
+        ttk.Combobox(units,textvariable=self.unit,values=('Count','mV','g RMS','mm/s RMS'),width=12,state='readonly').pack(side='left',padx=3)
+        for label,var,width in (('Vmax (V)',self.piezo_vmax,10),('Amax',self.piezo_amax,7),('감도 (mV/g)',self.piezo_sensitivity,7)):
+            ttk.Label(units,text=label).pack(side='left',padx=(11,3))
+            entry=ttk.Entry(units,textvariable=var,width=width);entry.pack(side='left')
+            entry.bind('<Return>',lambda _e:self.preview());entry.bind('<FocusOut>',lambda _e:self.preview())
+        ttk.Label(units,text='FFT 창').pack(side='left',padx=(11,3))
+        ttk.Combobox(units,textvariable=self.window,values=('Hann','Hamming','Rectangular'),width=12,state='readonly').pack(side='left')
+        ttk.Label(p,textvariable=self.auto_zero_value).grid(row=1,column=0,columnspan=9,sticky='w',padx=5)
+        self.filters={}
+        defaults=[('HPF','10','4'),('LPF','3000','4'),('Notch','975','20')]
+        for c,(name,freq,order) in enumerate(defaults):
+            self.filters[name]={'RAW':tk.BooleanVar(value=False),'FFT':tk.BooleanVar(value=False),
+                                'freq':tk.StringVar(value=freq),'extra':tk.StringVar(value=order)}
+            x=c*5
+            ttk.Label(p,text=name).grid(row=2,column=x,sticky='w')
+            ttk.Checkbutton(p,text='RAW',variable=self.filters[name]['RAW'],command=self.preview).grid(row=2,column=x+1)
+            ttk.Checkbutton(p,text='FFT',variable=self.filters[name]['FFT'],command=self.preview).grid(row=2,column=x+2)
+            freq_entry=ttk.Entry(p,textvariable=self.filters[name]['freq'],width=9)
+            freq_entry.grid(row=2,column=x+3)
+            extra_entry=ttk.Entry(p,textvariable=self.filters[name]['extra'],width=5)
+            extra_entry.grid(row=2,column=x+4)
+            # Re-render the current packet when a newly entered filter parameter is committed.
+            for entry in (freq_entry,extra_entry):
+                entry.bind('<Return>',lambda event:self.preview())
+                entry.bind('<FocusOut>',lambda event:self.preview())
+        ttk.Label(p,text='필터는 미리보기 전용 · 원본 Count/CSV/MQTT 변경 없음').grid(row=3,column=0,columnspan=7,sticky='w')
+        ttk.Button(p,text='그래프 갱신',command=self.preview).grid(row=3,column=7,padx=4)
+        formula_label=ttk.Label(p,textvariable=self.piezo_formula,justify='left',wraplength=1260)
+        formula_label.grid(row=4,column=0,columnspan=16,sticky='w',padx=5,pady=4)
+        for var in (self.unit,self.window):
+            var.trace_add('write',lambda *_:self.preview())
+
+        # MEMS controls only affect preview. MQTT payload remains unmodified.
+        m=ttk.LabelFrame(parent,text='MEMS(ADXL) 그래프 옵션 — 미리보기만 변경 / 송신 원본 유지')
+        m.pack(fill='x',pady=3)
+        self.mems_axis={axis:tk.BooleanVar(value=True) for axis in ('X','Y','Z')}
+        self.mems_raw_unit=tk.StringVar(value='자동 (g/mg/µg)')
+        self.mems_fft_unit=tk.StringVar(value='자동 (g RMS)')
+        self.mems_lsb_per_g=tk.StringVar(value='256')
+        self.mems_rms_summary=tk.StringVar(value='축별 g RMS: CSV 로드 후 표시 (평균/DC 제외)')
+        ttk.Label(m,text='표시 축').grid(row=0,column=0,padx=(5,3),sticky='w')
+        for j,axis in enumerate(('X','Y','Z'),start=1):
+            ttk.Checkbutton(m,text=axis,variable=self.mems_axis[axis],command=self.preview).grid(row=0,column=j,padx=5,sticky='w')
+        ttk.Label(m,text='RAW 단위').grid(row=0,column=4,padx=(16,3))
+        ttk.Combobox(m,textvariable=self.mems_raw_unit,values=('자동 (g/mg/µg)','Count','g','mg','µg'),width=9,state='readonly').grid(row=0,column=5,padx=3)
+        ttk.Label(m,text='FFT 단위').grid(row=0,column=6,padx=(14,3))
+        ttk.Combobox(m,textvariable=self.mems_fft_unit,values=('자동 (g RMS)','Count Peak','g Peak','g RMS'),width=12,state='readonly').grid(row=0,column=7,padx=3)
+        ttk.Label(m,text='감도(LSB/g)').grid(row=0,column=8,padx=(14,3))
+        sens=ttk.Entry(m,textvariable=self.mems_lsb_per_g,width=10)
+        sens.grid(row=0,column=9,padx=3)
+        for event in ('<Return>','<FocusOut>'):
+            sens.bind(event,lambda _event:self.preview())
+        ttk.Label(m,textvariable=self.mems_rms_summary).grid(row=1,column=0,columnspan=10,sticky='w',padx=5,pady=3)
+        ttk.Label(m,text='V026 수신기와 동일한 ADXL343 Full Resolution 256 LSB/g 기본 적용 · 자동 표시: µg/mg/g · 원본 전송 변경 없음').grid(row=2,column=0,columnspan=10,sticky='w',padx=5,pady=(0,3))
+        self.mems_raw_unit.trace_add('write',lambda *_:self.preview())
+        self.mems_fft_unit.trace_add('write',lambda *_:self.preview())
+        # Detailed MEMS preview analysis: no change to transmitted HEX/JSON.
+        detail=ttk.LabelFrame(parent,text='MEMS 미리보기 상세 분석 (송신값 불변)')
+        detail.pack(fill='x',pady=3)
+        self.mems_window=tk.StringVar(value='Hann')
+        self.mems_win_n=tk.StringVar(value='전체')
+        self.mems_beta=tk.StringVar(value='8.6')
+        ttk.Label(detail,text='FFT Window').grid(row=0,column=0,padx=4)
+        ttk.Combobox(detail,textvariable=self.mems_window,values=FFT_WINDOWS,width=17,state='readonly').grid(row=0,column=1)
+        ttk.Label(detail,text='Window N').grid(row=0,column=2)
+        ttk.Combobox(detail,textvariable=self.mems_win_n,values=('전체','1024','2048','4096','8192'),width=8,state='readonly').grid(row=0,column=3)
+        ttk.Label(detail,text='Kaiser β').grid(row=0,column=4)
+        ttk.Entry(detail,textvariable=self.mems_beta,width=8).grid(row=0,column=5)
+        self.mems_filters={}
+        for j,(name,freq,extra) in enumerate((('HPF','10','4'),('LPF','1000','4'),('Notch','975','20'))):
+            d={'RAW':tk.BooleanVar(value=False),'FFT':tk.BooleanVar(value=False),
+               'freq':tk.StringVar(value=freq),'extra':tk.StringVar(value=extra)}
+            self.mems_filters[name]=d
+            x=j*5
+            ttk.Label(detail,text=name).grid(row=1,column=x,sticky='w',padx=3)
+            ttk.Checkbutton(detail,text='RAW',variable=d['RAW'],command=self.preview).grid(row=1,column=x+1)
+            ttk.Checkbutton(detail,text='FFT',variable=d['FFT'],command=self.preview).grid(row=1,column=x+2)
+            ttk.Entry(detail,textvariable=d['freq'],width=8).grid(row=1,column=x+3)
+            ttk.Entry(detail,textvariable=d['extra'],width=6).grid(row=1,column=x+4)
+            for v in (d['freq'],d['extra']): v.trace_add('write',lambda *_:None)
+        ttk.Button(detail,text='설정 적용',command=self.preview).grid(row=0,column=6,padx=6)
+        self.mems_formula=tk.StringVar(value='계산식: MEMS 선택 시 표시')
+        ttk.Label(detail,textvariable=self.mems_formula,wraplength=1280,justify='left').grid(row=2,column=0,columnspan=15,sticky='w',padx=5,pady=4)
+        self.rpm=tk.StringVar(value='1800')
+        self.rot_axis=tk.StringVar(value='X')
+        self.rot_type=tk.StringVar(value='미지정')
+        self.rot_result=tk.StringVar(value='회전부품 역추정: FFT 데이터 로드 후 실행 (상대 점수/후보)')
+        rotating=ttk.Frame(detail); rotating.grid(row=3,column=0,columnspan=15,sticky='w')
+        ttk.Label(rotating,text='RPM').pack(side='left',padx=3)
+        ttk.Entry(rotating,textvariable=self.rpm,width=8).pack(side='left')
+        ttk.Label(rotating,text='유형').pack(side='left',padx=3)
+        ttk.Combobox(rotating,textvariable=self.rot_type,values=('미지정','블레이드','기어','플런저','DC 정류자'),width=11,state='readonly').pack(side='left')
+        ttk.Label(rotating,text='축').pack(side='left',padx=3)
+        ttk.Combobox(rotating,textvariable=self.rot_axis,values=('X','Y','Z'),width=4,state='readonly').pack(side='left')
+        ttk.Button(rotating,text='개수 추정',command=self._estimate_rotation).pack(side='left',padx=7)
+        ttk.Label(detail,textvariable=self.rot_result,wraplength=1300,justify='left').grid(row=4,column=0,columnspan=15,sticky='w',padx=5)
+        view=ttk.LabelFrame(parent,text='공통 그래프 조작 — 휠: 기존 동작 · 좌클릭+휠: X만 · 우클릭+휠: Y만 (Y 고정 시 잠금 유지)')
+        view.pack(fill='x',pady=3)
+        self.graph_fixed=tk.BooleanVar(value=False)
+        self.raw_ymin=tk.StringVar(); self.raw_ymax=tk.StringVar()
+        self.fft_ymin=tk.StringVar(); self.fft_ymax=tk.StringVar()
+        ttk.Label(view,text='RAW Y').pack(side='left',padx=(6,3))
+        ttk.Label(view,text='min').pack(side='left')
+        ttk.Entry(view,textvariable=self.raw_ymin,width=9).pack(side='left',padx=(2,5))
+        ttk.Label(view,text='max').pack(side='left')
+        ttk.Entry(view,textvariable=self.raw_ymax,width=9).pack(side='left',padx=(2,12))
+        ttk.Label(view,text='FFT Y').pack(side='left',padx=(0,3))
+        ttk.Label(view,text='min').pack(side='left')
+        ttk.Entry(view,textvariable=self.fft_ymin,width=9).pack(side='left',padx=(2,5))
+        ttk.Label(view,text='max').pack(side='left')
+        ttk.Entry(view,textvariable=self.fft_ymax,width=9).pack(side='left',padx=(2,10))
+        ttk.Checkbutton(view,text='Y축 고정',variable=self.graph_fixed,command=self._toggle_y_fixed).pack(side='left',padx=3)
+        ttk.Button(view,text='Y축 적용',command=self._apply_axis_limits).pack(side='left',padx=3)
+        ttk.Button(view,text='Y축 자동',command=self._reset_axis_limits).pack(side='left',padx=3)
+        ttk.Button(view,text='커서 해제',command=self._clear_pin).pack(side='left',padx=3)
+        self.cursor_status=tk.StringVar(value='클릭: 커서 고정 | 드래그: 기존 이동 | 휠: 기존 확대 | 좌클릭+휠: X축만 | 우클릭+휠: Y축만 | 우클릭: 메뉴')
+        ttk.Label(parent,textvariable=self.cursor_status,anchor='w').pack(fill='x',padx=6)
+        for variable in (self.mems_window,self.mems_win_n): variable.trace_add('write',lambda *_:self.preview())
+
+        # Keep configuration state alive while showing only the selected sensor's menus.
+        self.preview_sections={'PIEZO':(p,view), 'ADXL':(m,detail,view), '초음파':()}
+        self._visible_preview_sensor=None
+
+    def _update_preview_sections(self):
+        sensor=self.sensor.get()
+        if sensor==self._visible_preview_sensor:
+            return
+        # All widgets stay instantiated; only their placement changes.
+        # This avoids resetting user-selected filters, units, or FFT windows.
+        for section in dict.fromkeys(self.preview_sections['PIEZO']+self.preview_sections['ADXL']):
+            section.pack_forget()
+        for section in self.preview_sections.get(sensor, ()):
+            section.pack(fill='x',pady=3)
+        self._visible_preview_sensor=sensor
+
+
+    def choose_file(self,s):
+        filt=(('PIEZO CSV/JSON','*.csv *.json *.jsonl *.txt'),('모든 파일','*.*')) if s=='PIEZO' else ((s+' JSON','*.json *.jsonl *.txt'),('모든 파일','*.*'))
+        path=filedialog.askopenfilename(title=f'{s} 파일 선택',filetypes=filt)
+        if not path:return
+        try:
+            items=self._load(s,path)
+            self.templates[s]=items; self.files[s].set(path); self.current_index[s]=0
+            if s=='ADXL':self.adxl_input_mode='json'
+            self.sensor.set(s); self.preview()
+            self._log(f'[{s}] {len(items)}개 패킷 로드: {path}')
+        except Exception as exc:
+            messagebox.showerror('파일 오류',str(exc))
+
+    def choose_adxl_csv(self,axis):
+        path=filedialog.askopenfilename(title=f'ADXL-{axis} CSV 선택',filetypes=(('CSV','*.csv'),('모든 파일','*.*')))
+        if not path:return
+        self.adxl_csv_files[axis].set(path)
+        if all(self.adxl_csv_files[a].get().strip() for a in ('X','Y','Z')):
+            self.load_adxl_csv_selected()
+
+    def load_adxl_csv_selected(self):
+        try:
+            paths={a:self.adxl_csv_files[a].get() for a in ('X','Y','Z')}
+            items, report=load_adxl_csv_xyz(paths, return_report=True)
+            self.templates['ADXL']=items
+            self.current_index['ADXL']=0
+            self.adxl_input_mode='csv_xyz'
+            self.files['ADXL'].set(f'XYZ CSV: {len(items)}세트')
+            self.enabled['ADXL'].set(True)
+            self.sensor.set('ADXL')
+            self.preview()
+            self._log(f"[ADXL seq 정렬] {len(items)}세트, 불완전 {report['partial']}세트 | 원본 행={report['rows']} | 유효 축={report['axis_packets']}")
+            for warning in report['warnings'][:100]: self._log('[건너뜀] '+warning)
+            if len(report['warnings'])>100: self._log(f"오류/제외 내역 {len(report['warnings'])-100}건 추가 (화면은 100건만 표시)")
+        except Exception as exc:
+            messagebox.showerror('ADXL XYZ CSV 오류',str(exc))
+
+    def _load(self,s,path):
+        if s=='PIEZO':return load_piezo_templates(path)
+        if s=='초음파':return load_ultrasonic_templates(path)
+        axes=load_adxl_templates(path)
+        # Reconstruct ADXL record sets as XYZ, keep original source-axis order.
+        return [dict(zip(('X','Y','Z'),t)) for t in zip(axes['X'],axes['Y'],axes['Z'])]
+
+    def navigate(self,delta):
+        s=self.sensor.get(); data=self.templates.get(s) or []
+        if not data:return
+        self.current_index[s]=(self.current_index[s]+delta)%len(data)
+        self.preview()
+
+    def goto_index(self):
+        s=self.sensor.get(); data=self.templates.get(s) or []
+        if not data:return
+        try: ix=int(self.index.get())-1
+        except ValueError: return
+        self.current_index[s]=max(0,min(len(data)-1,ix))
+        self.preview()
+
+    def _graph_scroll(self,event):
+        # Default wheel: preserve original X/Y zoom (X-only when Y is fixed).
+        # Hold left + wheel: X only. Hold right + wheel: Y only.
+        # Fixed Y is a deliberate lock, so right + wheel leaves Y unchanged.
+        if event.inaxes not in (self.ax_raw,self.ax_fft) or event.xdata is None:
+            return
+        ax=event.inaxes
+        factor=.82 if event.button=='up' else 1.22
+        held=self._held_graph_buttons
+        # Zoom and pan are distinct gestures. A mouse motion after scrolling
+        # must never reuse the drag origin/axis limits saved before zooming.
+        if 1 in held:
+            self._wheel_during_left_press=True
+            self._drag=None
+        if 3 in held:
+            self._wheel_during_right_press=True
+            if self.graph_fixed.get() or event.ydata is None:
+                return
+            axes='y'
+        elif 1 in held:
+            axes='x'
+        else:
+            axes='x' if self.graph_fixed.get() else 'xy'
+        if 'x' in axes:
+            x0,x1=ax.get_xlim()
+            ax.set_xlim(event.xdata+(x0-event.xdata)*factor,
+                        event.xdata+(x1-event.xdata)*factor)
+        if 'y' in axes and event.ydata is not None:
+            y0,y1=ax.get_ylim()
+            ax.set_ylim(event.ydata+(y0-event.ydata)*factor,
+                        event.ydata+(y1-event.ydata)*factor)
+        self.canvas.draw_idle()
+
+    def _nearest_curve(self,event):
+        if event.inaxes not in (self.ax_raw,self.ax_fft) or event.xdata is None:return None
+        ax=event.inaxes
+        best=None
+        for line in ax.lines:
+            if line.get_label().startswith('_'): continue
+            xs=np.asarray(line.get_xdata()); ys=np.asarray(line.get_ydata())
+            if not len(xs): continue
+            j=int(np.clip(np.searchsorted(xs,event.xdata),0,len(xs)-1))
+            for k in (j,max(0,j-1)):
+                if not (np.isfinite(xs[k]) and np.isfinite(ys[k])):continue
+                px,py=ax.transData.transform((xs[k],ys[k]))
+                d=(px-event.x)**2+(py-event.y)**2
+                if best is None or d<best[0]:best=(d,ax,line.get_label(),float(xs[k]),float(ys[k]))
+        return best if best and best[0]<18**2 else None
+
+    def _draw_pin(self,pin):
+        if self._cursor_mark is not None:
+            try:self._cursor_mark.remove(); self._cursor_text.remove()
+            except (ValueError,AttributeError):pass
+        self._cursor_mark=self._cursor_text=None
+        if pin is None:return
+        ax,axis,x,y=pin
+        self._cursor_mark=ax.plot([x],[y],marker='o',color='darkorange',ms=6,zorder=20,label='_pin')[0]
+        self._cursor_text=ax.annotate(f'{axis} | X={x:.6g} / Y={y:.6g}',(x,y),xytext=(8,13),textcoords='offset points',
+                                           bbox=dict(boxstyle='round',fc='white',alpha=.85),fontsize=9)
+        self.cursor_status.set(f'고정: {axis} / X={x:.6g} / Y={y:.6g} (현재 표시 단위)')
+
+    def _clear_hover(self, redraw=True):
+        changed=self._hover_mark is not None or self._hover_text is not None
+        for artist in (self._hover_mark,self._hover_text):
+            if artist is not None:
+                try: artist.remove()
+                except (ValueError,AttributeError): pass
+        self._hover_mark=self._hover_text=None
+        if changed and redraw:self.canvas.draw_idle()
+
+    def _show_hover(self,hit):
+        _,ax,axis,x,y=hit
+        self._clear_hover(redraw=False)
+        self._hover_mark=ax.plot([x],[y],marker='o',color='#2688d6',ms=4,zorder=19,label='_hover')[0]
+        self._hover_text=ax.annotate(f'{axis} | X={x:.6g} / Y={y:.6g}',(x,y),xytext=(8,11),textcoords='offset points',
+                                      bbox=dict(boxstyle='round',fc='white',alpha=.85),fontsize=9,zorder=19)
+        self.cursor_status.set(f'현재 위치: {axis} / X={x:.6g} / Y={y:.6g} (현재 표시 단위)')
+        self.canvas.draw_idle()
+
+    def _context_xzoom(self,ax,center,factor):
+        x0,x1=ax.get_xlim()
+        center=(x0+x1)/2 if center is None else center
+        ax.set_xlim(center+(x0-center)*factor,center+(x1-center)*factor)
+        self.canvas.draw_idle()
+
+    def _context_full_view(self,ax):
+        ax.relim();ax.autoscale_view(scalex=True,scaley=not self.graph_fixed.get())
+        if self.graph_fixed.get():
+            kind='raw' if ax is self.ax_raw else 'fft'
+            lo=getattr(self,f'{kind}_ymin').get().strip()
+            hi=getattr(self,f'{kind}_ymax').get().strip()
+            if lo and hi:
+                try:ax.set_ylim(float(lo),float(hi))
+                except ValueError:pass
+        self.canvas.draw_idle()
+
+    def _save_preview_image(self):
+        filename=filedialog.asksaveasfilename(title='미리보기 그래프 저장',defaultextension='.png',
+            filetypes=[('PNG 이미지','*.png'),('PDF 문서','*.pdf'),('SVG 벡터','*.svg')])
+        if filename:
+            try:self.fig.savefig(filename,dpi=160)
+            except Exception as exc:messagebox.showerror('이미지 저장 오류',str(exc))
+
+    def _graph_context_menu(self,event):
+        ax=event.inaxes
+        if ax not in (self.ax_raw,self.ax_fft):return
+        menu=tk.Menu(self.root,tearoff=0)
+        name='RAW' if ax is self.ax_raw else 'FFT'
+        menu.add_command(label=f'{name} X축 확대',command=lambda:self._context_xzoom(ax,event.xdata,.75))
+        menu.add_command(label=f'{name} X축 축소',command=lambda:self._context_xzoom(ax,event.xdata,1.35))
+        menu.add_command(label=f'{name} 전체 보기',command=lambda:self._context_full_view(ax))
+        menu.add_separator()
+        if self.graph_fixed.get():
+            menu.add_command(label='Y축 고정 해제 / 자동',command=self._reset_axis_limits)
+        else:
+            menu.add_command(label='현재 Y축 범위 고정',command=lambda:(self.graph_fixed.set(True),self._toggle_y_fixed()))
+        menu.add_command(label='고정 커서 해제',command=self._clear_pin)
+        menu.add_separator()
+        menu.add_command(label='전체 미리보기 이미지 저장...',command=self._save_preview_image)
+        gui=getattr(event,'guiEvent',None)
+        px=getattr(gui,'x_root',None)
+        py=getattr(gui,'y_root',None)
+        if px is None:px=self.canvas.get_tk_widget().winfo_pointerx()
+        if py is None:py=self.canvas.get_tk_widget().winfo_pointery()
+        try:menu.tk_popup(int(px),int(py))
+        finally:menu.grab_release()
+
+    def _graph_click(self,event):
+        if event.inaxes not in (self.ax_raw,self.ax_fft):return
+        if event.button==3:
+            # Open context menu on RELEASE, not press, so right-hold+wheel
+            # can exclusively zoom Y without spawning the original menu.
+            self._held_graph_buttons.add(3)
+            self._wheel_during_right_press=False
+            self._right_press_event=event
+            return
+        if event.button!=1:return
+        self._held_graph_buttons.add(1)
+        self._wheel_during_left_press=False
+        hit=self._nearest_curve(event)
+        if hit:
+            _,ax,axis,x,y=hit
+            self._pin=(('raw' if ax is self.ax_raw else 'fft'),axis,x)
+            self._clear_hover(redraw=False)
+            self._draw_pin((ax,axis,x,y));self.canvas.draw_idle()
+            self._drag=None
+        else:
+            # 빈 위치 클릭 시 고정 해제. 드래그 이동은 Y축 고정 여부에 따라 변경.
+            if self._pin is not None:self._clear_pin()
+            if event.xdata is not None and event.ydata is not None:
+                self._drag=(event.inaxes,event.x,event.y,event.inaxes.get_xlim(),event.inaxes.get_ylim())
+
+    def _graph_motion(self,event):
+        if self._wheel_during_left_press and 1 in self._held_graph_buttons:
+            # Keep the zoomed viewport stable while left mouse stays pressed.
+            return
+        if self._drag is not None:
+            if event.inaxes is not self._drag[0]:return
+            ax,x,y,xlim,ylim=self._drag
+            # Drag graph in the same direction as the mouse. When Y is
+            # explicitly locked, preserve its limits and pan horizontally only.
+            width=max(1.0, float(ax.bbox.width))
+            height=max(1.0, float(ax.bbox.height))
+            dx=(event.x-x)/width*(xlim[1]-xlim[0])
+            ax.set_xlim(xlim[0]-dx,xlim[1]-dx)
+            if not self.graph_fixed.get():
+                # event.y는 화면 아래로 이동하면 감소한다.
+                # 그래프가 마우스와 같은 방향으로 따라가려면 Y축 범위를 반대로 이동한다.
+                dy=(event.y-y)/height*(ylim[1]-ylim[0])
+                ax.set_ylim(ylim[0]-dy, ylim[1]-dy)
+            self.canvas.draw_idle()
+            return
+        if self._pin is not None:
+            self._clear_hover()
+            return
+        hit=self._nearest_curve(event)
+        if hit:self._show_hover(hit)
+        else:
+            self._clear_hover()
+            if event.inaxes not in (self.ax_raw,self.ax_fft):
+                self.cursor_status.set('곡선 위 이동: X/Y 표시 | 클릭: 고정 | 빈 곳 클릭: 해제 | 우클릭: 메뉴')
+
+    def _graph_release(self,event):
+        self._drag=None
+        if event.button==1:
+            self._held_graph_buttons.discard(1)
+            self._wheel_during_left_press=False
+        elif event.button==3:
+            self._held_graph_buttons.discard(3)
+            right_event=self._right_press_event
+            show_menu=(right_event is not None and not self._wheel_during_right_press)
+            self._right_press_event=None
+            self._wheel_during_right_press=False
+            if show_menu:
+                self._graph_context_menu(right_event)
+
+    def _clear_pin(self):
+        self._pin=None;self._draw_pin(None)
+        self.cursor_status.set('고정 커서 해제 | 곡선 위로 마우스를 이동하면 값이 표시됩니다')
+        self.canvas.draw_idle()
+
+    def _toggle_y_fixed(self):
+        # Freeze current Y ranges when enabled. X remains free.
+        if self.graph_fixed.get():
+            for prefix,ax in (('raw',self.ax_raw),('fft',self.ax_fft)):
+                ymin,ymax=ax.get_ylim()
+                getattr(self,f'{prefix}_ymin').set(f'{ymin:.9g}')
+                getattr(self,f'{prefix}_ymax').set(f'{ymax:.9g}')
+        self.preview()
+
+    def _apply_axis_limits(self):
+        try:
+            limits=[]
+            for prefix,ax in (('raw',self.ax_raw),('fft',self.ax_fft)):
+                values=[getattr(self,f'{prefix}_{k}').get().strip() for k in ('ymin','ymax')]
+                if not any(values):
+                    limits.append(None)
+                    continue
+                if not all(values):raise ValueError(prefix+' Y min/max를 모두 입력하세요.')
+                y0,y1=map(float,values)
+                if not all(map(math.isfinite,(y0,y1))) or y0>=y1:
+                    raise ValueError(prefix+' Y 범위 오류: min < max')
+                limits.append((y0,y1))
+            if not any(v is not None for v in limits):
+                raise ValueError('RAW 또는 FFT의 Y min/max를 입력하세요.')
+            self.graph_fixed.set(True)
+            for ax,value in zip((self.ax_raw,self.ax_fft),limits):
+                if value is not None:ax.set_ylim(*value)
+            self.canvas.draw_idle()
+        except Exception as exc:messagebox.showerror('Y축 적용 오류',str(exc))
+
+    def _reset_axis_limits(self):
+        self.graph_fixed.set(False)
+        for prefix in ('raw','fft'):
+            for k in ('ymin','ymax'):getattr(self,f'{prefix}_{k}').set('')
+        self.preview()
+
+    def _estimate_rotation(self):
+        try:
+            axis=self.rot_axis.get(); data=self._last_spectrum.get(axis)
+            if not data:
+                self.rot_result.set(f'{axis} 축 FFT 데이터가 없습니다. 축 표시를 확인하세요.');return
+            f,mag=data; rpm=float(self.rpm.get())
+            if rpm<=0:raise ValueError('RPM은 양수여야 합니다')
+            candidates=rotating_candidates(f,mag,rpm)
+            if not candidates:self.rot_result.set('일치하는 회전부품 개수 후보가 없습니다.');return
+            self.rot_result.set(f'[{self.rot_type.get()} / {axis} / {rpm:g} RPM] 후보: '+
+                ' | '.join(f'{n}개 ({hz:.2f}Hz, 일치 {len(matches)}개, 점수 {score:.3f})' for score,n,hz,matches in candidates)+
+                ' ※ 주파수 차수 일치도에 의한 후보이며 실제 부품 수 확정 아님')
+        except Exception as exc:messagebox.showerror('회전부품 추정',str(exc))
+
+    def copy_zero(self):
+        # Kept for backward compatibility; raw preview always uses packet mean.
+        self.preview()
+
+    def _filter_args(self,kind):
+        h=self.filters['HPF'];l=self.filters['LPF'];n=self.filters['Notch']
+        return dict(hpf=h[kind].get(), hp_cutoff=float(h['freq'].get()),hp_order=int(h['extra'].get()),
+                    lpf=l[kind].get(),lp_cutoff=float(l['freq'].get()),lp_order=int(l['extra'].get()),
+                    notch=n[kind].get(),notch_center=float(n['freq'].get()),notch_width=float(n['extra'].get()))
+
+    def _plot_piezo(self,packet):
+        raw,fs,_=decode_packet('PIEZO',packet)
+        if len(raw)<2: raise ValueError('PIEZO 샘플이 부족합니다')
+        vmax=float(self.piezo_vmax.get());amax=float(self.piezo_amax.get())
+        sens=float(self.piezo_sensitivity.get())
+        if not all(np.isfinite(x) and x>0 for x in (vmax,amax,sens)):
+            raise ValueError('Vmax/Amax/센서 감도는 유효한 양수여야 합니다')
+        K=1000.0*vmax/amax   # mV/Count; receiver's test conversion
+        mean=float(np.mean(raw))
+        centered=raw-mean
+        self.auto_zero_value.set(f'원본 Count 평균: {mean:,.3f} (원본/송신 변경 없음)')
+        unit=self.unit.get()
+        # PIEZO RAW always centered for display only; FFT is calculated from unmodified original.
+        filtered_raw=spectral_filter(centered,fs,**self._filter_args('RAW'))
+        fft_src=spectral_filter(centered,fs,**self._filter_args('FFT'))
+        freq,peak_counts=fft_peak(fft_src,fs,self.window.get())
+        if unit=='Count':
+            raw_data=filtered_raw; raw_ylabel='Count (centered)'
+            fft_data=peak_counts;fft_ylabel='Count Peak'
+            details='RAW C_display[n]=C[n]−mean(C)  |  FFT Count Peak=2|rFFT((C−mean(C))×w)[k]|/Σw (DC/Nyquist 예외)'
+        elif unit=='mV':
+            raw_data=filtered_raw*K;raw_ylabel='mV (AC)'
+            fft_data=peak_counts*K;fft_ylabel='mV Peak'
+            details='V_abs[n]=(C[n]+Amax/2)×K [mV]  |  RAW=(C−mean(C))×K  |  FFT mV Peak=FFT Count Peak×K'
+        elif unit=='g RMS':
+            raw_data=filtered_raw*K/sens;raw_ylabel='g (instantaneous AC)'
+            fft_data=peak_counts*K/sens/np.sqrt(2);fft_ylabel='g RMS / bin'
+            total_grms=float(np.std(raw*K/sens))
+            details=(f'g[n]=V_abs[n]/{sens:g}; g_mean=mean(g); 전체 g RMS=√mean((g−g_mean)²)={total_grms:.7g} g  |  '
+                     'RAW(g)=(C−mean(C))×K/감도  |  FFT(g RMS)=FFT Count Peak×K/(감도×√2)')
+        elif unit=='mm/s RMS':
+            raw_data=filtered_raw*K/sens;raw_ylabel='g (instantaneous AC)'
+            fft_grms=peak_counts*K/sens/np.sqrt(2)
+            fft_data=np.zeros_like(fft_grms)
+            mask=freq>0
+            fft_data[mask]=fft_grms[mask]*9806.65/(2*np.pi*freq[mask]);fft_ylabel='mm/s RMS / bin'
+            details=('RAW(g)=(C−mean(C))×K/감도  |  FFT(g RMS)=FFT Count Peak×K/(감도×√2)  |  '
+                     'FFT velocity RMS[k]=FFT g RMS[k]×9806.65/(2πf[k]) [mm/s], f>0Hz')
+        else: raise ValueError('알 수 없는 PIEZO 단위: '+unit)
+        x=np.arange(len(raw))/fs*1000
+        self.ax_raw.plot(x,raw_data,label='PIEZO',color='#1377A6',linewidth=.85)
+        self.ax_raw.set_ylabel(raw_ylabel);self.ax_raw.set_xlabel('Time (ms)');self.ax_raw.grid(alpha=.25)
+        self.ax_raw.set_title(f'PIEZO RAW  Fs={fs:g} Hz / N={len(raw)} / 표시 평균제거',fontsize=10)
+        self.ax_fft.plot(freq/1000,fft_data,label='PIEZO',color='#C05B13',linewidth=.9)
+        self.ax_fft.set_ylabel(fft_ylabel);self.ax_fft.set_xlabel('Frequency (kHz)');self.ax_fft.grid(alpha=.25)
+        if len(fft_data)>1:
+            ix=1+int(np.argmax(fft_data[1:]))
+            self.ax_fft.set_title(f'FFT peak {freq[ix]:.2f} Hz / {fft_data[ix]:.6g} {fft_ylabel}',fontsize=10)
+        self.piezo_formula.set(
+            f'[선택 단위 계산식: {unit}] Vmax={vmax:.6f} V | Amax={amax:g} | 감도={sens:g} mV/g | '
+            f'K=1000×{vmax:g}/{amax:g}={K:.9f} mV/Count\n'
+            +details+'\n'
+            +('미리보기 필터: RAW/FFT 독립 적용 (선택 시 실제 표시 신호 기준 계산)\n' if any(v[k].get() for v in self.filters.values() for k in ('RAW','FFT')) else '')
+            +'※ signed int16 수신 원본 유지. 12bit V_abs는 검증된 절대전압 아님. FFT RMS는 주파수별 값이며 전체 RMS와 다를 수 있음.')
+
+    def _mems_filter_args(self,kind):
+        h,l,n=(self.mems_filters[key] for key in ('HPF','LPF','Notch'))
+        return dict(hpf=h[kind].get(),hp_cutoff=float(h['freq'].get()),hp_order=int(h['extra'].get()),
+                    lpf=l[kind].get(),lp_cutoff=float(l['freq'].get()),lp_order=int(l['extra'].get()),
+                    notch=n[kind].get(),notch_center=float(n['freq'].get()),notch_width=float(n['extra'].get()))
+
+    def _plot_adxl(self,set_obj):
+        lsb=float(self.mems_lsb_per_g.get())
+        if not np.isfinite(lsb) or lsb<=0:raise ValueError('감도 LSB/g는 양수여야 합니다')
+        raw_mode=self.mems_raw_unit.get(); fft_mode=self.mems_fft_unit.get()
+        win=self.mems_window.get();beta=float(self.mems_beta.get())
+        n_value=self.mems_win_n.get();n=None if n_value=='전체' else int(n_value)
+        raws=[];ffts=[];summaries=[];self._last_spectrum={}
+        for axis,color in zip(('X','Y','Z'),('#1f77b4','#2ca02c','#d62728')):
+            if axis not in set_obj or not self.mems_axis[axis].get():continue
+            raw,fs,_=decode_packet('ADXL',set_obj[axis])
+            if n is not None and n>len(raw):raise ValueError(f'Window N={n} > 실제 샘플 {len(raw)}')
+            raw_filtered=spectral_filter(raw,fs,**self._mems_filter_args('RAW'))
+            fft_filtered=spectral_filter(raw,fs,**self._mems_filter_args('FFT'))
+            freq,amp=fft_peak(fft_filtered,fs,win,n,beta)
+            self._last_spectrum[axis]=(freq,amp)
+            summaries.append(f'{axis}: {np.std(raw/lsb):.6g} g RMS')
+            raws.append((axis,color,raw_filtered,fs))
+            ffts.append((axis,color,freq,amp))
+
+        def scaled_unit(values,suffix):
+            maxval=max((float(np.max(np.abs(v))) for v in values if len(v)),default=0)
+            return (1e6,'µg'+suffix) if maxval<.001 else ((1e3,'mg'+suffix) if maxval<1 else (1.,'g'+suffix))
+        if raw_mode.startswith('자동'):
+            rs,ru=scaled_unit([v/lsb for _,_,v,_ in raws],'');rs/=lsb
+        else:
+            rs,ru={'Count':(1.,'Count'),'g':(1/lsb,'g'),'mg':(1000/lsb,'mg'),'µg':(1e6/lsb,'µg')}[raw_mode]
+        if fft_mode.startswith('자동'):
+            fscl,fu=scaled_unit([v/lsb/np.sqrt(2) for _,_,_,v in ffts],' RMS');fscl/=lsb*np.sqrt(2)
+        else:
+            fscl,fu={'Count Peak':(1.,'Count Peak'),'g Peak':(1/lsb,'g Peak'),'g RMS':(1/lsb/np.sqrt(2),'g RMS / bin')}[fft_mode]
+        for axis,color,raw,fs in raws:
+            self.ax_raw.plot(np.arange(len(raw))/fs*1000,raw*rs,label=axis,color=color,lw=.8)
+        for axis,color,f,a in ffts:
+            self.ax_fft.plot(f/1000,a*fscl,label=axis,color=color,lw=.8)
+        if raws:
+            self.ax_raw.legend(loc='upper right');self.ax_fft.legend(loc='upper right')
+        else:
+            self.ax_raw.text(.5,.5,'표시할 축 없음',transform=self.ax_raw.transAxes,ha='center')
+        self.ax_raw.set_ylabel('ADXL '+ru);self.ax_raw.set_xlabel('Time (ms)')
+        self.ax_fft.set_ylabel(fu);self.ax_fft.set_xlabel('Frequency (kHz)')
+        self.ax_raw.grid(alpha=.3);self.ax_fft.grid(alpha=.3)
+        self.mems_rms_summary.set('축별 전체 구간 AC g RMS: '+(' | '.join(summaries) if summaries else '없음'))
+        raw_formula={'Count':'RAW=원본 Count','g':'RAW=Count/LSB/g','mg':'RAW=Count/LSB/g×1000',
+                     'µg':'RAW=Count/LSB/g×1000000'}.get(raw_mode,'RAW=Count/LSB/g; 표시에 따라 g/mg/µg 자동 조절')
+        fft_formula={'Count Peak':'FFT=2|rFFT((Count-평균)×Window)|/ΣWindow',
+                     'g Peak':'FFT=Count Peak/LSB/g',
+                     'g RMS':'FFT=Count Peak/LSB/g/√2 (각 주파수 bin)'}.get(fft_mode,'FFT=Count Peak/LSB/g/√2; 표시 단위 자동')
+        active_filters=', '.join(f'{key}:{"RAW" if d["RAW"].get() else ""}{"+FFT" if d["FFT"].get() else ""}' for key,d in self.mems_filters.items() if d['RAW'].get() or d['FFT'].get()) or 'OFF'
+        self.mems_formula.set(f'{raw_formula} | {fft_formula} | LSB/g={lsb:g} | Window={win} N={n or "전체"} | 필터={active_filters}. 전체 AC g RMS=√mean(((Count−평균)/LSB/g)²)')
+
+    def preview(self):
+        if not hasattr(self,'ax_raw'):return
+        s=self.sensor.get(); data=self.templates.get(s) or []
+        self._update_preview_sections()
+        old_y_limits=[ax.get_ylim() for ax in (self.ax_raw,self.ax_fft)] if self.graph_fixed.get() else None
+        self.ax_raw.clear();self.ax_fft.clear()
+        self._cursor_mark=None;self._cursor_text=None
+        self._hover_mark=None;self._hover_text=None
+        if s!='ADXL' and hasattr(self,'mems_rms_summary'):
+            self.mems_rms_summary.set('축별 g RMS: ADXL 선택 시 표시')
+        if data:
+            ix=self.current_index[s]; self.index.set(str(ix+1))
+            self.position.set(f"{s}: {ix+1:,} / {len(data):,} 패킷 | 선택 시작점: {ix+1:,}" + (f" | 유효 축: {','.join(data[ix])}" if s=='ADXL' else ''))
+            try:
+                if s=='PIEZO':self._plot_piezo(data[ix])
+                elif s=='ADXL':self._plot_adxl(data[ix])
+                else:
+                    self.ax_raw.text(.5,.5,'초음파 송신 가능 · RAW 포맷 확인 후 그래프 추가',ha='center',va='center',transform=self.ax_raw.transAxes)
+            except Exception as exc:
+                self.ax_raw.text(.03,.5,f'미리보기 오류: {exc}',transform=self.ax_raw.transAxes,wrap=True,color='red')
+        else:
+            self.index.set('1');self.position.set(f'{s}: 파일을 선택하세요')
+            self.ax_raw.text(.5,.5,'파일 선택 → ◀ ▶ 이동 → 전송 시작',ha='center',va='center',transform=self.ax_raw.transAxes)
+        if old_y_limits:
+            for prefix,ax,ylim in zip(('raw','fft'),(self.ax_raw,self.ax_fft),old_y_limits):
+                ymin=getattr(self,f'{prefix}_ymin').get().strip()
+                ymax=getattr(self,f'{prefix}_ymax').get().strip()
+                if ymin and ymax:
+                    try:ax.set_ylim(float(ymin),float(ymax))
+                    except ValueError:ax.set_ylim(ylim)
+                else:ax.set_ylim(ylim)
+        if self._pin:
+            kind,axis,x=self._pin
+            ax=self.ax_raw if kind=='raw' else self.ax_fft
+            for line in ax.lines:
+                if line.get_label()!=axis:continue
+                xs=np.asarray(line.get_xdata());ys=np.asarray(line.get_ydata())
+                if len(xs):
+                    ix=int(np.argmin(np.abs(xs-x)))
+                    self._draw_pin((ax,axis,float(xs[ix]),float(ys[ix])))
+                break
+        self.fig.tight_layout(pad=2.1)
+        self.canvas.draw_idle()
+
+    def _on_connect(self,client,userdata,flags,reason_code,properties=None):
+        try:ok=int(reason_code)==0
+        except Exception:ok=str(reason_code).lower() in ('0','success')
+        self.connected=ok
+        if ok:self.connect_event.set()
+        self.uiq.put(('status','Broker 연결됨' if ok else f'Broker 연결 실패: {reason_code}'))
+
+    def _on_disconnect(self,*args):
+        self.connected=False; self.uiq.put(('status','Broker 연결 끊김'))
+
+    def _on_publish(self,*args):
+        with self.counter_lock:self.acked+=1
+
+    def _connect(self):
+        self._disconnect()
+        try:self.client=mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2,client_id=f'mqtt-generator-v001-{os.getpid()}')
+        except (TypeError,AttributeError):self.client=mqtt.Client(client_id=f'mqtt-generator-v001-{os.getpid()}')
+        if self.user.get():self.client.username_pw_set(self.user.get(),self.password.get())
+        self.client.on_connect=self._on_connect;self.client.on_disconnect=self._on_disconnect;self.client.on_publish=self._on_publish
+        self.connect_event.clear();self.client.connect(self.host.get(),int(self.port.get()),keepalive=30);self.client.loop_start()
+        if not self.connect_event.wait(4):
+            self._disconnect();raise ConnectionError('MQTT Broker 연결 시간 초과')
+
+    def _disconnect(self):
+        if self.client:
+            try:self.client.disconnect();self.client.loop_stop()
+            except Exception:pass
+        self.client=None;self.connected=False
+
+    def test_connection(self):
+        try:self._connect();messagebox.showinfo('Broker','MQTT 연결 성공')
+        except Exception as e:messagebox.showerror('연결 오류',str(e))
+        finally:self._disconnect()
+
+    def _publish(self,s,obj,axis=None):
+        if self.stop_event.is_set():return
+        if self.loss_on.get() and random.random()*100<float(self.loss[s].get()):
+            with self.counter_lock:self.dropped+=1
+            return
+        packet=dict(obj)
+        if self.rewrite_mac.get():packet['dvicMacAddr']=self.mac.get().strip()
+        if s in ('PIEZO','ADXL') and self.seq_auto.get():packet['seq']=self.seq_state.next_seq(axis or 'PIEZO')
+        topic=self.topics[s].get().strip().replace('{device}',self.device.get().strip()).replace('{mac}',self.mac.get().strip() if self.rewrite_mac.get() else str(packet.get('dvicMacAddr') or self.mac.get()).strip())
+        if not topic:raise ValueError(f'{s} 토픽이 비어 있습니다')
+        info=self.client.publish(topic,json.dumps(packet,ensure_ascii=False,separators=(',',':')).encode('utf-8'),qos=int(self.qos.get()))
+        if info.rc!=mqtt.MQTT_ERR_SUCCESS:raise RuntimeError(f'MQTT publish 실패 rc={info.rc}')
+        with self.counter_lock:self.sent+=1
+
+    def _worker(self,s):
+        try:
+            data=self.templates[s]
+            start=self.start_indices[s];idx=start;total=len(data)
+            base=float(self.period[s].get())
+            if s in self.auto_period and self.auto_period[s].get():
+                item=next(iter(data[start].values())) if s=='ADXL' else data[start]
+                auto=period_ms_from_payload(item)
+                if auto>0:base=auto
+            gap=float(self.xyz_gap.get());jit=float(self.jitter[s].get())
+            tickstep=int(self.tick_step.get());count=0;tickbase=None
+            self.uiq.put(('log',f'[{s}] 패킷 {start+1}/{total} 부터 끝까지 반복 (처음 1번으로 돌아가지 않음), 주기 {base:g}ms'))
+            next_at=time.perf_counter()
+            while not self.stop_event.is_set():
+                wait=next_at-time.perf_counter()
+                if wait>0 and self.stop_event.wait(wait):break
+                obj=data[idx]
+                if s=='ADXL':
+                    for axis in ('X','Y','Z'):
+                        if self.stop_event.is_set():break
+                        if axis not in obj: continue
+                        self._publish(s,obj[axis],axis)
+                        if axis!='Z' and gap>0 and self.stop_event.wait(gap/1000):break
+                else:
+                    if s=='초음파' and tickstep:
+                        obj=dict(obj)
+                        if tickbase is None:
+                            try:tickbase=int(obj.get('tick','0'))
+                            except Exception:tickbase=0
+                        obj['tick']=str(tickbase+count*tickstep)
+                    self._publish(s,obj)
+                count+=1
+                if count%5==0:self.uiq.put(('count',s,count,idx))
+                idx=idx+1 if idx+1<total else start
+                interval=base+(random.uniform(-jit,jit) if self.jitter_on.get() else 0)
+                next_at+=max(.1,interval)/1000
+                if time.perf_counter()-next_at>max(base/1000,.5):next_at=time.perf_counter()
+            self.uiq.put(('count',s,count,idx))
+        except Exception as e:
+            self.uiq.put(('log',f'[{s}] 오류: {e}'));self.stop_event.set()
+
+    def start(self):
+        if self.threads:return
+        active=[s for s in self.templates if self.enabled[s].get()]
+        try:
+            if not active:raise ValueError('체크한 센서의 파일을 먼저 선택하세요')
+            for s in self.enabled:
+                if self.enabled[s].get() and s not in active:raise ValueError(f'{s} 체크됨: 파일을 선택하세요')
+            for s in active:
+                if float(self.period[s].get())<=0:raise ValueError(f'{s} 주기는 0보다 커야 합니다')
+                if float(self.jitter[s].get())<0 or not 0<=float(self.loss[s].get())<=100:raise ValueError(f'{s} Jitter/Loss 범위 확인')
+            # A single indexed preview selection is applied per stream.
+            self.start_indices={s:self.current_index[s] for s in active}
+            self._connect()
+        except Exception as e:
+            self._disconnect();messagebox.showerror('전송 시작 오류',str(e));return
+        self.seq_state=SequenceState();self.stop_event.clear()
+        with self.counter_lock:self.sent=self.acked=self.dropped=0
+        self.counter={s:0 for s in self.files}
+        self.threads=[threading.Thread(target=self._worker,args=(s,),daemon=True,name='REPLAY-'+s) for s in active]
+        for t in self.threads:t.start()
+        self.start_btn.configure(state='disabled');self.stop_btn.configure(state='normal')
+        self.status.set('전송 중')
+        self._log('선택 위치부터 전송 시작: '+', '.join(f'{s} #{self.start_indices[s]+1}' for s in active))
+
+    def stop(self):
+        self.stop_event.set();self.status.set('중지 요청')
+
+    def _drain(self):
+        try:
+            while True:
+                item=self.uiq.get_nowait()
+                if item[0]=='log':self._log(item[1])
+                elif item[0]=='status':self.status.set(item[1])
+                elif item[0]=='count':
+                    _,s,count,idx=item;self.counter[s]=count
+                    # Preview retains user-selected position while transmitting.
+        except queue.Empty:pass
+        with self.counter_lock:sent,ack,drop=self.sent,self.acked,self.dropped
+        self.stats.set(f'Publish {sent:,} / PUBACK {ack:,} / Drop {drop:,} | '+', '.join(f'{s} {self.counter[s]}' for s in self.counter))
+        if self.threads and all(not t.is_alive() for t in self.threads):
+            self.threads=[];self._disconnect();self.start_btn.configure(state='normal');self.stop_btn.configure(state='disabled')
+            self.status.set('중지');self._log('모든 센서 전송 종료')
+        self.root.after(125,self._drain)
+
+    def _log(self,msg):
+        self.log.insert('end',f'[{time.strftime("%H:%M:%S")}] {msg}\n')
+        self.log.see('end')
+        if int(self.log.index('end-1c').split('.')[0])>1500:self.log.delete('1.0','300.0')
+
+    def close(self):
+        self.stop_event.set();self._disconnect();self.root.destroy()
+
+
+def main():
+    root=tk.Tk();Generator(root);root.mainloop()
+
+if __name__=='__main__':main()
