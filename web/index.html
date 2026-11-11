@@ -3,12 +3,11 @@
 <head>
   <meta charset="utf-8">
   <title>센서 수신 모니터</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
   <header>
-    <strong>sensor-program</strong>
+    <strong class="brand">센서 수신 모니터</strong>
     <nav>
       <a class="active" href="/">센서 수신 모니터</a>
       <a href="/generator">MQTT 파형 발생기</a>
@@ -16,66 +15,154 @@
   </header>
   <main>
     <section class="card">
+      <h2>통신 연결</h2>
       <div class="row">
-        <label>Broker<input id="host" value="192.168.1.62"></label>
-        <label>Port<input id="port" value="1883" style="width:80px"></label>
-        <label>구독 Topic<input id="topic" value="V/#,D/#" style="width:160px"></label>
-        <label>User<input id="user"></label>
-        <label>Password<input id="password" type="password"></label>
-        <label><span>CSV 자동 저장</span><input id="csvEnabled" type="checkbox" checked></label>
         <button type="button" id="connect">연결</button>
         <button type="button" class="secondary" id="disconnect">연결 해제</button>
-        <span id="status">DISCONNECTED</span>
-      </div>
-      <p id="csvInfo">연결하면 data_csv 아래에 세션 폴더를 만들고 HEX와 decoded CSV를 저장합니다. 설정 응답을 보려면 S/#도 함께 구독합니다.</p>
-    </section>
-    <section class="split">
-      <div class="card">
-        <strong>수신된 센서 MAC</strong>
-        <div class="row" style="margin-top:8px">
-          <button type="button" id="selectAll" class="secondary">전체 선택</button>
-          <button type="button" id="clearMacs" class="secondary">선택 해제</button>
-          <span id="macCount">0개 선택</span>
-        </div>
-        <div id="macs" class="macs"></div>
-      </div>
-      <div class="card">
-        <div class="row">
-          <label>종류
-            <select id="sensor"><option>ADXL</option><option>PIEZO</option></select>
-          </label>
-          <label>주기(s)<input id="period" value="1" style="width:70px"></label>
-          <label>Fs + N
-            <select id="profile"></select>
-          </label>
-          <label>g RMS Window
-            <select id="rmsWindow">
-              <option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option>
-            </select>
-          </label>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <button type="button" id="start">START</button>
-          <button type="button" id="stop" class="secondary">STOP</button>
-          <button type="button" id="apply">설정 적용</button>
-          <button type="button" id="query" class="secondary">현재 설정 조회</button>
-        </div>
-        <p id="commandInfo">START와 설정 적용은 선택한 MAC의 S/{MAC}에 retained 설정을 보냅니다. STOP은 SENSORTYPE=0입니다.</p>
-        <pre id="preview" style="height:90px"></pre>
+        <span class="stats">상태</span>
+        <span id="status" class="pill off">DISCONNECTED</span>
       </div>
     </section>
+
     <section class="card">
-      <label>그래프 장치
-        <select id="device"></select>
-      </label>
+      <h2>MQTT 설정 / 센서 설정 · 동작</h2>
+      <div class="row">
+        <label>Broker<input id="host" value="192.168.1.62"></label>
+        <label>Port<input id="port" class="w-port" value="1883"></label>
+        <label>구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#"></label>
+        <label>User<input id="user"></label>
+        <label>Password<input id="password" type="password"></label>
+      </div>
+      <p class="hint">기본 구독 Topic = V/#,D/# (콤마로 복수 지정) | MQTT Retained 설정 Topic = S/{선택한 센서 MAC}</p>
+      <div class="split">
+        <div class="card" style="margin:0">
+          <h2>설정 대상 센서 MAC (dvicMacAddr)</h2>
+          <div class="row">
+            <button type="button" class="secondary" id="selectAll">전체 선택</button>
+            <button type="button" class="secondary" id="clearMacs">선택 해제</button>
+            <span id="macCount" class="stats">0개 선택</span>
+          </div>
+          <div id="macs" class="macs"></div>
+          <p id="commandInfo" class="hint">MQTT: 선택한 각 MAC의 S/{MAC} retained 설정을 갱신</p>
+        </div>
+        <div class="card" style="margin:0">
+          <h2>센서 설정 / 동작</h2>
+          <div class="row">
+            <label>종류
+              <select id="sensor"><option>ADXL</option><option>PIEZO</option></select>
+            </label>
+            <label>주기(s)<input id="period" class="w-num" value="1"></label>
+            <label>Fs + N
+              <select id="profile"></select>
+            </label>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <button type="button" class="go" id="start">START</button>
+            <button type="button" class="stop" id="stop">STOP</button>
+            <button type="button" id="apply">설정 적용</button>
+            <button type="button" class="secondary" id="query">현재 설정 조회</button>
+          </div>
+          <div>
+            <h2 style="margin-top:10px">전송 JSON</h2>
+            <pre id="preview" class="short"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>그래프 / 저장</h2>
+      <div class="row">
+        <label class="check"><input id="csvEnabled" type="checkbox" checked><span>CSV 저장 (HEX + Decoded 분리)</span></label>
+        <label>그래프 장치<select id="device"></select></label>
+        <label>g RMS Window
+          <select id="rmsWindow">
+            <option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option>
+          </select>
+        </label>
+        <button type="button" class="secondary" id="resetZoom">그래프 전체 보기</button>
+      </div>
+      <p id="csvInfo" class="hint">CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다.</p>
       <p id="info">수신 대기</p>
     </section>
-    <section class="grid">
-      <div class="card"><canvas id="raw" class="chart"></canvas></div>
-      <div class="card"><canvas id="rms" class="chart"></canvas></div>
+
+    <section class="card">
+      <p class="hint">휠: X·Y 확대 · 왼쪽 버튼 유지 + 휠: X축만 · 오른쪽 버튼 유지 + 휠: Y축만 · 왼쪽 드래그: 이동 · 오른쪽 클릭: 메뉴</p>
+      <div class="grid">
+        <div class="chart-card"><h2>RAW</h2><div class="plot"><canvas id="raw"></canvas></div></div>
+        <div class="chart-card"><h2>FFT</h2><div class="plot"><canvas id="fft"></canvas></div></div>
+      </div>
+      <div class="chart-card" style="margin-top:8px"><h2>g RMS</h2><div class="plot"><canvas id="rms"></canvas></div></div>
     </section>
-    <section class="card"><pre id="log"></pre></section>
+
+    <details class="card" id="analysis">
+      <summary>그래프 설정</summary>
+      <p class="hint">화면 표시만 바꿉니다. 저장 CSV와 수신 HEX는 그대로입니다.</p>
+      <div class="row">
+        <label class="check"><input id="fftLogX" type="checkbox"><span>FFT X 로그</span></label>
+        <label class="check"><input id="fftLogY" type="checkbox"><span>FFT Y 로그</span></label>
+      </div>
+      <fieldset>
+        <legend>PIEZO 그래프 옵션 (수신기 방식 · 미리보기만 변경)</legend>
+        <div class="row">
+          <label>표시 단위
+            <select id="piezoUnit">
+              <option>Count</option><option selected>mV</option><option>g RMS</option><option>mm/s RMS</option>
+            </select>
+          </label>
+          <label>Vmax (V)<input id="piezoVmax" class="w-num" value="3.89"></label>
+          <label>Amax<input id="piezoAmax" class="w-num" value="4096"></label>
+          <label>감도 (mV/g)<input id="piezoSens" class="w-num" value="100"></label>
+          <label>FFT 창
+            <select id="piezoWindow"><option>Hann</option><option>Hamming</option><option>Rectangular</option></select>
+          </label>
+          <label>Window N
+            <select id="piezoN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
+          </label>
+        </div>
+        <div id="piezoFilters"></div>
+      </fieldset>
+      <fieldset>
+        <legend>MEMS(ADXL) 그래프 옵션 — 미리보기만 변경 / 송신 원본 유지</legend>
+        <div class="row">
+          <label>RAW 단위
+            <select id="adxlRaw">
+              <option>자동 (g/mg/µg)</option><option>Count</option><option>g</option><option>mg</option><option>µg</option>
+            </select>
+          </label>
+          <label>FFT 단위
+            <select id="adxlFft">
+              <option>자동 (g RMS)</option><option>Count Peak</option><option>g Peak</option><option>g RMS</option>
+            </select>
+          </label>
+          <label>1 LSB = (g)<input id="adxlG" value="0.00390625" style="width:120px"></label>
+          <label>FFT Window
+            <select id="adxlWindow">
+              <option>Rectangular</option><option selected>Hann</option><option>Hamming</option><option>Blackman</option>
+              <option>Blackman-Harris</option><option>Flat Top</option><option>Bartlett</option><option>Kaiser</option>
+            </select>
+          </label>
+          <label>Window N
+            <select id="adxlN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
+          </label>
+          <label>Kaiser β<input id="adxlBeta" class="w-num" value="8.6"></label>
+          <label class="check"><input id="freqOn" type="checkbox" checked><span>주파수 보정 ON</span></label>
+          <label class="check"><input id="sensOn" type="checkbox" checked><span>Sensitivity 보정 ON</span></label>
+        </div>
+        <div id="adxlFilters"></div>
+      </fieldset>
+      <p id="formula" class="formula"></p>
+    </details>
+
+    <section class="card">
+      <h2>시스템 로그</h2>
+      <pre id="log"></pre>
+    </section>
   </main>
+  <script src="/static/chart.umd.min.js"></script>
+  <script src="/static/hammer.min.js"></script>
+  <script src="/static/chartjs-plugin-zoom.min.js"></script>
+  <script src="/static/graph.js?v=5"></script>
   <script src="/static/monitor.js"></script>
 </body>
 </html>

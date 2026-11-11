@@ -25,6 +25,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from web import analysis
+
 gen = importlib.import_module("mqtt_wave_replay_generator_v032_ultrasonic_graph")
 mon = importlib.import_module("new_piezo_adc_V031_graph_button_alignment")
 
@@ -57,7 +59,7 @@ def _rounded(values):
     return [round(float(value), 6) for value in values]
 
 
-def _envelope_index(values, limit=4000):
+def _envelope_index(values, limit=16384):
     """Keep each bucket's min and max so peaks survive display thinning."""
     data = _clean(values)
     count = data.size
@@ -87,6 +89,44 @@ def _take(values, index):
     return _rounded(data[index])
 
 
+def _pack_pair(x_values, y_values):
+    y_data = _clean(y_values)
+    x_data = _clean(x_values)
+    count = min(x_data.size, y_data.size)
+    if count == 0:
+        return [], []
+    index = _envelope_index(y_data[:count])
+    return _take(x_data[:count], index), _take(y_data[:count], index)
+
+
+def _pack_curves(curves):
+    packed = {
+        "kind": curves["kind"],
+        "x_label": curves.get("x_label") or "",
+        "y_label": curves.get("y_label") or "",
+        "fft_x_label": curves.get("fft_x_label") or "",
+        "fft_label": curves.get("fft_label") or "",
+        "info": curves.get("info") or "",
+        "formula": curves.get("formula") or "",
+        "avg_status": curves.get("avg_status") or "",
+        "rotation": curves.get("rotation") or "",
+        "fft_log_x": bool(curves.get("fft_log_x")),
+        "fft_log_y": bool(curves.get("fft_log_y")),
+        "series": {},
+        "fft": {},
+    }
+    if curves["kind"] == "spectrum":
+        packed["x"], packed["y"] = _pack_pair(curves.get("x"), curves.get("y"))
+        return packed
+    for axis, series in (curves.get("series") or {}).items():
+        t_values, y_values = _pack_pair(series["t"], series["y"])
+        packed["series"][axis] = {"t": t_values, "y": y_values}
+    for axis, series in (curves.get("fft") or {}).items():
+        f_values, y_values = _pack_pair(series["f"], series["y"])
+        packed["fft"][axis] = {"f": f_values, "y": y_values}
+    return packed
+
+
 class ReplayService:
     def __init__(self):
         self.lock = threading.Lock()
@@ -95,6 +135,7 @@ class ReplayService:
         self.paths = {}
         self.logs = deque(maxlen=300)
         self.sent = 0
+        self.acked = 0
         self.dropped = 0
         self.counter = {"PIEZO": 0, "ADXL": 0, "초음파": 0}
         self.stop_event = threading.Event()
@@ -122,6 +163,7 @@ class ReplayService:
             "enabled": {"PIEZO": True, "ADXL": False, "초음파": False},
         }
         self.seq = gen.SequenceState()
+        self.view_options = None
 
     def log(self, text):
         self.logs.append(f"{time.strftime('%H:%M:%S')} {text}")
@@ -162,7 +204,9 @@ class ReplayService:
                 self.log(f"오류/제외 내역 {len(report['warnings']) - 100}건 추가 (화면은 100건만 표시)")
         return len(items)
 
-    def preview(self, sensor, index):
+    def preview(self, sensor, index, options=None):
+        if options is not None:
+            self.view_options = options
         with self.lock:
             data = self.templates.get(sensor) or []
             if not data:
@@ -170,63 +214,56 @@ class ReplayService:
             index = max(0, min(len(data) - 1, int(index)))
             self.index[sensor] = index
             packet = data[index]
-        g_per_lsb = gen.read_mems_g_per_lsb()
-        if sensor == "초음파":
-            freq, amp, start_khz, step_hz = gen.decode_ultrasonic_spectrum(packet)
-            index_points = _envelope_index(amp)
-            return {
-                "sensor": sensor,
-                "index": index + 1,
-                "count": len(data),
-                "kind": "spectrum",
-                "x": _take(freq, index_points),
-                "y": _take(amp, index_points),
-                "x_label": "Frequency (kHz)",
-                "y_label": "H spectrum",
-                "info": f"시작 {start_khz} kHz / 간격 {step_hz} Hz / 320 bins",
-            }
-        series = {}
-        fft = {}
-        info = []
-        axes = packet.items() if sensor == "ADXL" else (("PIEZO", packet),)
-        for axis, obj in axes:
-            samples, fs, _unit = gen.decode_packet("ADXL" if sensor == "ADXL" else "PIEZO", obj)
-            samples = np.asarray(samples, dtype=np.float64)
-            freq, mag = gen.fft_peak(samples, fs)
-            time_ms = np.arange(len(samples), dtype=np.float64) / fs * 1000.0 if fs > 0 else np.arange(len(samples))
-            if sensor == "ADXL":
-                display = samples * g_per_lsb
-                mag = mag * g_per_lsb / np.sqrt(2.0)
-                ac_rms = float(np.std(display)) if display.size else 0.0
-                info.append(f"{axis} N={len(samples)} Fs={fs:g} AC g RMS={ac_rms:.6g}")
-            else:
-                display = samples - np.mean(samples)
-                info.append(f"{axis} N={len(samples)} Fs={fs:g}")
-            time_index = _envelope_index(display)
-            freq_index = _envelope_index(mag)
-            series[axis] = {"t": _take(time_ms, time_index), "y": _take(display, time_index)}
-            fft[axis] = {"f": _take(freq / 1000.0, freq_index), "y": _take(mag, freq_index)}
-        return {
-            "sensor": sensor,
-            "index": index + 1,
-            "count": len(data),
-            "kind": "waveform",
-            "series": series,
-            "fft": fft,
-            "x_label": "Time (ms)",
-            "y_label": "g" if sensor == "ADXL" else "Count (centered)",
-            "fft_x_label": "Frequency (kHz)",
-            "fft_label": "g RMS" if sensor == "ADXL" else "Count Peak",
-            "info": " | ".join(info),
-        }
+            packets = data
+        curves = analysis.generator_curves(sensor, packet, packets, index, self.view_options)
+        packed = _pack_curves(curves)
+        packed.update({"sensor": sensor, "index": index + 1, "count": len(data)})
+        return packed
+
+    def _on_publish(self, *_args):
+        with self.lock:
+            self.acked += 1
 
     def _connect(self, cfg):
         client = _mqtt_client(f"web-replay-{int(time.time())}")
         if cfg["user"]:
             client.username_pw_set(cfg["user"], cfg["password"])
+        client.on_publish = self._on_publish
         client.connect(cfg["host"], int(cfg["port"]), keepalive=30)
         client.loop_start()
         self.client = client
+
+    def test_broker(self, cfg):
+        if any(thread.is_alive() for thread in self.threads):
+            raise ValueError("전송 중에는 연결 테스트를 할 수 없습니다")
+        done = threading.Event()
+        result = {}
+
+        def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
+            try:
+                result["ok"] = int(reason_code) == 0
+            except (TypeError, ValueError):
+                result["ok"] = str(reason_code).lower() in ("0", "success")
+            result["reason"] = str(reason_code)
+            done.set()
+
+        client = _mqtt_client(f"web-replay-test-{int(time.time())}")
+        if cfg.get("user"):
+            client.username_pw_set(cfg.get("user") or "", cfg.get("password") or "")
+        client.on_connect = on_connect
+        try:
+            client.connect(cfg.get("host") or "127.0.0.1", int(cfg.get("port") or 1883), keepalive=30)
+            client.loop_start()
+            if not done.wait(4) or not result.get("ok"):
+                raise ConnectionError(result.get("reason") or "MQTT Broker 연결 시간 초과")
+        finally:
+            try:
+                client.loop_stop()
+                client.disconnect()
+            except Exception:
+                pass
+        self.log(f"연결 테스트 성공 {cfg.get('host')}:{cfg.get('port')}")
+        return {"ok": True}
 
     def _publish(self, cfg, sensor, obj, axis=None):
         if self.stop_event.is_set():
@@ -319,6 +356,7 @@ class ReplayService:
         self.config = cfg
         self.stop_event.clear()
         self.sent = 0
+        self.acked = 0
         self.dropped = 0
         self.seq = gen.SequenceState()
         self._connect(cfg)
@@ -349,6 +387,7 @@ class ReplayService:
         return {
             "running": running,
             "sent": self.sent,
+            "acked": self.acked,
             "dropped": self.dropped,
             "counter": dict(self.counter),
             "loaded": {name: len(items) for name, items in self.templates.items()},
@@ -562,6 +601,7 @@ class MonitorService:
         self.mode = ""
         self.window = "전체"
         self.csv = CsvWriter()
+        self.view_options = None
         self.host = "192.168.1.62"
         self.port = 1883
         self.topic = "V/#,D/#"
@@ -588,7 +628,9 @@ class MonitorService:
             return
         kind, _frame = classified
         sensor_hex = str(obj.get("sensorData") or "")
-        fs = float(obj.get("samplerate") or 0)
+        sensor_key = "ADXL" if str(kind).startswith("ADXL") else "PIEZO"
+        default_fs = 3200.0 if sensor_key == "ADXL" else 25600.0
+        fs = float(mon.normalize_sample_rate(sensor_key, obj.get("samplerate"), default_fs))
         axis = kind.split("-")[-1] if kind.startswith("ADXL-") else kind
         try:
             if kind == "ULTRASONIC":
@@ -631,7 +673,7 @@ class MonitorService:
             "received_at": datetime.now().isoformat(timespec="milliseconds"),
         })
 
-    def _view(self, record):
+    def _view(self, record, window, options):
         if record["kind"] == "spectrum":
             index = _envelope_index(record["y"])
             return {
@@ -639,26 +681,54 @@ class MonitorService:
                 "axis": record["axis"],
                 "x": _take(record["x"], index),
                 "y": _take(record["y"], index),
+                "x_label": "Frequency (kHz)",
+                "y_label": "H spectrum",
                 "received_at": record["received_at"],
             }
-        y = record["samples"]
-        g_scale = gen.read_mems_g_per_lsb() if record["physical"] else 1.0
-        display = y * g_scale
-        t = np.arange(len(display), dtype=np.float64) / record["fs"] if record["fs"] > 0 else np.arange(len(display))
-        rms = _rms_curve(display, self.window)
-        full = float(np.sqrt(np.mean(np.square(display)))) if display.size else 0.0
-        index = _envelope_index(display)
+        sensor_kind = "ADXL" if record["physical"] else "PIEZO"
+        try:
+            shown = analysis.monitor_curves(
+                record["samples"], record["fs"], sensor_kind, options, record.get("axis") or "X"
+            )
+        except Exception as exc:
+            return {
+                "kind": "waveform",
+                "axis": record["axis"],
+                "t": [],
+                "y": [],
+                "rms": [],
+                "fft_f": [],
+                "fft_y": [],
+                "info": f"{record['axis']} 그래프 오류: {exc}",
+                "received_at": record["received_at"],
+            }
+        y = np.asarray(shown["y"], dtype=np.float64)
+        t = np.asarray(shown["t"], dtype=np.float64)
+        ac = y - float(np.mean(y)) if y.size else y
+        rms = _rms_curve(ac, window)
+        full = float(np.std(y)) if y.size else 0.0
+        index = _envelope_index(y)
+        fft_x, fft_y = _pack_pair(shown["fft_f"], shown["fft_y"])
         return {
             "kind": "waveform",
             "axis": record["axis"],
             "t": _take(t, index),
-            "y": _take(display, index),
+            "y": _take(y, index),
             "rms": _take(rms, index),
+            "fft_f": fft_x,
+            "fft_y": fft_y,
             "rms_value": round(full, 6),
-            "n": int(display.size),
-            "window": _window_count(self.window, display.size),
+            "n": int(y.size),
+            "window": _window_count(window, y.size),
             "fs": record["fs"],
-            "unit": "g" if record["physical"] else "Count",
+            "unit": shown["unit"],
+            "fft_unit": shown["fft_unit"],
+            "x_label": "Time (s)",
+            "fft_x_label": "Frequency (Hz)",
+            "formula": shown["formula"],
+            "info": shown["info"],
+            "fft_log_x": shown["fft_log_x"],
+            "fft_log_y": shown["fft_log_y"],
             "received_at": record["received_at"],
         }
 
@@ -723,27 +793,35 @@ class MonitorService:
             self.log(f"{label} S/{mac} retain={retain} {text.strip()}")
         return text.strip()
 
-    def state(self):
+    def state(self, device=""):
         with self.lock:
-            latest = {
-                device: {axis: self._view(record) for axis, record in axes.items()}
-                for device, axes in self.records.items()
-            }
-            return {
+            names = list(self.records)
+            target = device if device in self.records else (names[0] if names else "")
+            snapshot = {
+                axis: dict(record)
+                for axis, record in self.records.get(target, {}).items()
+            } if target else {}
+            window = self.window
+            options = self.view_options
+            payload = {
                 "connected": self.connected,
                 "mode": self.mode,
                 "messages": self.messages,
                 "logs": list(self.logs),
-                "latest": latest,
                 "devices": list(self.devices),
+                "graph_devices": names,
                 "configs": self.configs,
-                "window": self.window,
+                "window": window,
                 "csv_enabled": self.csv.enabled,
                 "csv_dir": str(self.csv.session_dir or ""),
                 "csv_saved": self.csv.saved,
                 "csv_errors": self.csv.errors,
                 "profiles": {"ADXL": list(mon.ADXL_PROFILE_LABELS), "PIEZO": list(mon.PIEZO_PROFILE_LABELS)},
             }
+        payload["latest"] = {
+            target: {axis: self._view(record, window, options) for axis, record in snapshot.items()}
+        } if target else {}
+        return payload
 
 
 def _session_path(name):
@@ -790,13 +868,13 @@ def _row_series(row, window):
     physical = str(sensor).startswith("ADXL")
     scale = gen.read_mems_g_per_lsb() if physical else 1.0
     display = samples * scale
-    count = _window_count(window, display.size)
-    used = display[:count] if count else display
+    centered = display - float(np.mean(display)) if display.size else display
+    count = _window_count(window, centered.size)
+    used = centered[:count] if count else centered
     rms = float(np.sqrt(np.mean(np.square(used)))) if used.size else 0.0
-    try:
-        fs = float(row.get("samplerate") or 0)
-    except (TypeError, ValueError):
-        fs = 0.0
+    sensor_kind = "ADXL" if physical else "PIEZO"
+    default_fs = 3200.0 if physical else 25600.0
+    fs = float(mon.normalize_sample_rate(sensor_kind, row.get("samplerate"), default_fs))
     if row.get("freq_start_kHz"):
         start = float(row.get("freq_start_kHz") or 0)
         end = float(row.get("freq_end_kHz") or start)
@@ -810,7 +888,7 @@ def _row_series(row, window):
         "x": x,
         "y": display,
         "rms": rms,
-        "rms_curve": _rms_curve(display, window) if kind == "waveform" else None,
+        "rms_curve": _rms_curve(centered, window) if kind == "waveform" else None,
         "fs": fs,
         "n": int(display.size),
         "window": int(count),
@@ -893,6 +971,22 @@ def generator_preview(sensor: str, index: int = 1):
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.post("/api/generator/preview")
+async def generator_preview_post(body: dict):
+    try:
+        return replay.preview(body.get("sensor"), int(body.get("index") or 1) - 1, body.get("options"))
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/generator/test")
+async def generator_test(body: dict):
+    try:
+        return replay.test_broker(body)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/api/generator/start")
 async def generator_start(body: dict):
     try:
@@ -937,8 +1031,16 @@ def monitor_disconnect():
 
 
 @app.get("/api/monitor/state")
-def monitor_state():
-    return monitor.state()
+def monitor_state(device: str = ""):
+    return monitor.state(device)
+
+
+@app.post("/api/monitor/view")
+async def monitor_view(body: dict):
+    monitor.view_options = body.get("options") or {}
+    if body.get("window") is not None:
+        monitor.window = str(body.get("window") or "전체")
+    return monitor.state(str(body.get("device") or ""))
 
 
 @app.post("/api/monitor/window")
@@ -970,6 +1072,30 @@ async def monitor_command(body: dict):
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"payload": payload, "state": monitor.state()}
+
+
+@app.get("/api/analysis/defaults")
+def analysis_defaults():
+    return analysis.default_options()
+
+
+@app.post("/api/analysis/mems-scale")
+async def save_mems_scale(body: dict):
+    try:
+        value = float(body.get("g_per_lsb"))
+        gen.save_mems_g_per_lsb(value)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"g_per_lsb": value}
+
+
+@app.post("/api/analysis/mems-correction")
+async def save_mems_correction(body: dict):
+    try:
+        saved = gen.save_mems_correction(body.get("correction") or body)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"correction": saved}
 
 
 @app.get("/api/archive/sessions")
