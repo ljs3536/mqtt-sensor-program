@@ -2,3 +2,5 @@ paho-mqtt>=2.0,<3.0
 fastapi>=0.110
 uvicorn>=0.27
 python-multipart>=0.0.9
+numpy>=1.26
+matplotlib>=3.8
