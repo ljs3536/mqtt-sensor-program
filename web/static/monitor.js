@@ -13,13 +13,19 @@ function chart(id, title) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: { legend: { position: "top" }, title: { display: true, text: title } },
-      scales: { x: { type: "linear", title: { display: true, text: "Time (s)" } } },
+      scales: {
+        x: { type: "linear", title: { display: true, text: "Time (s)" } },
+        y: { type: "linear" },
+      },
       elements: { point: { radius: 0 }, line: { borderWidth: 1 } },
     },
   });
 }
 const rawChart = chart("raw", "파형");
-const rmsChart = chart("rms", "g RMS");
+const fftChart = chart("fft", "FFT");
+fftChart.options.scales.x.title.text = "Frequency (Hz)";
+attachGraphZoom(rawChart);
+attachGraphZoom(fftChart);
 
 function fillProfiles() {
   const sensor = document.querySelector("#sensor").value;
@@ -43,10 +49,24 @@ function renderMacs(devices) {
   document.querySelector("#macCount").textContent = `${selectedMacs.size}개 선택`;
 }
 
+function points(xs, ys, logX, logY) {
+  const data = [];
+  for (let i = 0; i < xs.length; i += 1) {
+    const x = xs[i];
+    const y = ys[i];
+    if (logX && x <= 0) continue;
+    if (logY && y <= 0) continue;
+    data.push({ x, y });
+  }
+  return data;
+}
+
 function draw(device) {
   const axes = Object.keys(device || {});
+  const logX = document.querySelector("#fftLogX").checked;
+  const logY = document.querySelector("#fftLogY").checked;
   rawChart.data.datasets = [];
-  rmsChart.data.datasets = [];
+  fftChart.data.datasets = [];
   const notes = [];
   for (const axis of axes) {
     const item = device[axis];
@@ -62,16 +82,18 @@ function draw(device) {
         label: `${axis} (${item.unit})`, borderColor: color,
         data: item.t.map((x, i) => ({ x, y: item.y[i] })),
       });
-      rmsChart.data.datasets.push({
-        label: axis, borderColor: color,
-        data: item.t.map((x, i) => ({ x, y: item.rms[i] })),
+      fftChart.data.datasets.push({
+        label: `${axis} ${item.fft_unit}`, borderColor: color,
+        data: points(item.f || [], item.fft || [], logX, logY),
       });
-      notes.push(`${axis} ${item.unit} RMS=${item.rms_value} N=${item.n} Window=${item.window} Fs=${item.fs}`);
+      notes.push(`${axis} ${item.unit} RMS=${item.rms_value} | FFT ${item.fft_hz} Hz / ${item.fft_peak} ${item.fft_unit} | N=${item.n} Window=${item.window} Fs=${item.fs}`);
     }
   }
+  fftChart.options.scales.x.type = logX ? "logarithmic" : "linear";
+  fftChart.options.scales.y.type = logY ? "logarithmic" : "linear";
   document.querySelector("#info").textContent = notes.join(" | ") || "수신 대기";
   rawChart.update();
-  rmsChart.update();
+  fftChart.update();
 }
 
 async function refresh() {
@@ -166,6 +188,17 @@ document.querySelector("#start").onclick = () => command("start");
 document.querySelector("#stop").onclick = () => command("stop");
 document.querySelector("#apply").onclick = () => command("apply");
 document.querySelector("#query").onclick = () => command("query");
-document.querySelector("#device").onchange = () => { graphDevice = device.value; refresh(); };
+document.querySelector("#device").onchange = () => {
+  graphDevice = device.value;
+  resetGraphZoom(rawChart);
+  resetGraphZoom(fftChart);
+  refresh();
+};
+document.querySelector("#resetZoom").onclick = () => {
+  resetGraphZoom(rawChart);
+  resetGraphZoom(fftChart);
+};
+document.querySelector("#fftLogX").onchange = () => { resetGraphZoom(fftChart); refresh(); };
+document.querySelector("#fftLogY").onchange = () => { resetGraphZoom(fftChart); refresh(); };
 setInterval(refresh, 1000);
 refresh();

@@ -25,7 +25,10 @@ function chart(id) {
       maintainAspectRatio: false,
       parsing: false,
       plugins: { legend: { position: "top" } },
-      scales: { x: { type: "linear" }, y: { type: "linear" } },
+      scales: {
+        x: { type: "linear", title: { display: true, text: "" } },
+        y: { type: "linear" },
+      },
       elements: { point: { radius: 0 }, line: { borderWidth: 1 } },
     },
   });
@@ -33,6 +36,9 @@ function chart(id) {
 const rawChart = chart("raw");
 const fftChart = chart("fft");
 const trendChart = chart("trend");
+attachGraphZoom(rawChart);
+attachGraphZoom(fftChart);
+attachGraphZoom(trendChart);
 trendChart.options.plugins.title = { display: true, text: "저장 데이터 g RMS" };
 let savedFileItems = [];
 

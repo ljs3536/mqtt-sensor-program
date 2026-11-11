@@ -641,24 +641,39 @@ class MonitorService:
                 "y": _take(record["y"], index),
                 "received_at": record["received_at"],
             }
-        y = record["samples"]
+        y = np.asarray(record["samples"], dtype=np.float64)
+        fs = float(record["fs"] or 0)
         g_scale = gen.read_mems_g_per_lsb() if record["physical"] else 1.0
         display = y * g_scale
-        t = np.arange(len(display), dtype=np.float64) / record["fs"] if record["fs"] > 0 else np.arange(len(display))
-        rms = _rms_curve(display, self.window)
+        t = np.arange(len(display), dtype=np.float64) / fs if fs > 0 else np.arange(len(display))
         full = float(np.sqrt(np.mean(np.square(display)))) if display.size else 0.0
-        index = _envelope_index(display)
+        window_n = _window_count(self.window, y.size)
+        freq, mag = gen.fft_peak(y, fs, "Hann", None if window_n >= y.size else window_n)
+        if record["physical"]:
+            mag = mag * g_scale / np.sqrt(2.0)
+        time_index = _envelope_index(display)
+        freq_index = _envelope_index(mag)
+        peak = 0.0
+        peak_hz = 0.0
+        if mag.size > 1:
+            peak_at = 1 + int(np.argmax(mag[1:]))
+            peak = float(mag[peak_at])
+            peak_hz = float(freq[peak_at])
         return {
             "kind": "waveform",
             "axis": record["axis"],
-            "t": _take(t, index),
-            "y": _take(display, index),
-            "rms": _take(rms, index),
+            "t": _take(t, time_index),
+            "y": _take(display, time_index),
+            "f": _take(freq, freq_index),
+            "fft": _take(mag, freq_index),
             "rms_value": round(full, 6),
+            "fft_peak": round(peak, 6),
+            "fft_hz": round(peak_hz, 3),
             "n": int(display.size),
-            "window": _window_count(self.window, display.size),
-            "fs": record["fs"],
+            "window": int(window_n),
+            "fs": fs,
             "unit": "g" if record["physical"] else "Count",
+            "fft_unit": "g RMS" if record["physical"] else "Count Peak",
             "received_at": record["received_at"],
         }
 
