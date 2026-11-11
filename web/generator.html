@@ -3,12 +3,11 @@
 <head>
   <meta charset="utf-8">
   <title>MQTT 파형 발생기</title>
-  <link rel="stylesheet" href="/static/style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/style.css?v=3">
 </head>
 <body>
   <header>
-    <strong>sensor-program</strong>
+    <strong class="brand">MQTT 파형 발생기</strong>
     <nav>
       <a href="/">센서 수신 모니터</a>
       <a class="active" href="/generator">MQTT 파형 발생기</a>
@@ -16,34 +15,46 @@
   </header>
   <main>
     <section class="card">
+      <h2>MQTT Broker / 장치 1개 고정</h2>
       <div class="row">
-        <label>Broker IP<input id="host" value="127.0.0.1"></label>
-        <label>Port<input id="port" value="1883" style="width:80px"></label>
-        <label>QoS<input id="qos" value="1" style="width:50px"></label>
+        <label>IP<input id="host" value="127.0.0.1"></label>
+        <label>Port<input id="port" class="w-port" value="1883"></label>
+        <label>QoS<input id="qos" class="w-qos" value="1"></label>
         <label>User<input id="user"></label>
         <label>Password<input id="password" type="password"></label>
         <label>Device ID<input id="device" value="S01"></label>
         <label>MAC<input id="mac" value="TEST00000001"></label>
-        <label><span>MAC 덮어쓰기</span><input id="rewrite" type="checkbox"></label>
-        <label><span>진동 seq 자동</span><input id="seq" type="checkbox" checked></label>
-        <label><span>Jitter</span><input id="jitterOn" type="checkbox"></label>
-        <label><span>패킷 손실</span><input id="lossOn" type="checkbox"></label>
+        <label class="check"><input id="rewrite" type="checkbox"><span>MAC 덮어쓰기</span></label>
+        <label class="check"><input id="seq" type="checkbox" checked><span>진동 seq 자동</span></label>
+        <label class="check"><input id="jitterOn" type="checkbox"><span>Jitter</span></label>
+        <label class="check"><input id="lossOn" type="checkbox"><span>패킷 손실</span></label>
+        <button type="button" class="secondary" id="testBroker">연결 테스트</button>
       </div>
     </section>
-    <section class="card" id="sensors"></section>
-    <section class="card">
-      <div class="row">
-        <strong>ADXL CSV 3개 (기존 JSON/JSONL 선택도 유지)</strong>
-        <label>X<input id="adxlX" type="file" accept=".csv,text/csv"></label>
-        <label>Y<input id="adxlY" type="file" accept=".csv,text/csv"></label>
-        <label>Z<input id="adxlZ" type="file" accept=".csv,text/csv"></label>
+
+    <section class="card file-card">
+      <h2>센서별 파일 1개 선택 / 체크 해제 시 송신하지 않음</h2>
+      <div id="sensors"></div>
+      <div class="row" style="margin-top:8px">
+        <label>ADXL XYZ gap(ms)<input id="xyzGap" class="w-num" value="5"></label>
+        <label>초음파 tick 증가<input id="tickStep" class="w-num" value="0"></label>
+        <p class="hint" style="margin:0;align-self:end">(기본 Jitter / Loss OFF, 재생 위치는 센서별로 유지)</p>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <strong style="align-self:end">ADXL CSV 3개 (기존 JSON/JSONL 선택도 유지)</strong>
+        <label>X<span class="file-pick"><input id="adxlX" type="file" accept=".csv,text/csv"><span class="file-btn">CSV 선택</span><span class="file-name">선택된 파일 없음</span></span></label>
+        <label>Y<span class="file-pick"><input id="adxlY" type="file" accept=".csv,text/csv"><span class="file-btn">CSV 선택</span><span class="file-name">선택된 파일 없음</span></span></label>
+        <label>Z<span class="file-pick"><input id="adxlZ" type="file" accept=".csv,text/csv"><span class="file-btn">CSV 선택</span><span class="file-name">선택된 파일 없음</span></span></label>
         <button type="button" id="loadAdxlCsv">XYZ CSV 로드</button>
-        <label><span>손상된 HEX 앞부분 자동 복구(미리보기)</span><input id="recoverPartial" type="checkbox" checked></label>
+        <label class="check"><input id="recoverPartial" type="checkbox" checked><span>손상된 HEX 앞부분 자동 복구(미리보기)</span></label>
       </div>
     </section>
+
     <section class="card">
+      <h2>저장된 CSV 불러오기</h2>
+      <p class="hint">센서 수신 모니터가 수신 중 저장한 HEX/decoded CSV입니다. 저장 폴더와 장치를 고르면 그 파일을 발생기에 불러올 수 있습니다.</p>
       <div class="row">
-        <label>모니터 저장 세션<select id="savedSession"></select></label>
+        <label>저장 폴더<select id="savedSession"></select></label>
         <label>장치<select id="savedDevice"></select></label>
         <label>센서
           <select id="savedSensor"><option>ADXL</option><option>PIEZO</option><option>초음파</option></select>
@@ -56,31 +67,152 @@
         <button type="button" id="loadSaved">저장 CSV 불러오기</button>
         <button type="button" class="secondary" id="reloadSaved">목록 새로고침</button>
       </div>
-      <div id="savedFiles" class="macs"></div>
-      <p>센서 수신 모니터가 저장한 CSV입니다. 아래는 패킷이 쌓인 g RMS이고, 불러오기를 누르면 그 데이터로 MQTT 전송도 할 수 있습니다.</p>
-    </section>
-    <section class="card"><canvas id="trend" class="chart"></canvas></section>
-    <section class="card">
-      <div class="row">
-        <label>그래프 센서
-          <select id="sensor"><option>PIEZO</option><option>ADXL</option><option>초음파</option></select>
-        </label>
-        <button type="button" id="prev">이전 패킷</button>
-        <button type="button" id="next">다음 패킷</button>
-        <label>번호<input id="index" value="1" style="width:70px"></label>
-        <button type="button" id="go">번호 이동</button>
-        <span id="position">파일을 선택하세요</span>
-        <button type="button" id="start">선택 위치부터 전송 시작</button>
-        <button type="button" class="secondary" id="stop">중지</button>
-        <span id="stats"></span>
+      <div id="savedFiles" class="files"></div>
+      <p id="savedEmpty" class="hint">저장된 CSV가 없습니다. 모니터에서 연결해 수신하면 여기에 폴더가 나타납니다.</p>
+      <div class="chart-card">
+        <div class="plot short"><canvas id="trend"></canvas></div>
       </div>
     </section>
-    <section class="grid">
-      <div class="card"><canvas id="raw" class="chart"></canvas></div>
-      <div class="card"><canvas id="fft" class="chart"></canvas></div>
+
+    <section class="card">
+      <h2>파일 패킷 미리보기 / 선택한 위치에서 재생</h2>
+      <div class="between">
+        <div class="row">
+          <label>그래프 센서
+            <select id="sensor"><option>PIEZO</option><option>ADXL</option><option>초음파</option></select>
+          </label>
+          <button type="button" class="secondary" id="prev">◀ 이전 패킷</button>
+          <button type="button" class="secondary" id="next">다음 패킷 ▶</button>
+          <label>패킷 번호<input id="index" class="w-num" value="1"></label>
+          <button type="button" class="secondary" id="go">번호 이동</button>
+          <span id="position" class="stats">파일을 선택하세요</span>
+        </div>
+        <button type="button" class="secondary" id="resetZoom">그래프 전체 보기</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button type="button" class="go" id="start">▶ 선택 위치부터 전송 시작</button>
+        <button type="button" class="stop" id="stop">■ 중지</button>
+        <span id="stats" class="stats">Publish 0 / PUBACK 0 / Drop 0</span>
+      </div>
+      <p id="formula" class="formula"></p>
+      <p id="rotation" class="formula"></p>
     </section>
-    <section class="card"><pre id="log"></pre></section>
+
+    <section class="card">
+      <h2>발생기 그래프 분석 · PIEZO / MEMS / 초음파</h2>
+      <p class="hint">휠: X·Y 확대 · 왼쪽 버튼 유지 + 휠: X축만 · 오른쪽 버튼 유지 + 휠: Y축만 · 왼쪽 드래그: 이동 · 오른쪽 클릭: 메뉴</p>
+      <div class="grid">
+        <div class="chart-card"><h2>RAW</h2><div class="plot"><canvas id="raw"></canvas></div></div>
+        <div class="chart-card"><h2>FFT</h2><div class="plot"><canvas id="fft"></canvas></div></div>
+      </div>
+    </section>
+
+    <details class="card" id="analysis">
+      <summary>그래프 설정 (이 영역에서 마우스 휠로 스크롤)</summary>
+      <p class="hint">미리보기만 바뀝니다. 송신 HEX는 그대로입니다.</p>
+      <div class="row">
+        <label class="check"><input id="fftAvg" type="checkbox"><span>FFT 평균 적용</span></label>
+        <label>시작: 현재 선택 패킷 | 평균 개수
+          <select id="fftAvgCount">
+            <option>2</option><option>4</option><option>8</option><option selected>16</option>
+            <option>32</option><option>64</option><option>128</option><option>전체</option>
+          </select>
+        </label>
+        <label class="check"><input id="fftLogX" type="checkbox"><span>FFT X 로그</span></label>
+        <label class="check"><input id="fftLogY" type="checkbox"><span>FFT Y 로그</span></label>
+      </div>
+      <fieldset id="piezoBox">
+        <legend>PIEZO 그래프 옵션 (수신기 방식 · 미리보기만 변경)</legend>
+        <div class="row">
+          <label>표시 단위
+            <select id="piezoUnit">
+              <option>Count</option><option selected>mV</option><option>g RMS</option><option>mm/s RMS</option>
+            </select>
+          </label>
+          <label>Vmax (V)<input id="piezoVmax" class="w-num" value="3.89"></label>
+          <label>Amax<input id="piezoAmax" class="w-num" value="4096"></label>
+          <label>감도 (mV/g)<input id="piezoSens" class="w-num" value="100"></label>
+          <label>FFT 창
+            <select id="piezoWindow"><option>Hann</option><option>Hamming</option><option>Rectangular</option></select>
+          </label>
+          <label>Window N
+            <select id="piezoN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
+          </label>
+        </div>
+        <div id="piezoFilters"></div>
+        <p class="hint">필터는 미리보기 전용 · 원본 Count/CSV/MQTT 변경 없음</p>
+      </fieldset>
+      <fieldset id="adxlBox" hidden>
+        <legend>MEMS(ADXL) 그래프 옵션 — 미리보기만 변경 / 송신 원본 유지</legend>
+        <div class="row">
+          <span class="stats">표시 축</span>
+          <label class="check"><input id="axisX" type="checkbox" checked><span>X</span></label>
+          <label class="check"><input id="axisY" type="checkbox" checked><span>Y</span></label>
+          <label class="check"><input id="axisZ" type="checkbox" checked><span>Z</span></label>
+          <label>RAW 단위
+            <select id="adxlRaw">
+              <option>자동 (g/mg/µg)</option><option>Count</option><option>g</option><option>mg</option><option>µg</option>
+            </select>
+          </label>
+          <label>FFT 단위
+            <select id="adxlFft">
+              <option>자동 (g RMS)</option><option>Count Peak</option><option>g Peak</option><option>g RMS</option>
+            </select>
+          </label>
+          <label>1 LSB = (g)<input id="adxlG" value="0.00390625" style="width:120px"></label>
+          <button type="button" class="secondary" id="saveG">LSB 저장</button>
+        </div>
+        <p class="hint">ADXL343 Full Resolution 공칭 기본값: 1 LSB = 0.00390625 g (256 LSB/g) · 자동 표시: µg/mg/g · 원본 전송 변경 없음</p>
+        <div class="row">
+          <label>FFT Window
+            <select id="adxlWindow">
+              <option>Rectangular</option><option selected>Hann</option><option>Hamming</option><option>Blackman</option>
+              <option>Blackman-Harris</option><option>Flat Top</option><option>Bartlett</option><option>Kaiser</option>
+            </select>
+          </label>
+          <label>Window N
+            <select id="adxlN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
+          </label>
+          <label>Kaiser β<input id="adxlBeta" class="w-num" value="8.6"></label>
+        </div>
+        <div id="adxlFilters"></div>
+        <div class="row">
+          <label class="check"><input id="freqOn" type="checkbox" checked><span>주파수 보정 ON</span></label>
+          <label>f 나눗수<input id="freqDiv" class="w-num" value="1.014"></label>
+          <label class="check"><input id="sensOn" type="checkbox" checked><span>Sensitivity 보정 ON</span></label>
+          <label>저주파 경계 Hz<input id="lowHz" class="w-num" value="60"></label>
+          <label>고주파 경계 Hz<input id="highHz" class="w-num" value="360"></label>
+          <label>저주파 S<input id="lowS" class="w-num" value="0.99"></label>
+          <label>중간 상수<input id="midA" class="w-num" value="1.07"></label>
+          <label>중간 기울기<input id="midB" class="w-num" value="0.0005"></label>
+          <label>고주파 S<input id="highS" class="w-num" value="0.89"></label>
+          <button type="button" class="secondary" id="saveCorrection">보정 적용/저장</button>
+        </div>
+        <p id="correctionFormula" class="formula"></p>
+        <div class="row">
+          <label>RPM<input id="rpm" class="w-num" value="1800"></label>
+          <label>유형
+            <select id="rotType">
+              <option>미지정</option><option>블레이드</option><option>기어</option><option>플런저</option><option>DC 정류자</option>
+            </select>
+          </label>
+          <label>축
+            <select id="rotAxis"><option>X</option><option>Y</option><option>Z</option></select>
+          </label>
+        </div>
+        <p class="hint">회전부품 역추정: FFT 데이터 로드 후 실행 (상대 점수/후보)</p>
+      </fieldset>
+    </details>
+
+    <section class="card">
+      <h2>송신 로그</h2>
+      <pre id="log"></pre>
+    </section>
   </main>
+  <script src="/static/chart.umd.min.js"></script>
+  <script src="/static/hammer.min.js"></script>
+  <script src="/static/chartjs-plugin-zoom.min.js"></script>
+  <script src="/static/graph.js?v=5"></script>
   <script src="/static/generator.js"></script>
 </body>
 </html>
