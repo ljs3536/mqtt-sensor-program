@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>센서 수신 모니터</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header>
+    <strong>센서 수신 모니터</strong>
+    <nav><a href="/">처음</a><a href="/generator">파형 발생기</a></nav>
+  </header>
+  <main>
+    <section class="card">
+      <div class="row">
+        <label>Broker<input id="host" value="192.168.1.62"></label>
+        <label>Port<input id="port" value="1883" style="width:80px"></label>
+        <label>Topic<input id="topic" value="V/#,D/#" style="width:180px"></label>
+        <label>User<input id="user"></label>
+        <label>Password<input id="password" type="password"></label>
+        <button type="button" id="connect">연결</button>
+        <button type="button" class="secondary" id="disconnect">연결 해제</button>
+        <span id="status">DISCONNECTED</span>
+      </div>
+    </section>
+    <section class="card">
+      <label>장치
+        <select id="device"></select>
+      </label>
+      <p id="info">수신 대기</p>
+    </section>
+    <section class="grid">
+      <div class="card"><canvas id="raw" class="chart"></canvas></div>
+      <div class="card"><canvas id="rms" class="chart"></canvas></div>
+    </section>
+    <section class="card"><pre id="log"></pre></section>
+  </main>
+  <script src="/static/monitor.js"></script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+:root {
+  color: #1c2430;
+  background: #f4f7fb;
+  font-family: "Malgun Gothic", "Segoe UI", sans-serif;
+}
+body { margin: 0; }
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 12px 22px;
+  background: #16324f;
+  color: white;
+}
+header nav { display: flex; gap: 8px; }
+header a {
+  color: #d7e7f7;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+header a.active, header a:hover { background: #2b5278; color: white; }
+main { padding: 16px 22px 32px; }
+.card {
+  background: white;
+  border: 1px solid #d5deea;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.row { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; }
+label { display: flex; flex-direction: column; font-size: 12px; color: #4d5b6e; gap: 3px; }
+input, select, button {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid #b7c4d4;
+  border-radius: 4px;
+  background: white;
+}
+button { background: #1f6feb; color: white; border: 0; cursor: pointer; }
+button.secondary { background: #5c6b7d; }
+button:disabled { opacity: 0.55; cursor: default; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.chart { height: 280px; }
+pre {
+  height: 220px;
+  overflow: auto;
+  background: #101820;
+  color: #d5e2ef;
+  padding: 10px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+.macs { display: flex; flex-wrap: wrap; gap: 8px 14px; min-height: 28px; }
+.macs label { flex-direction: row; align-items: center; color: #1c2430; }
+.split { display: grid; grid-template-columns: 1.1fr 0.9fr; gap: 12px; }
+@media (max-width: 900px) { .grid, .split { grid-template-columns: 1fr; } }
