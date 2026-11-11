@@ -704,8 +704,10 @@ class MonitorService:
             }
         y = np.asarray(shown["y"], dtype=np.float64)
         t = np.asarray(shown["t"], dtype=np.float64)
+        # y는 이미 g 또는 mV로 환산된 파형. AC RMS는 그 평균을 뺀 구간의 √평균(제곱).
         ac = y - float(np.mean(y)) if y.size else y
         rms = _rms_curve(ac, window)
+        # 전체 AC RMS = 표준편차. FFT 한 칸의 g RMS와 다르다.
         full = float(np.std(y)) if y.size else 0.0
         index = _envelope_index(y)
         fft_x, fft_y = _pack_pair(shown["fft_f"], shown["fft_y"])

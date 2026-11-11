@@ -3,6 +3,12 @@
 Curves call the same functions as the desktop programs. Nothing here rewrites
 MQTT payloads or saved HEX. Sample-rate codes such as 15 or 0x0F are turned
 into Hz with the receiver's existing table.
+
+단위는 이 파일에서만 붙인다.
+PIEZO: K = 1000 × Vmax / Amax [mV/Count], g = (Count−평균) × K / 감도.
+ADXL: g = Count × (g/LSB). FFT g RMS = Count Peak × (g/LSB) / √2.
+ADXL FFT 최종값: G_final = G / S(f), f_final = f / 1.014.
+식과 기본값은 docs/단위환산.md 와 같다.
 """
 
 from __future__ import annotations
@@ -124,7 +130,7 @@ def _window_n(value):
 
 
 def decode_wave(sensor, obj):
-    """Signed int16 big-endian samples, with receiver sample-rate codes in Hz."""
+    """sensorData HEX → 부호 있는 16비트 Count. 시간축은 n / Fs 이고 Fs는 Hz다."""
     raw_hex = "".join(str(obj.get("sensorData") or "").split())
     raw = bytes.fromhex(raw_hex)
     if len(raw) % 2:
@@ -136,6 +142,7 @@ def decode_wave(sensor, obj):
 
 
 def _scaled_unit(values, suffix):
+    """g로 환산한 최댓값으로 눈금만 고른다. 1 미만은 mg(×1000), 0.001 미만은 µg(×1e6)."""
     finite = []
     for item in values:
         data = np.asarray(item, dtype=np.float64)
@@ -225,7 +232,9 @@ def _piezo_curves(packet, averaged, options):
     sens = _num(piezo.get("sensitivity"), 100)
     if not all(np.isfinite(x) and x > 0 for x in (vmax, amax, sens)):
         raise ValueError("Vmax/Amax/센서 감도는 유효한 양수여야 합니다")
+    # K [mV/Count] = 1000 × Vmax / Amax. 기본 3.89 V, 4096 → 0.94970703125.
     scale = 1000.0 * vmax / amax
+    # RAW는 평균을 뺀 Count. 상수 오프셋(Amax/2)은 평균 제거로 사라진다.
     centered = raw - np.mean(raw)
     filtered = gen.spectral_filter(centered, fs, **_filter_kwargs(piezo["filters"], "RAW"))
     fft_src = gen.spectral_filter(centered, fs, **_filter_kwargs(piezo["filters"], "FFT"))
@@ -233,6 +242,7 @@ def _piezo_curves(packet, averaged, options):
     count = _window_n(piezo.get("window_n"))
     if count is not None and count > raw.size:
         raise ValueError(f"Window N={count} > 실제 샘플 {raw.size}")
+    # Count Peak[k] = 2 × |rFFT((Count−평균)×창)[k]| / Σ창. 0 Hz·나이퀴스트는 2를 곱하지 않는다.
     freq, peak = gen.fft_peak(fft_src, fs, window, count)
     if averaged and "PIEZO" in averaged:
         freq, peak, _used = averaged["PIEZO"]
@@ -246,6 +256,7 @@ def _piezo_curves(packet, averaged, options):
         spectrum, fft_label = peak * scale, "mV Peak"
         detail = f"K=1000×{vmax:g}/{amax:g}={scale:.6g} mV/Count | RAW=(C−mean)×K | FFT=Count Peak×K"
     elif unit == "g RMS":
+        # RAW g = (Count−평균) × K / 감도. FFT g RMS = Count Peak × K / (감도 × √2).
         wave, wave_label = filtered * scale / sens, "g (instantaneous AC)"
         spectrum, fft_label = peak * scale / sens / np.sqrt(2.0), "g RMS / bin"
         total = float(np.std(raw * scale / sens))
@@ -256,6 +267,7 @@ def _piezo_curves(packet, averaged, options):
         grms = peak * scale / sens / np.sqrt(2.0)
         spectrum = np.zeros_like(grms)
         positive = freq > 0
+        # mm/s RMS = g RMS × 9806.65 / (2πf), f > 0. RAW Y는 g와 같다.
         spectrum[positive] = grms[positive] * 9806.65 / (2 * np.pi * freq[positive])
         fft_label = "mm/s RMS / bin"
         detail = "FFT velocity = g RMS × 9806.65 / (2πf), f>0"
@@ -270,6 +282,7 @@ def _piezo_curves(packet, averaged, options):
         "y_label": wave_label,
         "fft_x_label": "Frequency (kHz)",
         "fft_label": fft_label,
+        # 발생기 눈금: 시간 ms, 주파수 kHz. 모니터는 monitor_curves에서 s, Hz로 되돌린다.
         "series": {"PIEZO": {"t": time_ms, "y": wave}},
         "fft": {"PIEZO": {"f": freq / 1000.0, "y": spectrum}},
         "info": f"PIEZO N={raw.size} Fs={fs:g} Vmax={vmax:g} Amax={amax:g} 감도={sens:g} mV/g{peak_note}",
@@ -283,6 +296,7 @@ def _adxl_curves(packet, averaged, options):
     g_per_lsb = _num(adxl.get("g_per_lsb"), gen.read_mems_g_per_lsb())
     if not 0 < g_per_lsb <= 10:
         raise ValueError("1 LSB당 g는 0보다 크고 10 이하여야 합니다")
+    # RAW g = Count / (LSB/g) = Count × (g/LSB). 공칭 0.00390625, 저장값 0.00380625.
     lsb = 1.0 / g_per_lsb
     correction = _correction(options)
     raw_mode = adxl.get("raw_unit") if adxl.get("raw_unit") in ADXL_RAW_UNITS else ADXL_RAW_UNITS[0]
@@ -305,14 +319,17 @@ def _adxl_curves(packet, averaged, options):
             raise ValueError(f"Window N={count} > 실제 샘플 {raw.size}")
         wave = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "RAW"))
         fft_src = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT"))
+        # amp는 Count Peak. 평균 제거는 fft_peak 안에서만 한다. RAW 파형에는 중력이 남는다.
         freq, amp = gen.fft_peak(fft_src, fs, window, count, beta)
         if averaged and axis in averaged:
             freq, amp, _used = averaged[axis]
         spectra[axis] = (freq, amp)
+        # 전체 AC g RMS = std(Count × g/LSB). FFT 한 칸의 g RMS와 다른 값이다.
         summaries.append(f"{axis} AC g RMS={float(np.std(raw / lsb)):.6g}")
         raws.append((axis, wave, fs))
         ffts.append((axis, freq, amp))
     if str(raw_mode).startswith("자동"):
+        # values/lsb 는 g. 눈금 배율을 고른 뒤 다시 /lsb 해서 Count에 곱할 계수를 만든다.
         raw_scale, raw_label = _scaled_unit([values / lsb for _axis, values, _fs in raws], "")
         raw_scale /= lsb
     else:
@@ -323,6 +340,7 @@ def _adxl_curves(packet, averaged, options):
             "µg": (1e6 / lsb, "µg"),
         }[raw_mode]
     if str(fft_mode).startswith("자동"):
+        # 비교값 = Count Peak × (g/LSB) / √2. 배율은 g, mg(×1000), µg(×1e6) 중 하나.
         fft_scale, fft_label = _scaled_unit(
             [amp / lsb / np.sqrt(2.0) for _axis, _freq, amp in ffts], " RMS"
         )
@@ -331,8 +349,10 @@ def _adxl_curves(packet, averaged, options):
         fft_scale, fft_label = {
             "Count Peak": (1.0, "Count Peak"),
             "g Peak": (1.0 / lsb, "g Peak"),
+            # g RMS = Count Peak × (g/LSB) / √2.
             "g RMS": (1.0 / lsb / np.sqrt(2.0), "g RMS / bin"),
         }[fft_mode]
+    # Count Peak는 물리 단위가 아니므로 S(f)로 나누지 않는다. f / 1.014는 그대로 적용된다.
     physical = fft_mode != "Count Peak"
     series = {}
     fft = {}
@@ -340,6 +360,8 @@ def _adxl_curves(packet, averaged, options):
     for axis, wave, fs in raws:
         series[axis] = {"t": np.arange(wave.size, dtype=np.float64) / fs * 1000.0, "y": wave * raw_scale}
     for axis, freq, amp in ffts:
+        # G_final = G / S(f), f_final = f / 1.014. S는 나누기 전 측정 주파수.
+        # S: f≤60 → 0.99, 60<f≤360 → 1.07−0.0005×f, f>360 → 0.89. 나눗수 기본 1.014.
         shown_f, shown_a = gen.corrected_mems_fft(
             freq, amp * fft_scale, correction, apply_sensitivity=physical
         )
@@ -441,7 +463,7 @@ def generator_curves(sensor, packet, packets, index, options):
 
 
 def monitor_curves(samples, fs, sensor_kind, options, axis="X"):
-    """One live axis, using the same unit and FFT rules as the generator preview."""
+    """발생기와 같은 g·g RMS 환산. 시간만 ms→s, FFT 주파수만 kHz→Hz로 되돌린다."""
     samples = np.asarray(samples, dtype=np.float64)
     fs = float(fs or 0)
     if samples.size < 2 or fs <= 0:
