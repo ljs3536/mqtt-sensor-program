@@ -15,23 +15,15 @@
   </header>
   <main>
     <section class="card">
-      <h2>통신 연결</h2>
+      <h2>MQTT 설정 / 센서 설정 · 동작</h2>
       <div class="row">
+        <label>Broker<input id="host" value="127.0.0.1"></label>
+        <label>Port<input id="port" class="w-port" value="1883"></label>
+        <label>구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#"></label>
         <button type="button" id="connect">연결</button>
         <button type="button" class="secondary" id="disconnect">연결 해제</button>
         <span class="stats">상태</span>
-        <span id="status" class="pill off">DISCONNECTED</span>
-      </div>
-    </section>
-
-    <section class="card">
-      <h2>MQTT 설정 / 센서 설정 · 동작</h2>
-      <div class="row">
-        <label>Broker<input id="host" value="192.168.1.62"></label>
-        <label>Port<input id="port" class="w-port" value="1883"></label>
-        <label>구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#"></label>
-        <label>User<input id="user"></label>
-        <label>Password<input id="password" type="password"></label>
+        <span id="linkStatus" class="pill off">DISCONNECTED</span>
       </div>
       <p class="hint">기본 구독 Topic = V/#,D/# (콤마로 복수 지정) | MQTT Retained 설정 Topic = S/{선택한 센서 MAC}</p>
       <div class="split">
@@ -75,33 +67,20 @@
       <div class="row">
         <label class="check"><input id="csvEnabled" type="checkbox" checked><span>CSV 저장 (HEX + Decoded 분리)</span></label>
         <label>그래프 장치<select id="device"></select></label>
-        <label>g RMS Window
-          <select id="rmsWindow">
-            <option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option>
-          </select>
-        </label>
         <button type="button" class="secondary" id="resetZoom">그래프 전체 보기</button>
       </div>
       <p id="csvInfo" class="hint">CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다.</p>
       <p id="info">수신 대기</p>
     </section>
 
-    <section class="card">
-      <p class="hint">휠: X·Y 확대 · 왼쪽 버튼 유지 + 휠: X축만 · 오른쪽 버튼 유지 + 휠: Y축만 · 왼쪽 드래그: 이동 · 오른쪽 클릭: 메뉴</p>
-      <div class="grid">
-        <div class="chart-card"><h2>RAW</h2><div class="plot"><canvas id="raw"></canvas></div></div>
-        <div class="chart-card"><h2>FFT</h2><div class="plot"><canvas id="fft"></canvas></div></div>
-      </div>
-      <div class="chart-card" style="margin-top:8px"><h2>g RMS</h2><div class="plot"><canvas id="rms"></canvas></div></div>
-    </section>
-
-    <details class="card" id="analysis">
+    <details class="card" id="analysis" open>
       <summary>그래프 설정</summary>
       <p class="hint">화면 표시만 바꿉니다. 저장 CSV와 수신 HEX는 그대로입니다.</p>
       <div class="row">
         <label class="check"><input id="fftLogX" type="checkbox"><span>FFT X 로그</span></label>
         <label class="check"><input id="fftLogY" type="checkbox"><span>FFT Y 로그</span></label>
       </div>
+      <div class="split">
       <fieldset>
         <legend>PIEZO 그래프 옵션 (수신기 방식 · 미리보기만 변경)</legend>
         <div class="row">
@@ -151,8 +130,30 @@
         </div>
         <div id="adxlFilters"></div>
       </fieldset>
+      </div>
       <p id="formula" class="formula"></p>
     </details>
+
+    <section class="card">
+      <p class="hint">휠: X·Y 확대 · 왼쪽 버튼 유지 + 휠: X축만 · 오른쪽 버튼 유지 + 휠: Y축만 · 왼쪽 드래그: 이동 · 오른쪽 클릭: 메뉴</p>
+      <div class="row">
+        <label>축 대상
+          <select id="axisTarget"><option value="raw">RAW</option><option value="fft">FFT</option></select>
+        </label>
+        <label class="check"><input id="lockX" type="checkbox"><span>X축 고정</span></label>
+        <label class="check"><input id="lockY" type="checkbox"><span>Y축 고정</span></label>
+        <label>X min<input id="xMin" class="w-num"></label>
+        <label>X max<input id="xMax" class="w-num"></label>
+        <label>Y min<input id="yMin" class="w-num"></label>
+        <label>Y max<input id="yMax" class="w-num"></label>
+        <button type="button" id="applyAxis">축 적용/고정</button>
+        <button type="button" class="secondary" id="autoAxis">축 자동</button>
+      </div>
+      <div class="grid">
+        <div class="chart-card"><h2>RAW</h2><div class="plot"><canvas id="raw"></canvas></div></div>
+        <div class="chart-card"><h2>FFT</h2><div class="plot"><canvas id="fft"></canvas></div></div>
+      </div>
+    </section>
 
     <section class="card">
       <h2>시스템 로그</h2>
@@ -162,7 +163,7 @@
   <script src="/static/chart.umd.min.js"></script>
   <script src="/static/hammer.min.js"></script>
   <script src="/static/chartjs-plugin-zoom.min.js"></script>
-  <script src="/static/graph.js?v=5"></script>
-  <script src="/static/monitor.js"></script>
+  <script src="/static/graph.js?v=7"></script>
+  <script src="/static/monitor.js?v=8"></script>
 </body>
 </html>

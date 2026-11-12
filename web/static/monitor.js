@@ -20,40 +20,15 @@ document.querySelector("#piezoFilters").innerHTML = filterMarkup([["HPF", 10, 4]
 document.querySelector("#adxlFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 1000, 4], ["Notch", 975, 20]]);
 
 function chart(id, title) {
-<<<<<<< HEAD
-  return new Chart(document.getElementById(id), {
-    type: "line",
-    data: { datasets: [] },
-    options: {
-      animation: false,
-      responsive: true,
-      maintainAspectRatio: false,
-      parsing: false,
-      plugins: { legend: { position: "top" }, title: { display: true, text: title } },
-      scales: {
-        x: { type: "linear", title: { display: true, text: "Time (s)" } },
-        y: { type: "linear" },
-      },
-      elements: { point: { radius: 0 }, line: { borderWidth: 1 } },
-    },
-  });
-}
-const rawChart = chart("raw", "파형");
-const fftChart = chart("fft", "FFT");
-fftChart.options.scales.x.title.text = "Frequency (Hz)";
-attachGraphZoom(rawChart);
-attachGraphZoom(fftChart);
-=======
   const plot = GraphView.chart(id);
   plot.options.plugins.title = { display: true, text: title, color: "#17324d", font: { size: 13, weight: "bold" } };
   return plot;
 }
 const rawChart = chart("raw", "파형");
 const fftChart = chart("fft", "FFT");
-const rmsChart = chart("rms", "AC RMS");
 GraphView.axes(rawChart, "Time (s)", "값");
 GraphView.axes(fftChart, "Frequency (Hz)", "크기");
-GraphView.axes(rmsChart, "Time (s)", "AC RMS");
+GraphView.bindAxisBar({ raw: rawChart, fft: fftChart });
 
 function num(value, fallback) {
   const number = Number(value);
@@ -119,7 +94,6 @@ function loosen(target) {
     try { target.resetZoom(); } catch (_error) { /* zoom plugin not active yet */ }
   }
 }
->>>>>>> 5974bf4b9dd80286627b4d5580d80b4d0dd23e08
 
 function fillProfiles() {
   const current = document.querySelector("#sensor").value;
@@ -156,17 +130,8 @@ function points(xs, ys, logX, logY) {
 }
 
 function draw(device) {
-<<<<<<< HEAD
-  const axes = Object.keys(device || {});
-  const logX = document.querySelector("#fftLogX").checked;
-  const logY = document.querySelector("#fftLogY").checked;
   rawChart.data.datasets = [];
   fftChart.data.datasets = [];
-=======
-  rawChart.data.datasets = [];
-  fftChart.data.datasets = [];
-  rmsChart.data.datasets = [];
->>>>>>> 5974bf4b9dd80286627b4d5580d80b4d0dd23e08
   const notes = [];
   let logX = fftLogX.checked;
   let logY = fftLogY.checked;
@@ -194,24 +159,6 @@ function draw(device) {
         label: `${axis} (${item.unit || ""})`, borderColor: color,
         data: pairs(item.t, item.y, false, false),
       });
-<<<<<<< HEAD
-      fftChart.data.datasets.push({
-        label: `${axis} ${item.fft_unit}`, borderColor: color,
-        data: points(item.f || [], item.fft || [], logX, logY),
-      });
-      notes.push(`${axis} ${item.unit} RMS=${item.rms_value} | FFT ${item.fft_hz} Hz / ${item.fft_peak} ${item.fft_unit} | N=${item.n} Window=${item.window} Fs=${item.fs}`);
-    }
-  }
-  fftChart.options.scales.x.type = logX ? "logarithmic" : "linear";
-  fftChart.options.scales.y.type = logY ? "logarithmic" : "linear";
-  document.querySelector("#info").textContent = notes.join(" | ") || "수신 대기";
-  rawChart.update();
-  fftChart.update();
-=======
-      rmsChart.data.datasets.push({
-        label: `${axis} AC`, borderColor: color,
-        data: pairs(item.t, item.rms, false, false),
-      });
       fftChart.data.datasets.push({
         label: axis, borderColor: color,
         data: pairs(item.fft_f, item.fft_y, logX, logY),
@@ -226,11 +173,8 @@ function draw(device) {
   fftChart.options.scales.y.type = logY ? "logarithmic" : "linear";
   GraphView.axes(rawChart, timeLabel, rawY);
   GraphView.axes(fftChart, fftX, fftLabel);
-  GraphView.axes(rmsChart, "Time (s)", rawY === "값" ? "AC RMS" : `AC RMS (${rawY})`);
   rawChart.update();
   fftChart.update();
-  rmsChart.update();
->>>>>>> 5974bf4b9dd80286627b4d5580d80b4d0dd23e08
 }
 
 async function refresh() {
@@ -238,8 +182,9 @@ async function refresh() {
   const data = await (await fetch(`/api/monitor/state${query}`)).json();
   profiles = data.profiles || profiles;
   if (!document.querySelector("#profile").options.length) fillProfiles();
-  status.className = data.connected ? "pill on" : "pill off";
-  status.textContent = data.connected
+  const linkStatus = document.querySelector("#linkStatus");
+  linkStatus.className = data.connected ? "pill on" : "pill off";
+  linkStatus.textContent = data.connected
     ? `CONNECTED ${data.messages} packets | CSV ${data.csv_saved} / 오류 ${data.csv_errors}`
     : "DISCONNECTED";
   csvInfo.textContent = data.csv_dir
@@ -264,7 +209,7 @@ async function pushView() {
   await fetch("/api/monitor/view", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ options: viewOptions(), window: rmsWindow.value, device: graphDevice }),
+    body: JSON.stringify({ options: viewOptions(), window: "전체", device: graphDevice }),
   });
   await refresh();
 }
@@ -315,7 +260,7 @@ document.querySelector("#connect").onclick = async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       host: host.value, port: Number(port.value), topic: topic.value,
-      user: user.value, password: password.value, csv_enabled: csvEnabled.checked,
+      user: "", password: "", csv_enabled: csvEnabled.checked,
     }),
   });
   const data = await response.json();
@@ -329,35 +274,16 @@ document.querySelector("#disconnect").onclick = async () => {
 document.querySelector("#analysis").addEventListener("change", () => {
   if (ready) pushView().catch((error) => alert(error.message));
 });
-document.querySelector("#rmsWindow").onchange = () => {
-  if (ready) pushView().catch((error) => alert(error.message));
-};
 document.querySelector("#resetZoom").onclick = () => {
   loosen(rawChart);
   loosen(fftChart);
-  loosen(rmsChart);
   rawChart.update();
   fftChart.update();
-  rmsChart.update();
 };
 document.querySelector("#start").onclick = () => command("start");
 document.querySelector("#stop").onclick = () => command("stop");
 document.querySelector("#apply").onclick = () => command("apply");
 document.querySelector("#query").onclick = () => command("query");
-<<<<<<< HEAD
-document.querySelector("#device").onchange = () => {
-  graphDevice = device.value;
-  resetGraphZoom(rawChart);
-  resetGraphZoom(fftChart);
-  refresh();
-};
-document.querySelector("#resetZoom").onclick = () => {
-  resetGraphZoom(rawChart);
-  resetGraphZoom(fftChart);
-};
-document.querySelector("#fftLogX").onchange = () => { resetGraphZoom(fftChart); refresh(); };
-document.querySelector("#fftLogY").onchange = () => { resetGraphZoom(fftChart); refresh(); };
-=======
 document.querySelector("#device").onchange = () => { graphDevice = device.value; refresh(); };
 
 async function loadDefaults() {
@@ -374,5 +300,4 @@ loadDefaults()
   .then(() => pushView())
   .catch(() => {})
   .then(() => { ready = true; });
->>>>>>> 5974bf4b9dd80286627b4d5580d80b4d0dd23e08
 setInterval(refresh, 1000);

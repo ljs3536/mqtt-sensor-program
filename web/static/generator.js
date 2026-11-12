@@ -19,25 +19,6 @@ sensorBox.innerHTML = sensors.map((name) => `
     <label>Loss%<input class="loss" value="0" style="width:60px"></label>
   </div>`).join("");
 
-<<<<<<< HEAD
-function chart(id) {
-  return new Chart(document.getElementById(id), {
-    type: "line",
-    data: { datasets: [] },
-    options: {
-      animation: false,
-      responsive: true,
-      maintainAspectRatio: false,
-      parsing: false,
-      plugins: { legend: { position: "top" } },
-      scales: {
-        x: { type: "linear", title: { display: true, text: "" } },
-        y: { type: "linear" },
-      },
-      elements: { point: { radius: 0 }, line: { borderWidth: 1 } },
-    },
-  });
-=======
 function filterMarkup(items) {
   return items.map(([name, freq, extra]) => `
     <div class="row" data-filter="${name}">
@@ -47,7 +28,6 @@ function filterMarkup(items) {
       <label>값<input class="freq" value="${freq}" style="width:80px"></label>
       <label>차수/폭<input class="extra" value="${extra}" style="width:70px"></label>
     </div>`).join("");
->>>>>>> 5974bf4b9dd80286627b4d5580d80b4d0dd23e08
 }
 document.querySelector("#piezoFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 3000, 4], ["Notch", 975, 20]]);
 document.querySelector("#adxlFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 1000, 4], ["Notch", 975, 20]]);
@@ -68,18 +48,9 @@ function rememberFile(input) {
 document.querySelectorAll("input.file, #adxlX, #adxlY, #adxlZ").forEach(rememberFile);
 const rawChart = chart("raw");
 const fftChart = chart("fft");
-const trendChart = chart("trend");
-<<<<<<< HEAD
-attachGraphZoom(rawChart);
-attachGraphZoom(fftChart);
-attachGraphZoom(trendChart);
-trendChart.options.plugins.title = { display: true, text: "저장 데이터 g RMS" };
-let savedFileItems = [];
-=======
 GraphView.axes(rawChart, "Time (ms)", "값");
 GraphView.axes(fftChart, "Frequency (kHz)", "크기");
-GraphView.axes(trendChart, "Packet", "AC RMS");
-trendChart.options.plugins.title = { display: true, text: "저장 데이터 AC RMS" };
+GraphView.bindAxisBar({ raw: rawChart, fft: fftChart });
 
 function num(value, fallback) {
   const number = Number(value);
@@ -205,35 +176,22 @@ function draw(preview) {
   rawChart.update();
   fftChart.update();
 }
->>>>>>> 5974bf4b9dd80286627b4d5580d80b4d0dd23e08
 
 function chosenSavedFiles() {
   return [...document.querySelectorAll("#savedFiles input:checked")].map((input) => input.value);
 }
 
-function savedColor(sensor) {
-  const axis = String(sensor).includes("-") ? sensor.split("-").pop() : sensor;
-  return colors[axis] || colors[sensor] || "#444";
+function openGraph() {
+  const panel = document.querySelector("#graphWindow");
+  panel.hidden = false;
+  requestAnimationFrame(() => {
+    rawChart.resize();
+    fftChart.resize();
+    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
 }
 
-async function drawSaved() {
-  const session = savedSession.value;
-  const files = chosenSavedFiles();
-  if (!session || !files.length) {
-    trendChart.data.datasets = [];
-    trendChart.update();
-    return;
-  }
-  const query = `session=${encodeURIComponent(session)}&files=${encodeURIComponent(files.join(","))}&window=${encodeURIComponent(rmsWindow.value)}`;
-  const trend = await (await fetch(`/api/archive/trend?${query}`)).json();
-  trendChart.data.datasets = (trend.series || []).map((item) => ({
-    label: `${item.device} ${item.sensor} (${item.unit})`,
-    borderColor: savedColor(item.sensor),
-    data: item.packet.map((x, i) => ({ x, y: item.rms[i] })),
-  }));
-  GraphView.axes(trendChart, "Packet", trend.series && trend.series[0] ? `AC RMS (${trend.series[0].unit || ""})` : "AC RMS");
-  trendChart.update();
-}
+document.querySelector("#openGraph").onclick = openGraph;
 
 function enableSensor(name) {
   const box = document.querySelector(`[data-sensor="${name}"] .enabled`);
@@ -257,6 +215,7 @@ async function uploadAdxlCsv() {
   document.querySelector("#sensor").value = "ADXL";
   enableSensor("ADXL");
   showPanels();
+  openGraph();
   await move(1);
 }
 
@@ -277,7 +236,9 @@ async function upload(sensor, file) {
   const data = await response.json();
   if (!response.ok) throw new Error(data.detail || "업로드 실패");
   document.querySelector("#sensor").value = sensor;
+  enableSensor(sensor);
   showPanels();
+  openGraph();
   await move(1);
 }
 
@@ -339,10 +300,8 @@ document.querySelector("#testBroker").onclick = async () => {
 document.querySelector("#resetZoom").onclick = () => {
   loosen(rawChart);
   loosen(fftChart);
-  loosen(trendChart);
   rawChart.update();
   fftChart.update();
-  trendChart.update();
 };
 
 async function loadSavedSessions() {
@@ -373,7 +332,6 @@ async function loadSavedDevices() {
     <label><input type="checkbox" value="${item.name}" ${(useDefault && item.device === current) || checked.has(item.name) ? "checked" : ""}>
       ${item.device} / ${item.sensor}</label>
   `).join("");
-  await drawSaved();
 }
 
 document.querySelector("#savedSession").onchange = loadSavedDevices;
@@ -382,10 +340,7 @@ document.querySelector("#savedDevice").onchange = () => {
     const item = savedFileItems.find((file) => file.name === input.value);
     input.checked = item && item.device === savedDevice.value;
   });
-  drawSaved();
 };
-document.querySelector("#savedFiles").onchange = drawSaved;
-document.querySelector("#rmsWindow").onchange = drawSaved;
 document.querySelector("#reloadSaved").onclick = loadSavedSessions;
 document.querySelector("#loadSaved").onclick = async () => {
   const response = await fetch("/api/generator/load-saved", {
@@ -405,8 +360,8 @@ document.querySelector("#loadSaved").onclick = async () => {
   document.querySelector("#sensor").value = savedSensor.value;
   enableSensor(savedSensor.value);
   showPanels();
+  openGraph();
   await move(1);
-  drawSaved();
 };
 
 async function loadDefaults() {

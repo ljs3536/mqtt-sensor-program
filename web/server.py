@@ -407,18 +407,23 @@ def _window_count(value, length):
     return max(1, min(length, count)) if length else 0
 
 
-def _rms_curve(values, window_n):
+def _sliding_ac_rms(values, window_n):
+    """각 창의 AC RMS = √mean((값−창 평균)²). 창이 전체면 패킷 표준편차 한 줄이다."""
     data = np.asarray(values, dtype=np.float64)
-    if data.size == 0:
+    count_all = data.size
+    if count_all == 0:
         return data
-    count = _window_count(window_n, data.size)
-    if count >= data.size:
-        return np.full(data.size, float(np.sqrt(np.mean(np.square(data)))))
-    energy = np.cumsum(np.square(data))
-    energy = np.concatenate(([0.0], energy))
-    window_sum = energy[count:] - energy[:-count]
-    rms = np.sqrt(window_sum / count)
-    curve = np.empty(data.size, dtype=np.float64)
+    count = _window_count(window_n, count_all)
+    if count >= count_all:
+        return np.full(count_all, float(np.std(data)))
+    sum_value = np.concatenate(([0.0], np.cumsum(data)))
+    sum_square = np.concatenate(([0.0], np.cumsum(np.square(data))))
+    window_sum = sum_value[count:] - sum_value[:-count]
+    window_square = sum_square[count:] - sum_square[:-count]
+    mean = window_sum / count
+    variance = np.maximum(window_square / count - np.square(mean), 0.0)
+    rms = np.sqrt(variance)
+    curve = np.empty(count_all, dtype=np.float64)
     start = (count - 1) // 2
     curve[:start] = rms[0]
     curve[start:start + rms.size] = rms
@@ -602,7 +607,7 @@ class MonitorService:
         self.window = "전체"
         self.csv = CsvWriter()
         self.view_options = None
-        self.host = "192.168.1.62"
+        self.host = "127.0.0.1"
         self.port = 1883
         self.topic = "V/#,D/#"
 
@@ -704,19 +709,19 @@ class MonitorService:
             }
         y = np.asarray(shown["y"], dtype=np.float64)
         t = np.asarray(shown["t"], dtype=np.float64)
-        # y는 이미 g 또는 mV로 환산된 파형. AC RMS는 그 평균을 뺀 구간의 √평균(제곱).
-        ac = y - float(np.mean(y)) if y.size else y
-        rms = _rms_curve(ac, window)
-        # 전체 AC RMS = 표준편차. FFT 한 칸의 g RMS와 다르다.
+        # 표시 중인 파형과 같은 단위. 창마다 그 창의 평균을 뺀 AC RMS다.
+        rms = _sliding_ac_rms(y, window)
         full = float(np.std(y)) if y.size else 0.0
-        index = _envelope_index(y)
+        time_index = _envelope_index(y)
+        rms_index = _envelope_index(rms)
         fft_x, fft_y = _pack_pair(shown["fft_f"], shown["fft_y"])
         return {
             "kind": "waveform",
             "axis": record["axis"],
-            "t": _take(t, index),
-            "y": _take(y, index),
-            "rms": _take(rms, index),
+            "t": _take(t, time_index),
+            "y": _take(y, time_index),
+            "rms_t": _take(t, rms_index),
+            "rms": _take(rms, rms_index),
             "fft_f": fft_x,
             "fft_y": fft_y,
             "rms_value": round(full, 6),
@@ -752,14 +757,15 @@ class MonitorService:
         if user:
             client.username_pw_set(user, password)
         client.on_message = self._on_message
+        client.on_disconnect = self._on_disconnect
         client.connect(host, int(port), keepalive=30)
+        client.loop_start()
         topics = [item.strip() for item in str(topic).replace(";", ",").split(",") if item.strip()]
         if "S/#" not in topics:
             topics.append("S/#")
         client.subscribe([(item, 0) for item in topics])
         self.csv.enabled = bool(csv_enabled)
         folder = self.csv.start_session() if csv_enabled else None
-        client.loop_start()
         self.client = client
         self.connected = True
         self.mode = "MQTT"
@@ -767,6 +773,14 @@ class MonitorService:
         self.log(f"MQTT 연결 {host}:{port} 구독={', '.join(topics)}")
         if folder:
             self.log(f"CSV 저장 시작 {folder}")
+
+    def _on_disconnect(self, client, _userdata, *args):
+        if client is not self.client:
+            return
+        reason = args[0] if args else ""
+        self.connected = False
+        self.mode = ""
+        self.log(f"MQTT 연결 끊김 {reason}")
 
     def disconnect(self):
         if self.client is not None:
@@ -872,7 +886,12 @@ def _row_series(row, window):
     display = samples * scale
     centered = display - float(np.mean(display)) if display.size else display
     count = _window_count(window, centered.size)
-    used = centered[:count] if count else centered
+    if count >= centered.size:
+        used = centered
+    else:
+        offset = (centered.size - count) // 2
+        used = centered[offset:offset + count]
+    used = used - float(np.mean(used)) if used.size else used
     rms = float(np.sqrt(np.mean(np.square(used)))) if used.size else 0.0
     sensor_kind = "ADXL" if physical else "PIEZO"
     default_fs = 3200.0 if physical else 25600.0
@@ -890,7 +909,7 @@ def _row_series(row, window):
         "x": x,
         "y": display,
         "rms": rms,
-        "rms_curve": _rms_curve(centered, window) if kind == "waveform" else None,
+        "rms_curve": _sliding_ac_rms(display, window) if kind == "waveform" else None,
         "fs": fs,
         "n": int(display.size),
         "window": int(count),

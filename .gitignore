@@ -1,5 +1,6 @@
 .venv/
 data_csv/
+web/uploads/
 __pycache__/
 *.pyc
 build/

@@ -30,15 +30,41 @@ const GraphView = (() => {
     return {
       type: "linear",
       title: title(text),
-      ticks: { color: "#3e5164", font: { size: 11, family: font }, maxTicksLimit: 8 },
-      grid: { color: "rgba(30, 51, 72, 0.1)" },
+      ticks: { color: "#3e5164", font: { size: 11, family: font }, maxTicksLimit: 14, autoSkip: true },
+      grid: { color: "rgba(30, 51, 72, 0.16)", lineWidth: 1 },
       border: { color: "#7f93a8" },
     };
   }
 
+  const midGrid = {
+    id: "midGrid",
+    afterDraw(plot) {
+      const area = plot.chartArea;
+      const scale = plot.scales.x;
+      if (!area || !scale || !scale.ticks || scale.ticks.length < 2) return;
+      const ctx = plot.ctx;
+      ctx.save();
+      ctx.beginPath();
+      ctx.setLineDash([3, 4]);
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = "rgba(31, 106, 165, 0.45)";
+      for (let i = 0; i < scale.ticks.length - 1; i += 1) {
+        const left = scale.getPixelForValue(scale.ticks[i].value);
+        const right = scale.getPixelForValue(scale.ticks[i + 1].value);
+        if (!Number.isFinite(left) || !Number.isFinite(right)) continue;
+        const mid = (left + right) / 2;
+        ctx.moveTo(mid, area.top);
+        ctx.lineTo(mid, area.bottom);
+      }
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
+
   function chart(id) {
     const instance = new Chart(document.getElementById(id), {
       type: "line",
+      plugins: [midGrid],
       data: { datasets: [] },
       options: {
         animation: false,
@@ -52,16 +78,7 @@ const GraphView = (() => {
           tooltip: { enabled: true },
           zoom: {
             zoom: { wheel: { enabled: false }, pinch: { enabled: true }, mode: "xy" },
-            pan: {
-              enabled: true,
-              mode: "xy",
-              onPanStart(context) {
-                const plot = context.chart;
-                if (plot.$axisLock) return false;
-                const event = context.event && (context.event.srcEvent || context.event);
-                return !(event && event.button != null && event.button !== 0);
-              },
-            },
+            pan: { enabled: false },
           },
         },
         scales: { x: scale("X"), y: scale("Y") },
@@ -105,10 +122,13 @@ const GraphView = (() => {
   }
 
   function applyZoom(plot, axes, cursors, factor) {
+    let active = axes;
+    if (plot.$lockX) active = active.replace("x", "");
+    if (plot.$lockY) active = active.replace("y", "");
     const next = {};
     for (const axis of ["x", "y"]) {
       const current = plot.scales[axis];
-      next[axis] = axes.includes(axis)
+      next[axis] = active.includes(axis)
         ? span(current, cursors[axis], factor)
         : current && { min: current.min, max: current.max };
     }
@@ -158,12 +178,59 @@ const GraphView = (() => {
     const held = new Set();
     let wheeled = false;
     canvas.style.touchAction = "none";
+    canvas.style.cursor = "grab";
     canvas.addEventListener("pointerdown", (event) => {
       if (event.button !== 0 && event.button !== 2) return;
       held.add(event.button);
       wheeled = false;
       plot.$axisLock = false;
       closeMenu();
+      if (event.button === 0) {
+        event.preventDefault();
+        canvas.setPointerCapture(event.pointerId);
+        canvas.style.cursor = "grabbing";
+        plot.$drag = {
+          id: event.pointerId,
+          x: event.clientX,
+          y: event.clientY,
+          xMin: plot.scales.x.min,
+          xMax: plot.scales.x.max,
+          yMin: plot.scales.y.min,
+          yMax: plot.scales.y.max,
+        };
+      }
+    }, true);
+    window.addEventListener("pointermove", (event) => {
+      const drag = plot.$drag;
+      if (!drag || event.pointerId !== drag.id || plot.$axisLock) return;
+      const area = plot.chartArea;
+      if (!area || !area.width || !area.height) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      if (dx === 0 && dy === 0) return;
+      if (!plot.$lockX && Number.isFinite(drag.xMin) && Number.isFinite(drag.xMax)) {
+        const shift = dx * (drag.xMax - drag.xMin) / area.width;
+        plot.options.scales.x.min = drag.xMin - shift;
+        plot.options.scales.x.max = drag.xMax - shift;
+      }
+      if (!plot.$lockY && Number.isFinite(drag.yMin) && Number.isFinite(drag.yMax)) {
+        const shift = dy * (drag.yMax - drag.yMin) / area.height;
+        plot.options.scales.y.min = drag.yMin + shift;
+        plot.options.scales.y.max = drag.yMax + shift;
+      }
+      plot.update("none");
+    });
+    window.addEventListener("pointerup", (event) => {
+      if (plot.$drag && plot.$drag.id === event.pointerId) {
+        plot.$drag = null;
+        canvas.style.cursor = "grab";
+      }
+    });
+    window.addEventListener("pointercancel", (event) => {
+      if (plot.$drag && plot.$drag.id === event.pointerId) {
+        plot.$drag = null;
+        canvas.style.cursor = "grab";
+      }
     });
     window.addEventListener("pointerup", (event) => {
       if (!held.has(event.button)) return;
@@ -202,5 +269,80 @@ const GraphView = (() => {
     if (event.key === "Escape") closeMenu();
   });
 
-  return { chart, axes, xText, yText };
+  function hold(plot, axis) {
+    const scale = plot.scales[axis];
+    if (!scale || !Number.isFinite(scale.min) || !Number.isFinite(scale.max)) return;
+    plot.options.scales[axis].min = scale.min;
+    plot.options.scales[axis].max = scale.max;
+  }
+
+  function setLock(plot, axis, locked) {
+    if (axis === "x") plot.$lockX = locked;
+    else plot.$lockY = locked;
+    if (locked) hold(plot, axis);
+    plot.update("none");
+  }
+
+  function applyRange(plot, axis, min, max) {
+    const low = Number(min);
+    const high = Number(max);
+    if (!Number.isFinite(low) || !Number.isFinite(high) || low === high) {
+      throw new Error("최소와 최대를 서로 다른 숫자로 입력하세요");
+    }
+    const lower = Math.min(low, high);
+    const upper = Math.max(low, high);
+    plot.options.scales[axis].min = lower;
+    plot.options.scales[axis].max = upper;
+    if (axis === "x") plot.$lockX = true;
+    else plot.$lockY = true;
+    plot.update("none");
+  }
+
+  function release(plot, axis) {
+    delete plot.options.scales[axis].min;
+    delete plot.options.scales[axis].max;
+    if (axis === "x") plot.$lockX = false;
+    else plot.$lockY = false;
+    plot.update();
+  }
+
+  function bindAxisBar(charts) {
+    const targetBox = document.querySelector("#axisTarget");
+    const lockX = document.querySelector("#lockX");
+    const lockY = document.querySelector("#lockY");
+    if (!targetBox || !lockX || !lockY) return;
+    const chosen = () => charts[targetBox.value] || Object.values(charts)[0];
+    const sync = () => {
+      const plot = chosen();
+      if (!plot) return;
+      lockX.checked = !!plot.$lockX;
+      lockY.checked = !!plot.$lockY;
+      xMin.value = Number.isFinite(plot.options.scales.x.min) ? plot.options.scales.x.min : "";
+      xMax.value = Number.isFinite(plot.options.scales.x.max) ? plot.options.scales.x.max : "";
+      yMin.value = Number.isFinite(plot.options.scales.y.min) ? plot.options.scales.y.min : "";
+      yMax.value = Number.isFinite(plot.options.scales.y.max) ? plot.options.scales.y.max : "";
+    };
+    targetBox.onchange = sync;
+    lockX.onchange = () => { setLock(chosen(), "x", lockX.checked); sync(); };
+    lockY.onchange = () => { setLock(chosen(), "y", lockY.checked); sync(); };
+    document.querySelector("#applyAxis").onclick = () => {
+      const plot = chosen();
+      try {
+        if (String(xMin.value).trim() && String(xMax.value).trim()) applyRange(plot, "x", xMin.value, xMax.value);
+        if (String(yMin.value).trim() && String(yMax.value).trim()) applyRange(plot, "y", yMin.value, yMax.value);
+      } catch (error) {
+        alert(error.message);
+      }
+      sync();
+    };
+    document.querySelector("#autoAxis").onclick = () => {
+      const plot = chosen();
+      release(plot, "x");
+      release(plot, "y");
+      sync();
+    };
+    sync();
+  }
+
+  return { chart, axes, xText, yText, bindAxisBar };
 })();
