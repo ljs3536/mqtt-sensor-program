@@ -15,8 +15,8 @@ from __future__ import annotations
 
 import numpy as np
 
-import mqtt_wave_replay_generator_v032_ultrasonic_graph as gen
-import new_piezo_adc_V031_graph_button_alignment as mon
+from web import core as gen
+from web import core as mon
 
 
 PIEZO_UNITS = ("Count", "mV", "g RMS", "mm/s RMS")
@@ -460,6 +460,41 @@ def generator_curves(sensor, packet, packets, index, options):
     curves["fft_log_x"] = _flag(options.get("fft_log_x")) and sensor != "초음파"
     curves["fft_log_y"] = _flag(options.get("fft_log_y")) and sensor != "초음파"
     return curves
+
+
+def monitor_adxl_set(axis_samples, options):
+    """X/Y/Z를 한 번에 환산해 RAW·FFT 눈금을 공유한다.
+
+    축마다 따로 자동 단위를 고르면 Z(중력, 약 1g)는 g, X/Y는 mg가 되어
+    같은 그래프에서 작은 축이 바닥에 붙는다.
+    """
+    options = resolve_options(options)
+    packet = {}
+    for axis, (samples, fs) in axis_samples.items():
+        if axis not in ("X", "Y", "Z"):
+            continue
+        packet[axis] = {"sensorData": _counts_to_hex(samples), "samplerate": float(fs or 0)}
+    if not packet:
+        return {}
+    options["adxl"]["axes"] = {axis: axis in packet for axis in ("X", "Y", "Z")}
+    curves = _adxl_curves(packet, {}, options)
+    shown = {}
+    for axis in packet:
+        wave = curves["series"][axis]
+        spectrum = curves["fft"][axis]
+        shown[axis] = {
+            "t": np.asarray(wave["t"], dtype=np.float64) / 1000.0,
+            "y": np.asarray(wave["y"], dtype=np.float64),
+            "fft_f": np.asarray(spectrum["f"], dtype=np.float64) * 1000.0,
+            "fft_y": np.asarray(spectrum["y"], dtype=np.float64),
+            "unit": curves["y_label"],
+            "fft_unit": curves["fft_label"],
+            "formula": curves["formula"],
+            "info": curves["info"],
+            "fft_log_x": _flag(options.get("fft_log_x")),
+            "fft_log_y": _flag(options.get("fft_log_y")),
+        }
+    return shown
 
 
 def monitor_curves(samples, fs, sensor_kind, options, axis="X"):

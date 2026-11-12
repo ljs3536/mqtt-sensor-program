@@ -109,11 +109,20 @@ function selectedList() {
   return [...selectedMacs];
 }
 
-function renderMacs(devices) {
+function commandTargets() {
+  const checked = [...selectedMacs];
+  const typed = manualMac.value.trim();
+  if (typed && !checked.includes(typed)) checked.push(typed);
+  return checked;
+}
+
+function renderMacs(devices, arrivals) {
   const box = document.querySelector("#macs");
-  box.innerHTML = devices.map((mac) => `
-    <label><input type="checkbox" value="${mac}" ${selectedMacs.has(mac) ? "checked" : ""}> ${mac}</label>
-  `).join("");
+  box.innerHTML = (devices || []).map((mac) => {
+    const stat = (arrivals || {})[mac];
+    const stamp = stat && stat.count ? ` ${stat.last} (${stat.count})` : "";
+    return `<label><input type="checkbox" value="${mac}" ${selectedMacs.has(mac) ? "checked" : ""}> ${mac}<span class="stats">${stamp}</span></label>`;
+  }).join("");
   document.querySelector("#macCount").textContent = `${selectedMacs.size}개 선택`;
 }
 
@@ -191,7 +200,7 @@ async function refresh() {
     ? `저장 폴더: ${data.csv_dir}`
     : "CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다. HEX와 decoded CSV를 저장 폴더에 나눕니다.";
   log.textContent = (data.logs || []).join("\n");
-  renderMacs(data.devices || []);
+  renderMacs(data.devices || [], data.arrivals || {});
   const box = document.querySelector("#device");
   const devices = data.graph_devices || Object.keys(data.latest || {});
   const previous = box.value || graphDevice;
@@ -215,12 +224,25 @@ async function pushView() {
 }
 
 async function command(action) {
+  const macs = commandTargets();
+  if (!macs.length) {
+    alert("체크된 MAC이 없고, 직접 입력한 MAC도 없습니다.");
+    return;
+  }
+  const names = {
+    apply: "설정 적용",
+    start: "START",
+    stop: "STOP",
+    query: "현재 설정 조회",
+  };
+  const label = names[action] || action;
+  if (!confirm(`${macs.join(", ")} 주소로 ${label}하겠습니까?`)) return;
   const response = await fetch("/api/monitor/command", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       action,
-      macs: selectedList(),
+      macs,
       sensor: sensor.value,
       period: Number(period.value),
       profile: profile.value,

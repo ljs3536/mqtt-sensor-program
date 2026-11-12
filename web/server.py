@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import csv
-import importlib
 import json
 import queue
 import random
@@ -26,9 +25,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from web import analysis
-
-gen = importlib.import_module("mqtt_wave_replay_generator_v032_ultrasonic_graph")
-mon = importlib.import_module("new_piezo_adc_V031_graph_button_alignment")
+from web import core as gen
+from web import core as mon
 
 import paho.mqtt.client as mqtt
 
@@ -601,6 +599,7 @@ class MonitorService:
         self.messages = 0
         self.records = {}
         self.devices = []
+        self.device_stats = {}
         self.configs = {}
         self.connected = False
         self.mode = ""
@@ -651,7 +650,11 @@ class MonitorService:
             self.log(f"디코드 실패 {device}/{kind}: {exc}")
             return
         record.update({"device": device or topic, "axis": axis, "sensor": kind, "received_at": datetime.now().isoformat(timespec="milliseconds")})
-        self.records.setdefault(record["device"], {})[axis] = record
+        device_id = record["device"]
+        self.records.setdefault(device_id, {})[axis] = record
+        stat = self.device_stats.setdefault(device_id, {"count": 0, "last": ""})
+        stat["count"] += 1
+        stat["last"] = datetime.now().strftime("%H:%M:%S")
         self._save_csv(obj, kind, axis, sensor_hex, samples if kind != "ULTRASONIC" else record["y"], meta if kind == "ULTRASONIC" else None)
         rms = ""
         if record["kind"] == "waveform" and record["physical"]:
@@ -739,6 +742,50 @@ class MonitorService:
             "received_at": record["received_at"],
         }
 
+    def _pack_shown(self, record, shown, window):
+        y = np.asarray(shown["y"], dtype=np.float64)
+        t = np.asarray(shown["t"], dtype=np.float64)
+        rms = _sliding_ac_rms(y, window)
+        full = float(np.std(y)) if y.size else 0.0
+        time_index = _envelope_index(y)
+        fft_x, fft_y = _pack_pair(shown["fft_f"], shown["fft_y"])
+        return {
+            "kind": "waveform",
+            "axis": record["axis"],
+            "t": _take(t, time_index),
+            "y": _take(y, time_index),
+            "fft_f": fft_x,
+            "fft_y": fft_y,
+            "rms_value": round(full, 6),
+            "n": int(y.size),
+            "window": _window_count(window, y.size),
+            "fs": record["fs"],
+            "unit": shown["unit"],
+            "fft_unit": shown["fft_unit"],
+            "x_label": "Time (s)",
+            "fft_x_label": "Frequency (Hz)",
+            "formula": shown["formula"],
+            "info": shown["info"],
+            "fft_log_x": shown.get("fft_log_x"),
+            "fft_log_y": shown.get("fft_log_y"),
+            "received_at": record["received_at"],
+        }
+
+    def _device_views(self, snapshot, window, options):
+        adxl = {
+            axis: (record["samples"], record["fs"])
+            for axis, record in snapshot.items()
+            if record.get("kind") == "waveform" and record.get("physical") and axis in ("X", "Y", "Z")
+        }
+        shared = analysis.monitor_adxl_set(adxl, options) if adxl else {}
+        views = {}
+        for axis, record in snapshot.items():
+            if axis in shared:
+                views[axis] = self._pack_shown(record, shared[axis], window)
+            else:
+                views[axis] = self._view(record, window, options)
+        return views
+
     def _on_message(self, _client, _userdata, msg):
         with self.lock:
             self.messages += 1
@@ -825,6 +872,7 @@ class MonitorService:
                 "messages": self.messages,
                 "logs": list(self.logs),
                 "devices": list(self.devices),
+                "arrivals": {key: dict(value) for key, value in self.device_stats.items()},
                 "graph_devices": names,
                 "configs": self.configs,
                 "window": window,
@@ -834,91 +882,8 @@ class MonitorService:
                 "csv_errors": self.csv.errors,
                 "profiles": {"ADXL": list(mon.ADXL_PROFILE_LABELS), "PIEZO": list(mon.PIEZO_PROFILE_LABELS)},
             }
-        payload["latest"] = {
-            target: {axis: self._view(record, window, options) for axis, record in snapshot.items()}
-        } if target else {}
+        payload["latest"] = {target: self._device_views(snapshot, window, options)} if target else {}
         return payload
-
-
-def _session_path(name):
-    path = (DATA_CSV / name).resolve()
-    if path.parent != DATA_CSV.resolve() or not path.is_dir():
-        raise HTTPException(400, "저장 세션을 찾을 수 없습니다")
-    return path
-
-
-def _csv_file(session, filename):
-    path = (_session_path(session) / filename).resolve()
-    if path.parent != _session_path(session) or not path.is_file() or path.suffix.lower() != ".csv":
-        raise HTTPException(400, "CSV 파일을 찾을 수 없습니다")
-    return path
-
-
-def _decode_numbers(text):
-    if not text:
-        return np.array([], dtype=np.float64)
-    return np.fromstring(text, sep=",", dtype=np.float64)
-
-
-def _saved_parts(filename):
-    for suffix, role in (("_decoded_samples.csv", "decoded"), ("_sensorData_hex.csv", "hex")):
-        if filename.endswith(suffix):
-            stem = filename[: -len(suffix)]
-            for sensor in ("ADXL-X", "ADXL-Y", "ADXL-Z", "ULTRASONIC", "PIEZO"):
-                token = f"_{sensor}"
-                if stem.endswith(token):
-                    return stem[: -len(token)], sensor, role
-    return "", "", ""
-
-
-def _iter_decoded(path):
-    with path.open(encoding="utf-8-sig", newline="") as handle:
-        reader = csv.DictReader(handle)
-        for row in reader:
-            yield row
-
-
-def _row_series(row, window):
-    samples = _decode_numbers(row.get("decoded_samples") or "")
-    sensor = row.get("sensor_type") or ""
-    physical = str(sensor).startswith("ADXL")
-    scale = gen.read_mems_g_per_lsb() if physical else 1.0
-    display = samples * scale
-    centered = display - float(np.mean(display)) if display.size else display
-    count = _window_count(window, centered.size)
-    if count >= centered.size:
-        used = centered
-    else:
-        offset = (centered.size - count) // 2
-        used = centered[offset:offset + count]
-    used = used - float(np.mean(used)) if used.size else used
-    rms = float(np.sqrt(np.mean(np.square(used)))) if used.size else 0.0
-    sensor_kind = "ADXL" if physical else "PIEZO"
-    default_fs = 3200.0 if physical else 25600.0
-    fs = float(mon.normalize_sample_rate(sensor_kind, row.get("samplerate"), default_fs))
-    if row.get("freq_start_kHz"):
-        start = float(row.get("freq_start_kHz") or 0)
-        end = float(row.get("freq_end_kHz") or start)
-        x = np.linspace(start, end, display.size) if display.size else np.array([])
-        kind = "spectrum"
-    else:
-        x = np.arange(display.size, dtype=np.float64) / fs if fs > 0 else np.arange(display.size)
-        kind = "waveform"
-    return {
-        "kind": kind,
-        "x": x,
-        "y": display,
-        "rms": rms,
-        "rms_curve": _sliding_ac_rms(display, window) if kind == "waveform" else None,
-        "fs": fs,
-        "n": int(display.size),
-        "window": int(count),
-        "unit": "g" if physical else "Count",
-        "received_at": row.get("received_at") or "",
-        "packet_no": row.get("packet_no") or "",
-        "axis": row.get("axis") or sensor,
-    }
-
 
 replay = ReplayService()
 monitor = MonitorService()
@@ -1119,133 +1084,3 @@ async def save_mems_correction(body: dict):
     return {"correction": saved}
 
 
-@app.get("/api/archive/sessions")
-def archive_sessions():
-    sessions = []
-    if DATA_CSV.exists():
-        for path in sorted((item for item in DATA_CSV.iterdir() if item.is_dir()), reverse=True):
-            files = [item.name for item in path.glob("*.csv")]
-            sessions.append({"name": path.name, "files": len(files)})
-    return {"sessions": sessions}
-
-
-@app.get("/api/archive/files")
-def archive_files(session: str):
-    folder = _session_path(session)
-    files = []
-    for path in sorted(folder.glob("*.csv")):
-        device, sensor, role = _saved_parts(path.name)
-        if not sensor:
-            continue
-        files.append({"name": path.name, "device": device, "sensor": sensor, "role": role})
-    devices = sorted({item["device"] for item in files})
-    return {"session": session, "files": files, "devices": devices}
-
-
-def _selected_files(session, names):
-    selected = []
-    for name in names:
-        device, sensor, role = _saved_parts(name)
-        if role != "decoded":
-            raise HTTPException(400, "decoded CSV만 그래프로 엽니다")
-        selected.append((_csv_file(session, name), device, sensor, name))
-    if not selected:
-        raise HTTPException(400, "CSV를 선택하세요")
-    return selected
-
-
-@app.get("/api/archive/trend")
-def archive_trend(session: str, files: str, window: str = "전체"):
-    series = []
-    for path, device, sensor, name in _selected_files(session, [item for item in files.split(",") if item]):
-        packets = []
-        times = []
-        rms = []
-        for row in _iter_decoded(path):
-            item = _row_series(row, window)
-            packets.append(int(item["packet_no"] or len(packets) + 1))
-            times.append(item["received_at"])
-            rms.append(round(item["rms"], 6))
-        series.append({
-            "name": name,
-            "device": device,
-            "sensor": sensor,
-            "unit": "g" if sensor.startswith("ADXL") else "Count",
-            "packet": packets,
-            "time": times,
-            "rms": rms,
-        })
-    return {"series": series}
-
-
-@app.get("/api/archive/packet")
-def archive_packet(session: str, files: str, index: int = 1, window: str = "전체"):
-    series = []
-    count = 0
-    for path, device, sensor, name in _selected_files(session, [item for item in files.split(",") if item]):
-        chosen = None
-        total = 0
-        for row in _iter_decoded(path):
-            total += 1
-            if total == index:
-                chosen = _row_series(row, window)
-        count = max(count, total)
-        if chosen is None:
-            continue
-        picked = _envelope_index(chosen["y"])
-        item = {
-            "name": name,
-            "device": device,
-            "sensor": sensor,
-            "kind": chosen["kind"],
-            "x": _take(chosen["x"], picked),
-            "y": _take(chosen["y"], picked),
-            "rms_value": round(chosen["rms"], 6),
-            "n": chosen["n"],
-            "window": chosen["window"],
-            "fs": chosen["fs"],
-            "unit": chosen["unit"],
-            "received_at": chosen["received_at"],
-            "packet_no": chosen["packet_no"],
-        }
-        if chosen["rms_curve"] is not None:
-            item["rms"] = _take(chosen["rms_curve"], picked)
-        series.append(item)
-    return {"index": index, "count": count, "series": series}
-
-
-@app.post("/api/generator/load-saved")
-async def generator_load_saved(body: dict):
-    session = str(body.get("session") or "")
-    device = str(body.get("device") or "")
-    sensor = str(body.get("sensor") or "")
-    folder = _session_path(session)
-    safe_device = mon.safe_filename(device)
-    try:
-        if sensor == "ADXL":
-            paths = {}
-            for axis in ("X", "Y", "Z"):
-                matches = sorted(folder.glob(f"{safe_device}_ADXL-{axis}_sensorData_hex.csv"))
-                if matches:
-                    paths[axis] = str(matches[0])
-            if not paths:
-                raise ValueError("이 세션에 ADXL HEX CSV가 없습니다")
-            count = replay.store_adxl_csv(paths)
-            preview = replay.preview("ADXL", 0)
-        elif sensor == "PIEZO":
-            matches = sorted(folder.glob(f"{safe_device}_PIEZO_sensorData_hex.csv"))
-            if not matches:
-                raise ValueError("이 세션에 PIEZO HEX CSV가 없습니다")
-            count = replay.store("PIEZO", str(matches[0]))
-            preview = replay.preview("PIEZO", 0)
-        elif sensor == "초음파":
-            matches = sorted(folder.glob(f"{safe_device}_ULTRASONIC_sensorData_hex.csv"))
-            if not matches:
-                raise ValueError("이 세션에 초음파 HEX CSV가 없습니다")
-            count = replay.store("초음파", str(matches[0]))
-            preview = replay.preview("초음파", 0)
-        else:
-            raise ValueError("센서는 ADXL, PIEZO, 초음파 중 하나여야 합니다")
-    except Exception as exc:
-        raise HTTPException(400, str(exc)) from exc
-    return {"count": count, "preview": preview}

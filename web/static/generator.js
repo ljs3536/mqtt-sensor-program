@@ -5,7 +5,6 @@ const sensors = ["PIEZO", "ADXL", "초음파"];
 const periods = { PIEZO: 320, ADXL: 2560, 초음파: 10000 };
 const topics = { PIEZO: "V/{mac}", ADXL: "V/{mac}", 초음파: "D/{mac}" };
 let ready = false;
-let savedFileItems = [];
 
 const sensorBox = document.querySelector("#sensors");
 sensorBox.innerHTML = sensors.map((name) => `
@@ -113,9 +112,8 @@ function viewOptions() {
 }
 
 function showPanels() {
-  const sensor = document.querySelector("#sensor").value;
-  piezoBox.hidden = sensor !== "PIEZO";
-  adxlBox.hidden = sensor !== "ADXL";
+  piezoBox.hidden = false;
+  adxlBox.hidden = false;
 }
 
 function pairs(xs, ys, logX, logY) {
@@ -175,10 +173,6 @@ function draw(preview) {
   loosen(fftChart);
   rawChart.update();
   fftChart.update();
-}
-
-function chosenSavedFiles() {
-  return [...document.querySelectorAll("#savedFiles input:checked")].map((input) => input.value);
 }
 
 function openGraph() {
@@ -304,66 +298,6 @@ document.querySelector("#resetZoom").onclick = () => {
   fftChart.update();
 };
 
-async function loadSavedSessions() {
-  const data = await (await fetch("/api/archive/sessions")).json();
-  const sessions = data.sessions || [];
-  savedSession.innerHTML = sessions.map((item) => `<option value="${item.name}">${item.name}</option>`).join("");
-  const empty = document.querySelector("#savedEmpty");
-  if (empty) empty.hidden = sessions.length > 0;
-  if (!savedSession.value) {
-    savedDevice.innerHTML = "";
-    document.querySelector("#savedFiles").innerHTML = "";
-    return;
-  }
-  await loadSavedDevices();
-}
-
-async function loadSavedDevices() {
-  if (!savedSession.value) return;
-  const data = await (await fetch(`/api/archive/files?session=${encodeURIComponent(savedSession.value)}`)).json();
-  const previous = savedDevice.value;
-  savedDevice.innerHTML = (data.devices || []).map((item) => `<option>${item}</option>`).join("");
-  if (previous && (data.devices || []).includes(previous)) savedDevice.value = previous;
-  savedFileItems = (data.files || []).filter((item) => item.role === "decoded");
-  const checked = new Set(chosenSavedFiles());
-  const current = savedDevice.value;
-  const useDefault = !savedFileItems.some((item) => checked.has(item.name));
-  document.querySelector("#savedFiles").innerHTML = savedFileItems.map((item) => `
-    <label><input type="checkbox" value="${item.name}" ${(useDefault && item.device === current) || checked.has(item.name) ? "checked" : ""}>
-      ${item.device} / ${item.sensor}</label>
-  `).join("");
-}
-
-document.querySelector("#savedSession").onchange = loadSavedDevices;
-document.querySelector("#savedDevice").onchange = () => {
-  document.querySelectorAll("#savedFiles input").forEach((input) => {
-    const item = savedFileItems.find((file) => file.name === input.value);
-    input.checked = item && item.device === savedDevice.value;
-  });
-};
-document.querySelector("#reloadSaved").onclick = loadSavedSessions;
-document.querySelector("#loadSaved").onclick = async () => {
-  const response = await fetch("/api/generator/load-saved", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session: savedSession.value,
-      device: savedDevice.value,
-      sensor: savedSensor.value,
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) {
-    alert(data.detail || "CSV 불러오기 실패");
-    return;
-  }
-  document.querySelector("#sensor").value = savedSensor.value;
-  enableSensor(savedSensor.value);
-  showPanels();
-  openGraph();
-  await move(1);
-};
-
 async function loadDefaults() {
   const data = await (await fetch("/api/analysis/defaults")).json();
   const adxl = data.adxl || {};
@@ -408,7 +342,6 @@ document.querySelector("#saveCorrection").onclick = () => saveJson("/api/analysi
 
 showPanels();
 loadDefaults().then(() => { ready = true; }).catch(() => { ready = true; });
-loadSavedSessions();
 
 setInterval(async () => {
   const data = await (await fetch("/api/generator/status")).json();
