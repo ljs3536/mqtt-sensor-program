@@ -1,13 +1,21 @@
 if (window.ChartZoom) Chart.register(window.ChartZoom);
 
-const colors = { PIEZO: "#d62728", X: "#1f77b4", Y: "#2ca02c", Z: "#d62728", 초음파: "#1377a6" };
+const colors = {
+  PIEZO: "#d62728",
+  X: "#1f77b4",
+  Y: "#2ca02c",
+  Z: "#d62728",
+  초음파: "#1377a6",
+};
 const sensors = ["PIEZO", "ADXL", "초음파"];
 const periods = { PIEZO: 320, ADXL: 2560, 초음파: 10000 };
 const topics = { PIEZO: "V/{mac}", ADXL: "V/{mac}", 초음파: "D/{mac}" };
 let ready = false;
 
 const sensorBox = document.querySelector("#sensors");
-sensorBox.innerHTML = sensors.map((name) => `
+sensorBox.innerHTML = sensors
+  .map(
+    (name) => `
   <div class="sensor-line" data-sensor="${name}">
     <label class="check"><input class="enabled" type="checkbox" ${name === "PIEZO" ? "checked" : ""}><span>${name}</span></label>
     <label>파일<span class="file-pick"><input class="file" type="file"><span class="file-btn">파일 선택</span><span class="file-name">선택된 파일 없음</span></span></label>
@@ -16,20 +24,34 @@ sensorBox.innerHTML = sensors.map((name) => `
     <label class="check"><input class="auto" type="checkbox" ${name !== "초음파" ? "checked" : ""}><span>자동주기</span></label>
     <label>±Jitter<input class="jitter" value="0" style="width:60px"></label>
     <label>Loss%<input class="loss" value="0" style="width:60px"></label>
-  </div>`).join("");
+  </div>`,
+  )
+  .join("");
 
 function filterMarkup(items) {
-  return items.map(([name, freq, extra]) => `
+  return items
+    .map(
+      ([name, freq, extra]) => `
     <div class="row" data-filter="${name}">
       <strong>${name}</strong>
       <label class="check"><input class="raw" type="checkbox"><span>RAW</span></label>
       <label class="check"><input class="fft" type="checkbox"><span>FFT</span></label>
       <label>값<input class="freq" value="${freq}" style="width:80px"></label>
       <label>차수/폭<input class="extra" value="${extra}" style="width:70px"></label>
-    </div>`).join("");
+    </div>`,
+    )
+    .join("");
 }
-document.querySelector("#piezoFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 3000, 4], ["Notch", 975, 20]]);
-document.querySelector("#adxlFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 1000, 4], ["Notch", 975, 20]]);
+document.querySelector("#piezoFilters").innerHTML = filterMarkup([
+  ["HPF", 10, 4],
+  ["LPF", 3000, 4],
+  ["Notch", 975, 20],
+]);
+document.querySelector("#adxlFilters").innerHTML = filterMarkup([
+  ["HPF", 10, 4],
+  ["LPF", 1000, 4],
+  ["Notch", 975, 20],
+]);
 
 function chart(id) {
   return GraphView.chart(id);
@@ -44,7 +66,9 @@ function rememberFile(input) {
   };
   input.addEventListener("change", show);
 }
-document.querySelectorAll("input.file, #adxlX, #adxlY, #adxlZ").forEach(rememberFile);
+document
+  .querySelectorAll("input.file, #adxlX, #adxlY, #adxlZ")
+  .forEach(rememberFile);
 const rawChart = chart("raw");
 const fftChart = chart("fft");
 GraphView.axes(rawChart, "Time (ms)", "값");
@@ -130,7 +154,11 @@ function pairs(xs, ys, logX, logY) {
 
 function loosen(target) {
   if (typeof target.resetZoom === "function") {
-    try { target.resetZoom(); } catch (_error) { /* zoom plugin not active yet */ }
+    try {
+      target.resetZoom();
+    } catch (_error) {
+      /* zoom plugin not active yet */
+    }
   }
 }
 
@@ -138,37 +166,59 @@ function draw(preview) {
   document.querySelector("#position").textContent =
     `${preview.sensor} ${preview.index} / ${preview.count} | ${preview.info || ""}`;
   document.querySelector("#index").value = preview.index;
-  formula.textContent = [preview.formula, preview.avg_status].filter(Boolean).join("\n");
+  formula.textContent = [preview.formula, preview.avg_status]
+    .filter(Boolean)
+    .join("\n");
   rotation.textContent = preview.rotation || "";
   const logX = !!preview.fft_log_x;
   const logY = !!preview.fft_log_y;
   if (preview.kind === "spectrum") {
-    rawChart.data.datasets = [{
-      label: "초음파",
-      borderColor: colors["초음파"],
-      data: pairs(preview.x || [], preview.y || [], false, false),
-    }];
+    rawChart.data.datasets = [
+      {
+        label: "초음파",
+        borderColor: colors["초음파"],
+        data: pairs(preview.x || [], preview.y || [], false, false),
+      },
+    ];
     fftChart.data.datasets = [];
   } else {
-    rawChart.data.datasets = Object.entries(preview.series || {}).map(([axis, series]) => ({
-      label: axis,
-      borderColor: colors[axis],
-      data: pairs(series.t, series.y, false, false),
-    }));
-    fftChart.data.datasets = Object.entries(preview.fft || {}).map(([axis, series]) => ({
-      label: axis,
-      borderColor: colors[axis],
-      data: pairs(series.f, series.y, logX, logY),
-    }));
+    rawChart.data.datasets = Object.entries(preview.series || {}).map(
+      ([axis, series]) => ({
+        label: axis,
+        borderColor: colors[axis],
+        data: pairs(series.t, series.y, false, false),
+      }),
+    );
+    fftChart.data.datasets = Object.entries(preview.fft || {}).map(
+      ([axis, series]) => ({
+        label: axis,
+        borderColor: colors[axis],
+        data: pairs(series.f, series.y, logX, logY),
+      }),
+    );
   }
-  rawChart.options.plugins.title = { display: true, text: preview.y_label || "RAW" };
-  fftChart.options.plugins.title = { display: true, text: preview.fft_label || "FFT" };
+  rawChart.options.plugins.title = {
+    display: true,
+    text: preview.y_label || "RAW",
+  };
+  fftChart.options.plugins.title = {
+    display: true,
+    text: preview.fft_label || "FFT",
+  };
   rawChart.options.scales.x.type = "linear";
   rawChart.options.scales.y.type = "linear";
   fftChart.options.scales.x.type = logX ? "logarithmic" : "linear";
   fftChart.options.scales.y.type = logY ? "logarithmic" : "linear";
-  GraphView.axes(rawChart, preview.x_label || "Time (ms)", preview.y_label || "값");
-  GraphView.axes(fftChart, preview.fft_x_label || "Frequency (kHz)", preview.fft_label || "크기");
+  GraphView.axes(
+    rawChart,
+    preview.x_label || "Time (ms)",
+    preview.y_label || "값",
+  );
+  GraphView.axes(
+    fftChart,
+    preview.fft_x_label || "Frequency (kHz)",
+    preview.fft_label || "크기",
+  );
   loosen(rawChart);
   loosen(fftChart);
   rawChart.update();
@@ -192,6 +242,15 @@ function enableSensor(name) {
   if (box) box.checked = true;
 }
 
+async function readBody(response) {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch (_error) {
+    throw new Error(text.slice(0, 180) || "서버 응답을 해석하지 못했습니다");
+  }
+}
+
 async function uploadAdxlCsv() {
   const files = { X: adxlX.files[0], Y: adxlY.files[0], Z: adxlZ.files[0] };
   if (!files.X || !files.Y || !files.Z) {
@@ -203,8 +262,11 @@ async function uploadAdxlCsv() {
   body.append("y", files.Y);
   body.append("z", files.Z);
   body.append("recover_partial", recoverPartial.checked ? "true" : "false");
-  const response = await fetch("/api/generator/upload-adxl-csv", { method: "POST", body });
-  const data = await response.json();
+  const response = await fetch("/api/generator/upload-adxl-csv", {
+    method: "POST",
+    body,
+  });
+  const data = await readBody(response);
   if (!response.ok) throw new Error(data.detail || "XYZ CSV 로드 실패");
   document.querySelector("#sensor").value = "ADXL";
   enableSensor("ADXL");
@@ -213,7 +275,8 @@ async function uploadAdxlCsv() {
   await move(1);
 }
 
-document.querySelector("#loadAdxlCsv").onclick = () => uploadAdxlCsv().catch((error) => alert(error.message));
+document.querySelector("#loadAdxlCsv").onclick = () =>
+  uploadAdxlCsv().catch((error) => alert(error.message));
 for (const id of ["adxlX", "adxlY", "adxlZ"]) {
   document.querySelector("#" + id).addEventListener("change", () => {
     if (adxlX.files[0] && adxlY.files[0] && adxlZ.files[0]) {
@@ -226,8 +289,11 @@ async function upload(sensor, file) {
   const body = new FormData();
   body.append("sensor", sensor);
   body.append("file", file);
-  const response = await fetch("/api/generator/upload", { method: "POST", body });
-  const data = await response.json();
+  const response = await fetch("/api/generator/upload", {
+    method: "POST",
+    body,
+  });
+  const data = await readBody(response);
   if (!response.ok) throw new Error(data.detail || "업로드 실패");
   document.querySelector("#sensor").value = sensor;
   enableSensor(sensor);
@@ -250,13 +316,22 @@ async function move(index) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sensor, index, options: viewOptions() }),
   });
-  const data = await response.json();
+  const data = await readBody(response);
   if (!response.ok) throw new Error(data.detail || "미리보기 실패");
   draw(data);
 }
-document.querySelector("#prev").onclick = () => move(Number(document.querySelector("#index").value) - 1).catch((e) => alert(e.message));
-document.querySelector("#next").onclick = () => move(Number(document.querySelector("#index").value) + 1).catch((e) => alert(e.message));
-document.querySelector("#go").onclick = () => move(Number(document.querySelector("#index").value)).catch((e) => alert(e.message));
+document.querySelector("#prev").onclick = () =>
+  move(Number(document.querySelector("#index").value) - 1).catch((e) =>
+    alert(e.message),
+  );
+document.querySelector("#next").onclick = () =>
+  move(Number(document.querySelector("#index").value) + 1).catch((e) =>
+    alert(e.message),
+  );
+document.querySelector("#go").onclick = () =>
+  move(Number(document.querySelector("#index").value)).catch((e) =>
+    alert(e.message),
+  );
 document.querySelector("#sensor").onchange = () => {
   showPanels();
   move(Number(document.querySelector("#index").value) || 1).catch(() => {});
@@ -264,32 +339,54 @@ document.querySelector("#sensor").onchange = () => {
 
 function config() {
   const rows = [...document.querySelectorAll("[data-sensor]")];
-  const pick = (cls) => Object.fromEntries(rows.map((row) => [row.dataset.sensor, row.querySelector(cls).value]));
-  const checked = (cls) => Object.fromEntries(rows.map((row) => [row.dataset.sensor, row.querySelector(cls).checked]));
+  const pick = (cls) =>
+    Object.fromEntries(
+      rows.map((row) => [row.dataset.sensor, row.querySelector(cls).value]),
+    );
+  const checked = (cls) =>
+    Object.fromEntries(
+      rows.map((row) => [row.dataset.sensor, row.querySelector(cls).checked]),
+    );
   return {
-    host: host.value, port: num(port.value, 1883), qos: num(qos.value, 1),
-    user: user.value, password: password.value, device: device.value, mac: mac.value,
-    rewrite_mac: rewrite.checked, seq_auto: seq.checked, jitter_on: jitterOn.checked, loss_on: lossOn.checked,
-    topics: pick(".topic"), period: pick(".period"), auto_period: checked(".auto"),
-    jitter: pick(".jitter"), loss: pick(".loss"),
-    xyz_gap: num(xyzGap.value, 5), tick_step: num(tickStep.value, 0), enabled: checked(".enabled"),
+    host: host.value,
+    port: num(port.value, 1883),
+    qos: num(qos.value, 1),
+    device: device.value,
+    mac: mac.value,
+    rewrite_mac: rewrite.checked,
+    seq_auto: seq.checked,
+    jitter_on: jitterOn.checked,
+    loss_on: lossOn.checked,
+    topics: pick(".topic"),
+    period: pick(".period"),
+    auto_period: checked(".auto"),
+    jitter: pick(".jitter"),
+    loss: pick(".loss"),
+    xyz_gap: num(xyzGap.value, 5),
+    tick_step: num(tickStep.value, 0),
+    enabled: checked(".enabled"),
   };
 }
 
 document.querySelector("#start").onclick = async () => {
   const response = await fetch("/api/generator/start", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config()),
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config()),
   });
-  const data = await response.json();
+  const data = await readBody(response);
   if (!response.ok) alert(data.detail || "시작 실패");
 };
-document.querySelector("#stop").onclick = () => fetch("/api/generator/stop", { method: "POST" });
+document.querySelector("#stop").onclick = () =>
+  fetch("/api/generator/stop", { method: "POST" });
 document.querySelector("#testBroker").onclick = async () => {
   const response = await fetch("/api/generator/test", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(config()),
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config()),
   });
-  const data = await response.json();
-  alert(response.ok ? "MQTT 연결 성공" : (data.detail || "연결 실패"));
+  const data = await readBody(response);
+  alert(response.ok ? "MQTT 연결 성공" : data.detail || "연결 실패");
 };
 document.querySelector("#resetZoom").onclick = () => {
   loosen(rawChart);
@@ -305,19 +402,25 @@ async function loadDefaults() {
   if (adxl.g_per_lsb != null) adxlG.value = adxl.g_per_lsb;
   freqOn.checked = !!correction.frequency_enabled;
   sensOn.checked = !!correction.sensitivity_enabled;
-  if (correction.frequency_divisor != null) freqDiv.value = correction.frequency_divisor;
+  if (correction.frequency_divisor != null)
+    freqDiv.value = correction.frequency_divisor;
   if (correction.low_hz != null) lowHz.value = correction.low_hz;
   if (correction.high_hz != null) highHz.value = correction.high_hz;
-  if (correction.low_sensitivity != null) lowS.value = correction.low_sensitivity;
+  if (correction.low_sensitivity != null)
+    lowS.value = correction.low_sensitivity;
   if (correction.mid_intercept != null) midA.value = correction.mid_intercept;
   if (correction.mid_slope != null) midB.value = correction.mid_slope;
-  if (correction.high_sensitivity != null) highS.value = correction.high_sensitivity;
+  if (correction.high_sensitivity != null)
+    highS.value = correction.high_sensitivity;
 }
 
 document.querySelector("#analysis").addEventListener("change", () => {
   if (!ready) return;
-  if (document.querySelector("#position").textContent.includes("선택하세요")) return;
-  move(Number(document.querySelector("#index").value)).catch((error) => alert(error.message));
+  if (document.querySelector("#position").textContent.includes("선택하세요"))
+    return;
+  move(Number(document.querySelector("#index").value)).catch((error) =>
+    alert(error.message),
+  );
 });
 
 async function saveJson(url, body) {
@@ -326,27 +429,38 @@ async function saveJson(url, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
+  const data = await readBody(response);
   if (!response.ok) throw new Error(data.detail || "저장 실패");
   if (!document.querySelector("#position").textContent.includes("선택하세요")) {
     await move(Number(document.querySelector("#index").value));
   }
 }
 
-document.querySelector("#saveG").onclick = () => saveJson("/api/analysis/mems-scale", {
-  g_per_lsb: num(adxlG.value, 0.00390625),
-}).catch((error) => alert(error.message));
-document.querySelector("#saveCorrection").onclick = () => saveJson("/api/analysis/mems-correction", {
-  correction: viewOptions().adxl.correction,
-}).catch((error) => alert(error.message));
+document.querySelector("#saveG").onclick = () =>
+  saveJson("/api/analysis/mems-scale", {
+    g_per_lsb: num(adxlG.value, 0.00390625),
+  }).catch((error) => alert(error.message));
+document.querySelector("#saveCorrection").onclick = () =>
+  saveJson("/api/analysis/mems-correction", {
+    correction: viewOptions().adxl.correction,
+  }).catch((error) => alert(error.message));
 
 showPanels();
-loadDefaults().then(() => { ready = true; }).catch(() => { ready = true; });
+loadDefaults()
+  .then(() => {
+    ready = true;
+  })
+  .catch(() => {
+    ready = true;
+  });
 
 setInterval(async () => {
   const data = await (await fetch("/api/generator/status")).json();
-  stats.textContent = `Publish ${data.sent} / PUBACK ${data.acked || 0} / Drop ${data.dropped} | ` +
-    Object.entries(data.counter).map(([name, count]) => `${name} ${count}`).join(", ") +
+  stats.textContent =
+    `Publish ${data.sent} / PUBACK ${data.acked || 0} / Drop ${data.dropped} | ` +
+    Object.entries(data.counter)
+      .map(([name, count]) => `${name} ${count}`)
+      .join(", ") +
     (data.running ? " | 전송 중" : " | 대기");
   log.textContent = data.logs.join("\n");
 }, 1000);

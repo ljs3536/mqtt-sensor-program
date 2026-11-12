@@ -143,8 +143,6 @@ class ReplayService:
             "host": "127.0.0.1",
             "port": 1883,
             "qos": 1,
-            "user": "",
-            "password": "",
             "device": "S01",
             "mac": "TEST00000001",
             "rewrite_mac": False,
@@ -224,8 +222,6 @@ class ReplayService:
 
     def _connect(self, cfg):
         client = _mqtt_client(f"web-replay-{int(time.time())}")
-        if cfg["user"]:
-            client.username_pw_set(cfg["user"], cfg["password"])
         client.on_publish = self._on_publish
         client.connect(cfg["host"], int(cfg["port"]), keepalive=30)
         client.loop_start()
@@ -246,8 +242,6 @@ class ReplayService:
             done.set()
 
         client = _mqtt_client(f"web-replay-test-{int(time.time())}")
-        if cfg.get("user"):
-            client.username_pw_set(cfg.get("user") or "", cfg.get("password") or "")
         client.on_connect = on_connect
         try:
             client.connect(cfg.get("host") or "127.0.0.1", int(cfg.get("port") or 1883), keepalive=30)
@@ -600,6 +594,7 @@ class MonitorService:
         self.records = {}
         self.devices = []
         self.device_stats = {}
+        self.latest_device = ""
         self.configs = {}
         self.connected = False
         self.mode = ""
@@ -655,6 +650,7 @@ class MonitorService:
         stat = self.device_stats.setdefault(device_id, {"count": 0, "last": ""})
         stat["count"] += 1
         stat["last"] = datetime.now().strftime("%H:%M:%S")
+        self.latest_device = device_id
         self._save_csv(obj, kind, axis, sensor_hex, samples if kind != "ULTRASONIC" else record["y"], meta if kind == "ULTRASONIC" else None)
         rms = ""
         if record["kind"] == "waveform" and record["physical"]:
@@ -798,11 +794,9 @@ class MonitorService:
             with self.lock:
                 self._remember(str(msg.topic), obj)
 
-    def connect_mqtt(self, host, port, topic, user, password, csv_enabled=True):
+    def connect_mqtt(self, host, port, topic, csv_enabled=True):
         self.disconnect()
         client = _mqtt_client(f"web-monitor-{int(time.time())}")
-        if user:
-            client.username_pw_set(user, password)
         client.on_message = self._on_message
         client.on_disconnect = self._on_disconnect
         client.connect(host, int(port), keepalive=30)
@@ -859,7 +853,9 @@ class MonitorService:
     def state(self, device=""):
         with self.lock:
             names = list(self.records)
-            target = device if device in self.records else (names[0] if names else "")
+            target = device if device in self.records else ""
+            if not target:
+                target = self.latest_device if self.latest_device in self.records else (names[-1] if names else "")
             snapshot = {
                 axis: dict(record)
                 for axis, record in self.records.get(target, {}).items()
@@ -874,6 +870,7 @@ class MonitorService:
                 "devices": list(self.devices),
                 "arrivals": {key: dict(value) for key, value in self.device_stats.items()},
                 "graph_devices": names,
+                "latest_device": self.latest_device,
                 "configs": self.configs,
                 "window": window,
                 "csv_enabled": self.csv.enabled,
@@ -899,6 +896,11 @@ def generator_page():
     return FileResponse(WEB / "generator.html")
 
 
+def _save_upload(dest: Path, data: bytes) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+
+
 @app.get("/monitor")
 def monitor_page():
     return FileResponse(WEB / "index.html")
@@ -914,8 +916,8 @@ async def upload_sensor(sensor: str = Form(...), file: UploadFile = File(...)):
     if sensor not in ("PIEZO", "ADXL", "초음파"):
         raise HTTPException(400, "센서는 PIEZO, ADXL, 초음파 중 하나여야 합니다")
     dest = UPLOADS / f"{sensor}_{Path(file.filename or 'data.txt').name}"
-    dest.write_bytes(await file.read())
     try:
+        _save_upload(dest, await file.read())
         count = replay.store(sensor, str(dest))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
@@ -938,7 +940,10 @@ async def upload_adxl_csv(
     paths = {}
     for axis, item in (("X", x), ("Y", y), ("Z", z)):
         dest = UPLOADS / f"ADXL_{axis}_{Path(item.filename or axis).name}"
-        dest.write_bytes(await item.read())
+        try:
+            _save_upload(dest, await item.read())
+        except OSError as exc:
+            raise HTTPException(400, f"{axis} CSV 저장 실패: {exc}") from exc
         paths[axis] = str(dest)
     recover = _form_flag(recover_partial, default=True)
     try:
@@ -1000,8 +1005,6 @@ async def monitor_connect(body: dict):
             body.get("host") or "127.0.0.1",
             int(body.get("port") or 1883),
             body.get("topic") or "V/#,D/#",
-            body.get("user") or "",
-            body.get("password") or "",
             csv_enabled=body.get("csv_enabled", True),
         )
     except Exception as exc:

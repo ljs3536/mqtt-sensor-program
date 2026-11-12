@@ -203,11 +203,13 @@ async function refresh() {
   renderMacs(data.devices || [], data.arrivals || {});
   const box = document.querySelector("#device");
   const devices = data.graph_devices || Object.keys(data.latest || {});
-  const previous = box.value || graphDevice;
-  box.innerHTML = devices.map((id) => `<option>${id}</option>`).join("");
+  const previous = box.value;
+  box.innerHTML = `<option value="">최근 수신</option>` + devices.map((id) => `<option>${id}</option>`).join("");
   if (previous && devices.includes(previous)) box.value = previous;
+  else box.value = "";
   graphDevice = box.value;
-  draw((data.latest || {})[graphDevice] || {});
+  const shown = box.value || data.latest_device || "";
+  draw((data.latest || {})[shown] || {});
   const mac = selectedList()[0];
   if (mac && data.configs && data.configs[mac]) {
     preview.textContent = JSON.stringify(data.configs[mac], null, 2);
@@ -282,7 +284,7 @@ document.querySelector("#connect").onclick = async () => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       host: host.value, port: Number(port.value), topic: topic.value,
-      user: "", password: "", csv_enabled: csvEnabled.checked,
+      csv_enabled: csvEnabled.checked,
     }),
   });
   const data = await response.json();
