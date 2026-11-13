@@ -17,19 +17,38 @@ const topics = { PIEZO: "V/{mac}", ADXL: "V/{mac}", 초음파: "D/{mac}" };
 let ready = false;
 
 const sensorBox = document.querySelector("#sensors");
+const studioLayout = document.body.classList.contains("layout-pin");
 sensorBox.innerHTML = sensors
-  .map(
-    (name) => `
+  .map((name) => {
+    const enabled = `<label class="check"><input class="enabled" type="checkbox" ${name === "PIEZO" ? "checked" : ""}><span>${name}</span></label>`;
+    const topic = `<label>Topic<input class="topic" value="${topics[name]}"></label>`;
+    const auto = `<label class="check"><input class="auto" type="checkbox" ${name !== "초음파" ? "checked" : ""}><span>자동주기</span></label>`;
+    if (!studioLayout) {
+      return `
   <div class="sensor-line" data-sensor="${name}">
-    <label class="check"><input class="enabled" type="checkbox" ${name === "PIEZO" ? "checked" : ""}><span>${name}</span></label>
+    ${enabled}
     <label>파일<span class="file-pick"><input class="file" type="file"><span class="file-btn">파일 선택</span><span class="file-name">선택된 파일 없음</span></span></label>
-    <label>Topic<input class="topic" value="${topics[name]}"></label>
+    ${topic}
     <label>주기(ms)<input class="period" value="${periods[name]}" style="width:80px"></label>
-    <label class="check"><input class="auto" type="checkbox" ${name !== "초음파" ? "checked" : ""}><span>자동주기</span></label>
+    ${auto}
     <label>±Jitter<input class="jitter" value="0" style="width:60px"></label>
     <label>Loss%<input class="loss" value="0" style="width:60px"></label>
-  </div>`,
-  )
+  </div>`;
+    }
+    return `
+  <div class="sensor-line" data-sensor="${name}">
+    ${enabled}
+    ${topic}
+    <div class="pair">
+      <label>주기(ms)<input class="period" value="${periods[name]}"></label>
+      <label>±Jitter<input class="jitter" value="0"></label>
+    </div>
+    <div class="pair">
+      <label>Loss%<input class="loss" value="0"></label>
+      ${auto}
+    </div>
+  </div>`;
+  })
   .join("");
 
 function filterMarkup(items) {
@@ -84,6 +103,11 @@ function num(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function optionalValue(id, fallback) {
+  const node = document.getElementById(id);
+  return node ? node.value : fallback;
+}
+
 function readFilters(rootId) {
   const filters = {};
   document.querySelectorAll(`${rootId} [data-filter]`).forEach((row) => {
@@ -96,6 +120,20 @@ function readFilters(rootId) {
   });
   return filters;
 }
+
+const fftUnitHint = {
+  "자동 (g RMS)": "FFT g RMS = Count Peak × (g/LSB) / √2. RAW는 가속도 단위입니다.",
+  "Count Peak": "FFT Count Peak = 2|rFFT(창)| / Σ창. RAW는 가속도 단위입니다.",
+  "g Peak": "FFT g Peak = Count Peak × (g/LSB). RAW는 가속도 단위입니다.",
+  "g RMS": "FFT g RMS = FFT g Peak / √2. RAW는 가속도 단위입니다.",
+  "mm/s RMS": "속도 RMS[mm/s] = FFT g RMS × 9806.65 / (2πf), f>0. RAW는 가속도 그대로입니다.",
+};
+function showFftUnitHint() {
+  const hint = document.querySelector("#adxlFftHint");
+  if (hint) hint.textContent = fftUnitHint[adxlFft.value] || fftUnitHint["자동 (g RMS)"];
+}
+adxlFft.addEventListener("change", showFftUnitHint);
+showFftUnitHint();
 
 function viewOptions() {
   return {
@@ -113,7 +151,7 @@ function viewOptions() {
       filters: readFilters("#piezoFilters"),
     },
     adxl: {
-      axes: { X: axisX.checked, Y: axisY.checked, Z: axisZ.checked, SRSS: srssOn.checked },
+      axes: { X: axisX.checked, Y: axisY.checked, Z: axisZ.checked, gN: gnOn.checked, SRSS: srssOn.checked },
       raw_unit: adxlRaw.value,
       fft_unit: adxlFft.value,
       g_per_lsb: num(adxlG.value, 0.00390625),
@@ -132,9 +170,9 @@ function viewOptions() {
         mid_slope: num(midB.value, 0.0005),
         high_sensitivity: num(highS.value, 0.89),
       },
-      rpm: num(rpm.value, 1800),
-      rot_axis: rotAxis.value,
-      rot_type: rotType.value,
+      rpm: num(optionalValue("rpm", 1800), 1800),
+      rot_axis: optionalValue("rotAxis", "X"),
+      rot_type: optionalValue("rotType", "미지정"),
     },
   };
 }
@@ -173,7 +211,8 @@ function draw(preview) {
   formula.textContent = [preview.formula, preview.avg_status, preview.srss && preview.srss.text]
     .filter(Boolean)
     .join("\n");
-  rotation.textContent = preview.rotation || "";
+  const rotationBox = document.getElementById("rotation");
+  if (rotationBox) rotationBox.textContent = preview.rotation || "";
   const logX = !!preview.fft_log_x;
   const logY = !!preview.fft_log_y;
   if (preview.kind === "spectrum") {
@@ -200,6 +239,14 @@ function draw(preview) {
         data: pairs(series.f, series.y, logX, logY),
       }),
     );
+    if (preview.gn && preview.gn.ok && gnOn.checked) {
+      fftChart.data.datasets.push({
+        label: "gN",
+        borderColor: "#17a2b8",
+        borderWidth: 1.4,
+        data: pairs(preview.gn.f || [], preview.gn.y || [], logX, logY),
+      });
+    }
     if (preview.srss && preview.srss.ok && srssOn.checked) {
       fftChart.data.datasets.push({
         label: "SRSS",
@@ -208,6 +255,21 @@ function draw(preview) {
         borderWidth: 1.7,
         data: pairs(preview.srss.f || [], preview.srss.y || [], logX, logY),
       });
+    }
+    if (preview.srss_limit && preview.srss_limit.ok) {
+      fftChart.data.datasets.push({
+        label: preview.srss_limit.text || "SRSS 한계",
+        borderColor: "#b45309",
+        borderDash: [5, 3],
+        borderWidth: 1.5,
+        data: pairs(preview.srss_limit.f || [], preview.srss_limit.y || [], logX, logY),
+      });
+    }
+    if (preview.srss_limit && preview.srss_limit.device && preview.srss_limit.device !== window._srssDevice) {
+      window._srssDevice = preview.srss_limit.device;
+      if (preview.srss_limit.value != null && document.activeElement !== srssLimit) {
+        srssLimit.value = preview.srss_limit.value;
+      }
     }
   }
   rawChart.options.plugins.title = {
@@ -454,6 +516,27 @@ async function saveJson(url, body) {
   }
 }
 
+document.querySelector("#applySrssLimit").onclick = async () => {
+  const device = window._srssDevice || document.querySelector("#mac").value.trim();
+  if (!device) {
+    alert("MEMS 장치 MAC이 없습니다. ADXL 파일을 먼저 불러오세요.");
+    return;
+  }
+  const response = await fetch("/api/analysis/srss-limit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device, value: num(srssLimit.value, 4.5) }),
+  });
+  const data = await readBody(response);
+  if (!response.ok) {
+    alert(data.detail || "SRSS 한계값 저장 실패");
+    return;
+  }
+  srssLimit.value = data.value;
+  if (!document.querySelector("#position").textContent.includes("선택하세요")) {
+    await move(Number(document.querySelector("#index").value));
+  }
+};
 document.querySelector("#saveG").onclick = () =>
   saveJson("/api/analysis/mems-scale", {
     g_per_lsb: num(adxlG.value, 0.00390625),

@@ -114,16 +114,24 @@ def _pack_curves(curves):
         "series": {},
         "fft": {},
     }
-    srss = curves.get("srss")
-    if srss:
-        packed["srss"] = {
-            "ok": bool(srss.get("ok")),
-            "text": srss.get("text") or "",
-            "unit": srss.get("unit") or "",
-            "level": None if srss.get("level") is None else float(srss["level"]),
-            "f": [float(value) for value in (srss.get("f") or [])],
-            "y": [float(value) for value in (srss.get("y") or [])],
+    def _pack_trace(item):
+        if not item:
+            return None
+        freq, amp = _pack_pair(item.get("f"), item.get("y"))
+        return {
+            "ok": bool(item.get("ok")),
+            "text": item.get("text") or "",
+            "unit": item.get("unit") or "",
+            "device": item.get("device") or "",
+            "level": None if item.get("level") is None else float(item["level"]),
+            "value": None if item.get("value") is None else float(item["value"]),
+            "f": freq,
+            "y": amp,
         }
+    for key in ("srss", "gn", "srss_limit"):
+        packed_trace = _pack_trace(curves.get(key))
+        if packed_trace:
+            packed[key] = packed_trace
     if curves["kind"] == "spectrum":
         packed["x"], packed["y"] = _pack_pair(curves.get("x"), curves.get("y"))
         return packed
@@ -840,12 +848,15 @@ class MonitorService:
         }
 
     def _device_views(self, snapshot, window, options):
+        opts = dict(options or {})
+        sample = next(iter(snapshot.values()), {})
+        opts["device"] = sample.get("device") or ""
         adxl = {
             axis: (record["samples"], record["fs"])
             for axis, record in snapshot.items()
             if record.get("kind") == "waveform" and record.get("physical") and axis in ("X", "Y", "Z")
         }
-        shared = analysis.monitor_adxl_set(adxl, options) if adxl else {}
+        shared = analysis.monitor_adxl_set(adxl, opts) if adxl else {}
         views = {}
         for axis, record in snapshot.items():
             if axis in shared:
@@ -854,6 +865,10 @@ class MonitorService:
                 views[axis] = self._view(record, window, options)
         if "_srss" in shared:
             views["_srss"] = shared["_srss"]
+        if "_gn" in shared:
+            views["_gn"] = shared["_gn"]
+        if "_srss_limit" in shared:
+            views["_srss_limit"] = shared["_srss_limit"]
         return views
 
     def fft_check(self, device=""):
@@ -1012,6 +1027,12 @@ def home():
 @app.get("/generator")
 def generator_page():
     return FileResponse(WEB / "generator.html")
+
+
+@app.get("/studio")
+def studio_page():
+    """센서 데이터 분석. 기능은 발생기와 같고, 화면만 아이콘 서랍 배치다."""
+    return FileResponse(WEB / "studio.html")
 
 
 def _with_upload(filename, data, load):
@@ -1221,6 +1242,20 @@ async def monitor_command(body: dict):
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"payload": payload, "state": monitor.state()}
+
+
+@app.get("/api/analysis/srss-limit")
+def read_srss_limit(device: str = ""):
+    return {"device": gen.srss_limit_key(device), "value": gen.srss_limit_get(device)}
+
+
+@app.post("/api/analysis/srss-limit")
+async def write_srss_limit(body: dict):
+    try:
+        value = gen.srss_limit_save(body.get("device"), body.get("value"))
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"device": gen.srss_limit_key(body.get("device")), "value": value}
 
 
 @app.get("/api/analysis/defaults")

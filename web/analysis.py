@@ -23,7 +23,7 @@ PIEZO_UNITS = ("Count", "mV", "g RMS", "mm/s RMS")
 PIEZO_WINDOWS = ("Blackman", "Hann", "Hamming", "Rectangular")
 SRSS_MISSING = "SRSS: 완전한 XYZ 데이터 없음"
 ADXL_RAW_UNITS = ("자동 (g/mg/µg)", "Count", "g", "mg", "µg")
-ADXL_FFT_UNITS = ("자동 (g RMS)", "Count Peak", "g Peak", "g RMS")
+ADXL_FFT_UNITS = ("자동 (g RMS)", "Count Peak", "g Peak", "g RMS", "mm/s RMS")
 
 
 def _flag(value, default=False):
@@ -81,7 +81,7 @@ def default_options():
             "filters": _filter_block(10, 3000),
         },
         "adxl": {
-            "axes": {"X": True, "Y": True, "Z": True, "SRSS": True},
+            "axes": {"X": True, "Y": True, "Z": True, "gN": True, "SRSS": True},
             "raw_unit": "자동 (g/mg/µg)",
             "fft_unit": "자동 (g RMS)",
             "g_per_lsb": gen.read_mems_g_per_lsb(),
@@ -162,6 +162,40 @@ def _correction(options):
     return gen.validate_mems_correction(_merge(gen.load_mems_correction(), raw))
 
 
+def _adxl_converted(freq, amp, options):
+    """Count Peak를 최종 FFT 단위로 바꾼다. 자동 단위는 g RMS까지만 만들고 눈금 배율은 나중에 곱한다."""
+    adxl = options["adxl"]
+    fft_mode = adxl.get("fft_unit") if adxl.get("fft_unit") in ADXL_FFT_UNITS else ADXL_FFT_UNITS[0]
+    g_per_lsb = _num(adxl.get("g_per_lsb"), gen.read_mems_g_per_lsb())
+    correction = _correction(options)
+    values = np.asarray(amp, dtype=np.float64)
+    if fft_mode != "Count Peak":
+        values = values * g_per_lsb
+    if fft_mode not in ("Count Peak", "g Peak"):
+        values = values / np.sqrt(2.0)
+    shown_f, shown_a = gen.corrected_mems_fft(
+        freq, values, correction, apply_sensitivity=fft_mode != "Count Peak"
+    )
+    if fft_mode == "mm/s RMS":
+        velocity = np.zeros_like(shown_a, dtype=np.float64)
+        positive = shown_f > 0
+        velocity[positive] = shown_a[positive] * 9806.65 / (2.0 * np.pi * shown_f[positive])
+        shown_a = velocity
+    return np.asarray(shown_f, dtype=np.float64), np.asarray(shown_a, dtype=np.float64)
+
+
+def _packet_mac(packet):
+    if not isinstance(packet, dict):
+        return ""
+    for axis in ("X", "Y", "Z"):
+        frame = packet.get(axis)
+        if isinstance(frame, dict):
+            mac = frame.get("dvicMacAddr") or frame.get("macAddr") or ""
+            if str(mac).strip():
+                return gen.srss_limit_key(mac)
+    return gen.srss_limit_key(packet.get("device") or "")
+
+
 def _average(sensor, packets, index, options):
     if not _flag(options.get("fft_avg")):
         return {}, "평균 OFF — 현재 패킷 FFT 표시"
@@ -179,6 +213,8 @@ def _average(sensor, packets, index, options):
         reference_f = None
         reference_shape = None
         summed = None
+        summed_converted = None
+        display_f = None
         accepted = 0
         skipped = 0
         for packet in chosen:
@@ -194,6 +230,7 @@ def _average(sensor, packets, index, options):
                     source = gen.spectral_filter(raw - np.mean(raw), fs, **_filter_kwargs(piezo["filters"], "FFT"))
                     window = piezo["window"] if piezo["window"] in PIEZO_WINDOWS else "Blackman"
                     freq, amp = gen.fft_peak(source, fs, window, _window_n(piezo.get("window_n")))
+                    converted_f, converted_amp = freq, amp
                 else:
                     source = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT"))
                     count = _window_n(adxl.get("window_n"))
@@ -202,19 +239,31 @@ def _average(sensor, packets, index, options):
                     freq, amp = gen.fft_peak(
                         source, fs, _window_name(adxl.get("window")), count, _num(adxl.get("beta"), 8.6)
                     )
+                    converted_f, converted_amp = _adxl_converted(freq, amp, options)
                 if reference_f is None:
                     reference_f = freq
                     reference_shape = (fs, raw.size)
                     summed = np.zeros_like(amp)
-                if reference_shape != (fs, raw.size) or freq.shape != reference_f.shape or not np.array_equal(freq, reference_f):
+                    summed_converted = np.zeros_like(converted_amp)
+                    display_f = converted_f
+                if (
+                    reference_shape != (fs, raw.size)
+                    or freq.shape != reference_f.shape
+                    or not np.array_equal(freq, reference_f)
+                    or not np.array_equal(converted_f, display_f)
+                ):
                     skipped += 1
                     continue
                 summed += amp
+                summed_converted += converted_amp
                 accepted += 1
             except (ValueError, TypeError, OverflowError):
                 skipped += 1
         if accepted:
-            result[axis] = (reference_f, summed / accepted, accepted)
+            if sensor == "ADXL":
+                result[axis] = (reference_f, summed / accepted, accepted, display_f, summed_converted / accepted)
+            else:
+                result[axis] = (reference_f, summed / accepted, accepted)
         note = f"{axis}: {accepted}/{len(chosen)}회"
         if skipped:
             note += f" (제외 {skipped})"
@@ -367,6 +416,12 @@ def _srss_from_packets(packets, index, options):
                 ):
                     raise ValueError("SRSS bins")
                 current_f = corrected_f
+                # 속도는 보정된 g Peak에 v = g × 9806.65 / (2πf) 를 적용한 뒤 SRSS를 낸다. f=0은 0.
+                if fft_mode == "mm/s RMS":
+                    velocity = np.zeros_like(corrected_peak)
+                    positive = corrected_f > 0
+                    velocity[positive] = corrected_peak[positive] * 9806.65 / (2.0 * np.pi * corrected_f[positive])
+                    corrected_peak = velocity
                 powers.append(gen.srss_axis_power(corrected_peak, nn, gen.fft_window(nn, window, beta)))
             if reference is not None and signature != reference:
                 continue
@@ -393,6 +448,8 @@ def _adxl_srss(packet, options, packets, index, fft_mode, fft_scale, fft_label, 
         unit = fft_label
     elif fft_mode == "Count Peak":
         unit = "Count RMS"
+    elif fft_mode == "mm/s RMS":
+        unit = "mm/s RMS"
     else:
         unit = "g RMS"
     if not np.isfinite(level):
@@ -435,7 +492,7 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
         # amp는 Count Peak. 평균 제거는 fft_peak 안에서만 한다. RAW 파형에는 중력이 남는다.
         freq, amp = gen.fft_peak(fft_src, fs, window, count, beta)
         if averaged and axis in averaged:
-            freq, amp, _used = averaged[axis]
+            freq, amp = averaged[axis][0], averaged[axis][1]
         spectra[axis] = (freq, amp)
         # 전체 AC g RMS = std(Count × g/LSB). FFT 한 칸의 g RMS와 다른 값이다.
         summaries.append(f"{axis} AC g RMS={float(np.std(raw / lsb)):.6g}")
@@ -464,6 +521,8 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
             "g Peak": (1.0 / lsb, "g Peak"),
             # g RMS = Count Peak × (g/LSB) / √2.
             "g RMS": (1.0 / lsb / np.sqrt(2.0), "g RMS / bin"),
+            # 눈금은 g RMS까지 맞춘 뒤, 아래에서 주파수별로 mm/s로 바꾼다.
+            "mm/s RMS": (1.0 / lsb / np.sqrt(2.0), "mm/s RMS / bin"),
         }[fft_mode]
     # Count Peak는 물리 단위가 아니므로 S(f)로 나누지 않는다. f / 1.014는 그대로 적용된다.
     physical = fft_mode != "Count Peak"
@@ -472,13 +531,15 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
     peaks = []
     for axis, wave, fs in raws:
         series[axis] = {"t": np.arange(wave.size, dtype=np.float64) / fs * 1000.0, "y": wave * raw_scale}
+    auto_gain = float(fft_scale) * lsb * np.sqrt(2.0) if str(fft_mode).startswith("자동") else 1.0
     for axis, freq, amp in ffts:
-        # G_final = G / S(f), f_final = f / 1.014. S는 나누기 전 측정 주파수.
-        # S: f≤60 → 0.99, 60<f≤360 → 1.07−0.0005×f, f>360 → 0.89. 나눗수 기본 1.014.
-        shown_f, shown_a = gen.corrected_mems_fft(
-            freq, amp * fft_scale, correction, apply_sensitivity=physical
-        )
-        fft[axis] = {"f": shown_f / 1000.0, "y": shown_a}
+        # 평균이 켜져 있으면 패킷마다 단위 환산한 뒤 평균한 곡선을 쓴다.
+        if averaged and axis in averaged and len(averaged[axis]) >= 5:
+            _count_f, _count_a, _used, shown_f, shown_a = averaged[axis]
+        else:
+            shown_f, shown_a = _adxl_converted(freq, amp, options)
+        shown_a = np.asarray(shown_a, dtype=np.float64) * auto_gain
+        fft[axis] = {"f": np.asarray(shown_f, dtype=np.float64) / 1000.0, "y": shown_a}
         if shown_a.size > 1:
             peak_at = 1 + int(np.argmax(shown_a[1:]))
             peaks.append(f"{axis} {shown_f[peak_at]:.2f} Hz / {shown_a[peak_at]:.6g} {fft_label}")
@@ -495,10 +556,64 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
         f"RAW {raw_label} | FFT {fft_label} | 1 LSB={g_per_lsb:.8g} g | Window={window} "
         f"N={count or '전체'} | 필터={', '.join(active) if active else 'OFF'} | "
         f"주파수 보정={correction['frequency_enabled']} 감도 보정={correction['sensitivity_enabled']} | "
-        "AC g RMS=std(Count/LSB) | 미리보기 전용"
+        "AC g RMS=std(Count/LSB) | "
+        + ("속도 RMS[mm/s]=보정 g RMS×9806.65/(2πf), f>0. RAW는 가속도 유지 | " if fft_mode == "mm/s RMS" else "")
+        + "미리보기 전용"
     )
     rotation = _rotation(spectra, options)
     srss = _adxl_srss(packet, options, packets, index, fft_mode, fft_scale, fft_label, lsb)
+    gn = {"ok": False, "f": [], "y": []}
+    if _flag((adxl.get("axes") or {}).get("gN"), True):
+        gn_rows = []
+        gn_hz = None
+        chosen = [packet]
+        if _flag(options.get("fft_avg")) and packets:
+            choice = str(options.get("fft_avg_count") or "16").strip()
+            amount = (len(packets) - int(index)) if choice == "전체" else int(float(choice))
+            chosen = list(packets)[int(index):int(index) + max(1, amount)]
+        for item in chosen:
+            if not isinstance(item, dict) or any(item.get(name) is None for name in ("X", "Y", "Z")):
+                continue
+            try:
+                pieces = []
+                base = None
+                for name in ("X", "Y", "Z"):
+                    raw, fs = decode_wave("ADXL", item[name])
+                    count_n = _window_n(adxl.get("window_n"))
+                    freq, amp = gen.fft_peak(
+                        gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT")),
+                        fs, _window_name(adxl.get("window")), count_n, _num(adxl.get("beta"), 8.6),
+                    )
+                    converted_f, converted_a = _adxl_converted(freq, amp, options)
+                    if base is None:
+                        base = converted_f
+                    elif not np.array_equal(base, converted_f):
+                        raise ValueError("gN bins")
+                    pieces.append(converted_a)
+                gn_rows.append(np.sqrt(sum(np.square(piece) for piece in pieces)))
+                gn_hz = base
+            except (ValueError, TypeError, OverflowError):
+                continue
+        if gn_rows and gn_hz is not None:
+            gn_y = np.mean(np.vstack(gn_rows), axis=0) * auto_gain
+            gn = {
+                "ok": True,
+                "f": np.asarray(gn_hz, dtype=np.float64) / 1000.0,
+                "y": gn_y,
+            }
+    srss_limit = {"ok": False, "f": [], "y": [], "value": None, "text": "", "device": ""}
+    if fft_mode == "mm/s RMS" and fft:
+        device = str(options.get("device") or _packet_mac(packet) or "")
+        limit = gen.srss_limit_get(device)
+        freq_khz = next(iter(fft.values()))["f"]
+        srss_limit = {
+            "ok": True,
+            "value": float(limit),
+            "device": device,
+            "text": "SRSS 한계 {:.6g} mm/s RMS".format(limit),
+            "f": np.asarray(freq_khz, dtype=np.float64),
+            "y": np.full(len(freq_khz), float(limit)),
+        }
     return {
         "kind": "waveform",
         "x_label": "Time (ms)",
@@ -508,6 +623,8 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
         "series": series,
         "fft": fft,
         "srss": srss,
+        "gn": gn,
+        "srss_limit": srss_limit,
         "info": " | ".join(summaries + peaks) if summaries else "표시할 축 없음",
         "formula": formula,
         "rotation": rotation,
@@ -592,7 +709,10 @@ def monitor_adxl_set(axis_samples, options):
         packet[axis] = {"sensorData": _counts_to_hex(samples), "samplerate": float(fs or 0)}
     if not packet:
         return {}
+    flags = dict(options["adxl"].get("axes") or {})
     options["adxl"]["axes"] = {axis: axis in packet for axis in ("X", "Y", "Z")}
+    options["adxl"]["axes"]["gN"] = _flag(flags.get("gN"), True)
+    options["adxl"]["axes"]["SRSS"] = _flag(flags.get("SRSS"), True)
     curves = _adxl_curves(packet, {}, options, [packet], 0)
     shown = {}
     for axis in packet:
@@ -610,15 +730,20 @@ def monitor_adxl_set(axis_samples, options):
             "fft_log_x": _flag(options.get("fft_log_x")),
             "fft_log_y": _flag(options.get("fft_log_y")),
         }
-    srss = curves.get("srss") or {}
-    shown["_srss"] = {
-        "ok": bool(srss.get("ok")),
-        "text": srss.get("text") or "",
-        "unit": srss.get("unit") or "",
-        "level": None if srss.get("level") is None else float(srss["level"]),
-        "f": [float(value) * 1000.0 for value in (srss.get("f") or [])],
-        "y": [float(value) for value in (srss.get("y") or [])],
-    }
+    def _hz_trace(item):
+        return {
+            "ok": bool(item.get("ok")),
+            "text": item.get("text") or "",
+            "unit": item.get("unit") or "",
+            "value": None if item.get("value") is None else float(item["value"]),
+            "device": item.get("device") or "",
+            "level": None if item.get("level") is None else float(item["level"]),
+            "f": [float(value) * 1000.0 for value in (item.get("f") or [])],
+            "y": [float(value) for value in (item.get("y") or [])],
+        }
+    shown["_srss"] = _hz_trace(curves.get("srss") or {})
+    shown["_gn"] = _hz_trace(curves.get("gn") or {})
+    shown["_srss_limit"] = _hz_trace(curves.get("srss_limit") or {})
     return shown
 
 

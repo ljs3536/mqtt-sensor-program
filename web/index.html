@@ -12,6 +12,7 @@
     <nav>
       <a class="active" href="/">센서 수신 모니터</a>
       <a href="/generator">MQTT 파형 발생기</a>
+      <a href="/studio">센서 데이터 분석</a>
     </nav>
   </header>
   <main>
@@ -89,7 +90,10 @@
         <div class="row">
           <label>표시 단위
             <select id="piezoUnit">
-              <option>Count</option><option selected>mV</option><option>g RMS</option><option>mm/s RMS</option>
+              <option value="Count">ADC (Count)</option>
+              <option value="mV" selected>전압 (mV)</option>
+              <option value="g RMS">가속도 (g RMS)</option>
+              <option value="mm/s RMS">속도 (mm/s RMS)</option>
             </select>
           </label>
           <label>Vmax (V)<input id="piezoVmax" class="w-num" value="3.89"></label>
@@ -109,12 +113,20 @@
         <div class="row">
           <label>RAW 단위
             <select id="adxlRaw">
-              <option>자동 (g/mg/µg)</option><option>Count</option><option>g</option><option>mg</option><option>µg</option>
+              <option value="자동 (g/mg/µg)">자동 가속도 (g/mg/µg)</option>
+              <option value="Count">ADC (Count)</option>
+              <option value="g">가속도 (g)</option>
+              <option value="mg">가속도 (mg)</option>
+              <option value="µg">가속도 (µg)</option>
             </select>
           </label>
           <label>FFT 단위
             <select id="adxlFft">
-              <option>자동 (g RMS)</option><option>Count Peak</option><option>g Peak</option><option>g RMS</option>
+              <option value="자동 (g RMS)">자동 가속도 (g RMS)</option>
+              <option value="Count Peak">ADC (Count Peak)</option>
+              <option value="g Peak">가속도 (g Peak)</option>
+              <option value="g RMS">가속도 (g RMS)</option>
+              <option value="mm/s RMS">속도 (mm/s RMS)</option>
             </select>
           </label>
           <label>1 LSB = (g)<input id="adxlG" value="0.00390625" style="width:120px"></label>
@@ -128,10 +140,14 @@
             <select id="adxlN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
           </label>
           <label>Kaiser β<input id="adxlBeta" class="w-num" value="8.6"></label>
+          <label class="check"><input id="gnOn" type="checkbox" checked><span>gN</span></label>
           <label class="check"><input id="srssOn" type="checkbox" checked><span>SRSS</span></label>
+          <label>한계값 (mm/s RMS)<input id="srssLimit" class="w-num" value="4.5"></label>
+          <button type="button" class="secondary" id="applySrssLimit">적용</button>
           <label class="check"><input id="freqOn" type="checkbox" checked><span>주파수 보정 ON</span></label>
           <label class="check"><input id="sensOn" type="checkbox" checked><span>Sensitivity 보정 ON</span></label>
         </div>
+        <p id="adxlFftHint" class="hint">FFT 단위를 바꾸면 스펙트럼 눈금만 바뀝니다. 속도는 mm/s RMS이고 RAW는 가속도입니다.</p>
         <div id="adxlFilters"></div>
       </fieldset>
       </div>
@@ -177,6 +193,6 @@
   <script src="/static/hammer.min.js"></script>
   <script src="/static/chartjs-plugin-zoom.min.js"></script>
   <script src="/static/graph.js?v=8"></script>
-  <script src="/static/monitor.js?v=9"></script>
+  <script src="/static/monitor.js?v=11"></script>
 </body>
 </html>

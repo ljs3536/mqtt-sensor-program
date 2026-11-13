@@ -65,6 +65,7 @@ function viewOptions() {
       filters: readFilters("#piezoFilters"),
     },
     adxl: {
+      axes: { X: true, Y: true, Z: true, gN: gnOn.checked, SRSS: srssOn.checked },
       raw_unit: adxlRaw.value,
       fft_unit: adxlFft.value,
       g_per_lsb: num(adxlG.value, 0.00390625),
@@ -79,6 +80,20 @@ function viewOptions() {
     },
   };
 }
+
+const fftUnitHint = {
+  "자동 (g RMS)": "FFT g RMS = Count Peak × (g/LSB) / √2. RAW는 가속도 단위입니다.",
+  "Count Peak": "FFT Count Peak = 2|rFFT(창)| / Σ창. RAW는 가속도 단위입니다.",
+  "g Peak": "FFT g Peak = Count Peak × (g/LSB). RAW는 가속도 단위입니다.",
+  "g RMS": "FFT g RMS = FFT g Peak / √2. RAW는 가속도 단위입니다.",
+  "mm/s RMS": "속도 RMS[mm/s] = FFT g RMS × 9806.65 / (2πf), f>0. RAW는 가속도 그대로입니다.",
+};
+function showFftUnitHint() {
+  const hint = document.querySelector("#adxlFftHint");
+  if (hint) hint.textContent = fftUnitHint[adxlFft.value] || fftUnitHint["자동 (g RMS)"];
+}
+adxlFft.addEventListener("change", showFftUnitHint);
+showFftUnitHint();
 
 function pairs(xs, ys, logX, logY) {
   const data = [];
@@ -192,8 +207,23 @@ function draw(device) {
       if (item.formula) notes.push(item.formula);
     }
   }
+  const gn = device && device._gn;
+  if (gn && gn.ok && gnOn.checked) {
+    fftChart.data.datasets.push({
+      label: "gN", borderColor: "#17a2b8", borderWidth: 1.4,
+      data: pairs(gn.f, gn.y, logX, logY),
+    });
+  }
   const srssLine = srssDataset(srss, logX, logY);
   if (srssLine) fftChart.data.datasets.push(srssLine);
+  const limit = device && device._srss_limit;
+  if (limit && limit.ok) {
+    fftChart.data.datasets.push({
+      label: limit.text || "SRSS 한계", borderColor: "#b45309", borderDash: [5, 3], borderWidth: 1.5,
+      data: pairs(limit.f, limit.y, logX, logY),
+    });
+    if (limit.value != null && document.activeElement !== srssLimit) srssLimit.value = limit.value;
+  }
   if (srss && srss.text) notes.push(srss.text);
   document.querySelector("#info").textContent = notes.filter((line, index, all) => all.indexOf(line) === index).join("\n") || "수신 대기";
   fftChart.options.plugins.title = {
@@ -224,6 +254,7 @@ async function refresh() {
     ? `저장 폴더: ${data.csv_dir}`
     : "CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다. HEX와 decoded CSV를 저장 폴더에 나눕니다.";
   log.textContent = (data.logs || []).join("\n");
+  window._monitorDevice = graphDevice || data.latest_device || "";
   renderMacs(data.devices || [], data.arrivals || {});
   const box = document.querySelector("#device");
   const devices = data.graph_devices || Object.keys(data.latest || {});
@@ -327,6 +358,25 @@ document.querySelector("#resetZoom").onclick = () => {
   loosen(fftChart);
   rawChart.update();
   fftChart.update();
+};
+document.querySelector("#applySrssLimit").onclick = async () => {
+  const device = graphDevice || window._monitorDevice || document.querySelector("#manualMac").value.trim();
+  if (!device) {
+    alert("한계값을 저장할 장치 MAC이 없습니다.");
+    return;
+  }
+  const response = await fetch("/api/analysis/srss-limit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device, value: num(srssLimit.value, 4.5) }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    alert(data.detail || "SRSS 한계값 저장 실패");
+    return;
+  }
+  srssLimit.value = data.value;
+  pushView();
 };
 document.querySelector("#start").onclick = () => command("start");
 document.querySelector("#stop").onclick = () => command("stop");

@@ -262,3 +262,183 @@ pre.fft-check-text { height: auto; max-height: 220px; }
 @media (max-width: 980px) {
   .fft-previews { grid-template-columns: 1fr; }
 }
+
+body.layout-pin {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #e4ebf2;
+}
+body.layout-pin main.studio {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr;
+  position: relative;
+  margin: 8px;
+  padding: 0;
+}
+body.layout-pin main.studio.pinned { grid-template-columns: minmax(200px, 15%) minmax(0, 1fr); gap: 8px; }
+body.layout-pin main.studio.pinned.collapsed { grid-template-columns: 44px minmax(0, 1fr); }
+body.layout-pin .studio-settings {
+  background: #f7f9fb;
+  border: 1px solid #c5d0dc;
+  border-radius: 10px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  left: 8px;
+  width: min(214px, 22vw);
+  max-height: calc(100% - 16px);
+  box-shadow: 0 12px 28px rgba(20, 40, 60, 0.18);
+}
+body.layout-pin main.studio.pinned .studio-settings {
+  position: static;
+  width: auto;
+  max-height: none;
+  box-shadow: none;
+}
+body.layout-pin .studio-settings.hidden-drawer { display: none; }
+body.layout-pin main.studio.pinned.collapsed .studio-settings { padding: 8px 4px; overflow: hidden; }
+body.layout-pin main.studio.pinned.collapsed .tabs,
+body.layout-pin main.studio.pinned.collapsed .tab-page { display: none; }
+body.layout-pin main.studio.pinned.collapsed .drawer-tools { flex-direction: column; }
+body.layout-pin .studio-stage {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #f7f9fb;
+  border: 1px solid #c5d0dc;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+body.layout-pin .stage-bar, body.layout-pin .packet-bar, body.layout-pin .axis-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+body.layout-pin .segmented {
+  display: flex;
+  background: #e7eef5;
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+body.layout-pin .segmented button {
+  background: transparent;
+  color: #234055;
+  box-shadow: none;
+  height: 32px;
+}
+body.layout-pin .segmented button.active {
+  background: white;
+  color: #1e3348;
+  box-shadow: 0 1px 2px rgba(20, 40, 60, 0.12);
+}
+body.layout-pin .studio-charts {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+body.layout-pin .studio-charts .chart-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: white;
+  border: 1px solid #d5dee8;
+  border-radius: 8px;
+  padding: 6px 8px 8px;
+}
+body.layout-pin .studio-charts .plot { flex: 1 1 auto; height: auto; min-height: 0; }
+body.layout-pin .chart-card[hidden] { display: none; }
+body.layout-pin .tabs { display: flex; gap: 4px; background: #e7eef5; border-radius: 8px; padding: 3px; }
+body.layout-pin .tabs button { flex: 1; background: transparent; color: #234055; box-shadow: none; height: 32px; }
+body.layout-pin .tabs button.active { background: white; color: #1e3348; box-shadow: 0 1px 2px rgba(20, 40, 60, 0.12); }
+body.layout-pin .tab-page { display: none; }
+body.layout-pin .tab-page.active { display: block; }
+body.layout-pin .stack { display: grid; gap: 8px; }
+body.layout-pin .pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px 8px;
+  align-items: end;
+}
+body.layout-pin .pair > button { width: 100%; height: 32px; align-self: end; }
+body.layout-pin #sensors .sensor-line { grid-template-columns: 1fr; }
+body.layout-pin .drawer-tools { display: flex; gap: 6px; }
+body.layout-pin .icon-btn {
+  width: 34px; height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+}
+body.layout-pin .icon-btn svg { width: 18px; height: 18px; }
+body.layout-pin .icon-btn.active { background: #1f6aa5; color: white; border-color: #1f6aa5; }
+body.layout-pin .checks { display: flex; flex-wrap: wrap; gap: 8px; }
+body.layout-pin #sensors .sensor-line { grid-template-columns: 1fr; }
+body.layout-pin #log { max-height: 180px; }
+body.layout-pin .xyz-files { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+body.layout-pin .xyz-files[hidden] { display: none; }
+body.layout-pin #singleFile[hidden] { display: none; }
+body.layout-pin .fft-check .row { justify-content: space-between; align-items: center; }
+body.layout-pin #piezoFilters,
+body.layout-pin #adxlFilters { display: grid; gap: 8px; }
+body.layout-pin [data-filter] {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  column-gap: 8px;
+  row-gap: 0;
+}
+body.layout-pin [data-filter]::before {
+  content: "";
+  order: 2;
+  flex: 0 0 100%;
+  height: 0;
+}
+body.layout-pin [data-filter] > strong {
+  order: 0;
+  flex: 0 0 auto;
+  align-self: center;
+  min-width: 3.4em;
+  font-size: 12px;
+  line-height: 1;
+}
+body.layout-pin [data-filter] > label.check {
+  order: 1;
+  flex: 0 0 auto;
+  align-self: center;
+  gap: 4px;
+  min-height: 26px;
+  white-space: nowrap;
+}
+body.layout-pin [data-filter] > label:not(.check) {
+  order: 3;
+  flex: 1 1 calc(50% - 4px);
+  min-width: 0;
+  max-width: calc(50% - 4px);
+  margin-top: 4px;
+}
+body.layout-pin [data-filter] input.freq,
+body.layout-pin [data-filter] input.extra {
+  width: 100% !important;
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+body.layout-pin #sensors .sensor-line { gap: 6px; }
+body.layout-pin #sensors .sensor-line .pair input {
+  width: 100%;
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
