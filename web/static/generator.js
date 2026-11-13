@@ -1,3 +1,7 @@
+// MQTT 파형 발생기. 파일 업로드와 송신은 서버가 한다.
+// RAW/FFT는 이 페이지에 항상 둔다. 차트는 그릴 때마다 datasets를 교체하고, 점은 서버에서 상한을 둔다.
+// PIEZO와 MEMS 설정은 같이 둔다.
+// 아래 1초 status 요청은 브로커 접속이 아니라 Publish/PUBACK/Drop 숫자 갱신이다.
 if (window.ChartZoom) Chart.register(window.ChartZoom);
 
 const colors = {
@@ -109,7 +113,7 @@ function viewOptions() {
       filters: readFilters("#piezoFilters"),
     },
     adxl: {
-      axes: { X: axisX.checked, Y: axisY.checked, Z: axisZ.checked },
+      axes: { X: axisX.checked, Y: axisY.checked, Z: axisZ.checked, SRSS: srssOn.checked },
       raw_unit: adxlRaw.value,
       fft_unit: adxlFft.value,
       g_per_lsb: num(adxlG.value, 0.00390625),
@@ -166,7 +170,7 @@ function draw(preview) {
   document.querySelector("#position").textContent =
     `${preview.sensor} ${preview.index} / ${preview.count} | ${preview.info || ""}`;
   document.querySelector("#index").value = preview.index;
-  formula.textContent = [preview.formula, preview.avg_status]
+  formula.textContent = [preview.formula, preview.avg_status, preview.srss && preview.srss.text]
     .filter(Boolean)
     .join("\n");
   rotation.textContent = preview.rotation || "";
@@ -196,6 +200,15 @@ function draw(preview) {
         data: pairs(series.f, series.y, logX, logY),
       }),
     );
+    if (preview.srss && preview.srss.ok && srssOn.checked) {
+      fftChart.data.datasets.push({
+        label: "SRSS",
+        borderColor: "#9467BD",
+        borderDash: [5, 3],
+        borderWidth: 1.7,
+        data: pairs(preview.srss.f || [], preview.srss.y || [], logX, logY),
+      });
+    }
   }
   rawChart.options.plugins.title = {
     display: true,
@@ -203,7 +216,7 @@ function draw(preview) {
   };
   fftChart.options.plugins.title = {
     display: true,
-    text: preview.fft_label || "FFT",
+    text: (preview.srss && preview.srss.text) || preview.fft_label || "FFT",
   };
   rawChart.options.scales.x.type = "linear";
   rawChart.options.scales.y.type = "linear";
@@ -225,17 +238,24 @@ function draw(preview) {
   fftChart.update();
 }
 
-function openGraph() {
-  const panel = document.querySelector("#graphWindow");
-  panel.hidden = false;
-  requestAnimationFrame(() => {
-    rawChart.resize();
-    fftChart.resize();
-    panel.scrollIntoView({ behavior: "smooth", block: "start" });
+document.querySelector("#fftCheck").onclick = async () => {
+  const sensor = document.querySelector("#sensor").value;
+  const response = await fetch("/api/generator/fft-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sensor }),
   });
-}
-
-document.querySelector("#openGraph").onclick = openGraph;
+  const data = await readBody(response);
+  if (!response.ok) {
+    GraphView.showFftCheck(document.querySelector("#fftCheckBox"), {
+      ok: false,
+      message: data.detail || "검증 실패",
+      note: "① 입력 → ② 양측 FFT → ③ 단측 FFT | ② 복소수 FFT → ④ IFFT 복원 · 평균 제거/SRSS/물리단위 보정은 검증 제외",
+    });
+    return;
+  }
+  GraphView.showFftCheck(document.querySelector("#fftCheckBox"), data);
+};
 
 function enableSensor(name) {
   const box = document.querySelector(`[data-sensor="${name}"] .enabled`);
@@ -271,7 +291,6 @@ async function uploadAdxlCsv() {
   document.querySelector("#sensor").value = "ADXL";
   enableSensor("ADXL");
   showPanels();
-  openGraph();
   await move(1);
 }
 
@@ -298,7 +317,6 @@ async function upload(sensor, file) {
   document.querySelector("#sensor").value = sensor;
   enableSensor(sensor);
   showPanels();
-  openGraph();
   await move(1);
 }
 

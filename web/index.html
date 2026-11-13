@@ -1,9 +1,10 @@
+<!-- 센서 수신 모니터. 그래프는 RAW와 FFT 두 개. 설정 블록은 그래프 위에 두고 PIEZO와 MEMS를 나란히 둔다. -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
   <title>센서 수신 모니터</title>
-  <link rel="stylesheet" href="/static/style.css?v=3">
+  <link rel="stylesheet" href="/static/style.css?v=4">
 </head>
 <body>
   <header>
@@ -80,6 +81,7 @@
       <div class="row">
         <label class="check"><input id="fftLogX" type="checkbox"><span>FFT X 로그</span></label>
         <label class="check"><input id="fftLogY" type="checkbox"><span>FFT Y 로그</span></label>
+        <button type="button" class="secondary" id="fftCheck">FFT 과정 / IFFT 검증</button>
       </div>
       <div class="split">
       <fieldset>
@@ -94,7 +96,7 @@
           <label>Amax<input id="piezoAmax" class="w-num" value="4096"></label>
           <label>감도 (mV/g)<input id="piezoSens" class="w-num" value="100"></label>
           <label>FFT 창
-            <select id="piezoWindow"><option>Hann</option><option>Hamming</option><option>Rectangular</option></select>
+            <select id="piezoWindow"><option selected>Blackman</option><option>Hann</option><option>Hamming</option><option>Rectangular</option></select>
           </label>
           <label>Window N
             <select id="piezoN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
@@ -118,7 +120,7 @@
           <label>1 LSB = (g)<input id="adxlG" value="0.00390625" style="width:120px"></label>
           <label>FFT Window
             <select id="adxlWindow">
-              <option>Rectangular</option><option selected>Hann</option><option>Hamming</option><option>Blackman</option>
+              <option>Rectangular</option><option>Hann</option><option>Hamming</option><option selected>Blackman</option>
               <option>Blackman-Harris</option><option>Flat Top</option><option>Bartlett</option><option>Kaiser</option>
             </select>
           </label>
@@ -126,6 +128,7 @@
             <select id="adxlN"><option>전체</option><option>1024</option><option>2048</option><option>4096</option><option>8192</option></select>
           </label>
           <label>Kaiser β<input id="adxlBeta" class="w-num" value="8.6"></label>
+          <label class="check"><input id="srssOn" type="checkbox" checked><span>SRSS</span></label>
           <label class="check"><input id="freqOn" type="checkbox" checked><span>주파수 보정 ON</span></label>
           <label class="check"><input id="sensOn" type="checkbox" checked><span>Sensitivity 보정 ON</span></label>
         </div>
@@ -134,6 +137,15 @@
       </div>
       <p id="formula" class="formula"></p>
     </details>
+    <div id="fftCheckBox" class="fft-check" hidden>
+      <p class="fft-check-note hint"></p>
+      <label class="fft-check-axis-label">축 <select class="fft-check-axis"></select></label>
+      <pre class="fft-check-text"></pre>
+      <div class="fft-previews">
+        <div><p>② 양측 FFT</p><canvas class="two" width="520" height="110"></canvas></div>
+        <div><p>③ 단측 FFT</p><canvas class="one" width="520" height="110"></canvas></div>
+      </div>
+    </div>
 
     <section class="card">
       <p class="hint">휠: X·Y 확대 · 왼쪽 버튼 유지 + 휠: X축만 · 오른쪽 버튼 유지 + 휠: Y축만 · 왼쪽 드래그: 이동 · 오른쪽 클릭: 메뉴</p>
@@ -164,7 +176,7 @@
   <script src="/static/chart.umd.min.js"></script>
   <script src="/static/hammer.min.js"></script>
   <script src="/static/chartjs-plugin-zoom.min.js"></script>
-  <script src="/static/graph.js?v=7"></script>
-  <script src="/static/monitor.js?v=8"></script>
+  <script src="/static/graph.js?v=8"></script>
+  <script src="/static/monitor.js?v=9"></script>
 </body>
 </html>

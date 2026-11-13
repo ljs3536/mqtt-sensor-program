@@ -1,6 +1,8 @@
-# Local web UI for the MQTT replay generator and the piezo/ADXL monitor.
-# Run from the project root:
-#   .venv\Scripts\python.exe -m uvicorn web.server:app --host 127.0.0.1 --port 8080
+# 로컬 웹 서버. 페이지는 센서 수신 모니터(/)와 MQTT 파형 발생기(/generator) 두 개다.
+# 브라우저는 화면만 그린다. MQTT, HEX 디코드, FFT, CSV는 이 프로세스가 한다.
+# 데스크톱 py는 import하지 않는다. 계산은 web.core, 그래프 수식은 web.analysis.
+# 실행: .venv\Scripts\python.exe -m uvicorn web.server:app --host 127.0.0.1 --port 8080
+# 기능 설명: docs/웹-기능상세.md
 
 from __future__ import annotations
 
@@ -9,6 +11,7 @@ import json
 import queue
 import random
 import sys
+import tempfile
 import threading
 import time
 from collections import deque
@@ -37,8 +40,6 @@ def _mqtt_client(client_id):
         return mqtt.Client(client_id=client_id)
 
 WEB = Path(__file__).resolve().parent
-UPLOADS = WEB / "uploads"
-UPLOADS.mkdir(exist_ok=True)
 DATA_CSV = ROOT / "data_csv"
 DATA_CSV.mkdir(exist_ok=True)
 
@@ -113,6 +114,16 @@ def _pack_curves(curves):
         "series": {},
         "fft": {},
     }
+    srss = curves.get("srss")
+    if srss:
+        packed["srss"] = {
+            "ok": bool(srss.get("ok")),
+            "text": srss.get("text") or "",
+            "unit": srss.get("unit") or "",
+            "level": None if srss.get("level") is None else float(srss["level"]),
+            "f": [float(value) for value in (srss.get("f") or [])],
+            "y": [float(value) for value in (srss.get("y") or [])],
+        }
     if curves["kind"] == "spectrum":
         packed["x"], packed["y"] = _pack_pair(curves.get("x"), curves.get("y"))
         return packed
@@ -126,6 +137,12 @@ def _pack_curves(curves):
 
 
 class ReplayService:
+    """파일에 있는 패킷을 고른 위치부터 MQTT로 반복 송신한다.
+
+    브로커에는 연결 테스트와 전송 시작 때만 붙는다.
+    status()는 메모리의 횟수와 로그만 돌려주고 브로커를 호출하지 않는다.
+    """
+
     def __init__(self):
         self.lock = threading.Lock()
         self.templates = {}
@@ -164,7 +181,7 @@ class ReplayService:
     def log(self, text):
         self.logs.append(f"{time.strftime('%H:%M:%S')} {text}")
 
-    def store(self, sensor, path):
+    def store(self, sensor, path, label=None):
         if sensor == "PIEZO":
             items = gen.load_piezo_templates(path)
         elif sensor == "초음파":
@@ -177,7 +194,7 @@ class ReplayService:
         with self.lock:
             self.templates[sensor] = items
             self.index[sensor] = 0
-            self.paths[sensor] = path
+            self.paths[sensor] = label or Path(path).name
             self.log(f"[{sensor}] {len(items)}개 패킷 로드")
         return len(items)
 
@@ -215,6 +232,40 @@ class ReplayService:
         packed = _pack_curves(curves)
         packed.update({"sensor": sensor, "index": index + 1, "count": len(data)})
         return packed
+
+    def fft_check(self, sensor):
+        sensor = str(sensor or "")
+        if sensor == "초음파":
+            return analysis.fft_check_unavailable(
+                "초음파 H는 위상이 없는 스펙트럼이라 FFT/IFFT 검증을 할 수 없습니다."
+            )
+        with self.lock:
+            data = list(self.templates.get(sensor) or [])
+            index = int(self.index.get(sensor, 0))
+        if sensor not in ("PIEZO", "ADXL") or not data:
+            return analysis.fft_check_unavailable(
+                "선택된 RAW 데이터가 없습니다. 초음파 H는 위상이 없는 스펙트럼입니다."
+            )
+        index = max(0, min(len(data) - 1, index))
+        packet = data[index]
+        records = []
+        try:
+            if sensor == "PIEZO":
+                raw, fs = analysis.decode_wave("PIEZO", packet)
+                if raw.size >= 2 and fs > 0:
+                    records.append(("PIEZO", raw, fs))
+            else:
+                for axis in ("X", "Y", "Z"):
+                    obj = packet.get(axis) if isinstance(packet, dict) else None
+                    if not obj:
+                        continue
+                    raw, fs = analysis.decode_wave("ADXL", obj)
+                    if raw.size >= 2 and fs > 0:
+                        records.append((axis, raw, fs))
+        except (ValueError, TypeError) as exc:
+            return analysis.fft_check_unavailable(str(exc))
+        title = "{} 패킷 {}/{}".format(sensor, index + 1, len(data))
+        return analysis.fft_check_many(records, title)
 
     def _on_publish(self, *_args):
         with self.lock:
@@ -437,6 +488,11 @@ def _picked(values, index):
 
 
 def _sensor_config(sensor, period, profile, stop=False):
+    """모니터 명령 JSON. COMMPATH는 0으로 고정한다.
+
+    STOP은 SENSORTYPE 0, PIEZO 동작은 1, ADXL 동작은 2다.
+    데스크톱 모드 A의 collection 3/4와 retain 삭제 단계는 여기서 만들지 않는다.
+    """
     period_text = str(int(period))
     if int(period) < 0:
         raise ValueError("측정 주기는 0 이상의 정수(초)여야 합니다")
@@ -468,6 +524,11 @@ def _sensor_config(sensor, period, profile, stop=False):
 
 
 class CsvWriter:
+    """수신 패킷을 data_csv/YYYYMMDD_HHMMSS 에 HEX와 decoded로 나눠 쓴다.
+
+    측정 START와 무관하게, CSV 저장이 켜진 연결 세션 동안만 기록한다.
+    축 패킷은 도착 즉시 그 축 파일에 쓰고, 행마다 flush한다.
+    """
     def __init__(self):
         self.queue = queue.Queue()
         self.session_dir = None
@@ -586,6 +647,12 @@ class CsvWriter:
 
 
 class MonitorService:
+    """MQTT 구독으로 최신 파형을 유지한다. 시리얼은 열지 않는다.
+
+    그래프 장치의 빈 값은 최근 수신 MAC이다.
+    디코드 실패와 처리 예외는 로그만 남기고 다음 패킷을 계속 받는다.
+    초음파는 samplerate와 numofsample이 둘 다 비어 있을 때만 H로 본다.
+    """
     def __init__(self):
         self.lock = threading.Lock()
         self.client = None
@@ -642,7 +709,12 @@ class MonitorService:
                 samples = mon.decode_vibration_samples(sensor_hex, obj.get("numofsample"))
                 record = {"kind": "waveform", "samples": np.asarray(samples, dtype=np.float64), "fs": fs, "physical": True}
         except Exception as exc:
-            self.log(f"디코드 실패 {device}/{kind}: {exc}")
+            seq = obj.get("seq", "")
+            axis_name = "H" if kind == "ULTRASONIC" else axis
+            self.log(
+                f"{kind} Graph Decode 오류 {device or '?'}/{axis_name} "
+                f"seq={seq}: {exc} (해당 프레임 제외, 그래프 처리 계속)"
+            )
             return
         record.update({"device": device or topic, "axis": axis, "sensor": kind, "received_at": datetime.now().isoformat(timespec="milliseconds")})
         device_id = record["device"]
@@ -780,7 +852,45 @@ class MonitorService:
                 views[axis] = self._pack_shown(record, shared[axis], window)
             else:
                 views[axis] = self._view(record, window, options)
+        if "_srss" in shared:
+            views["_srss"] = shared["_srss"]
         return views
+
+    def fft_check(self, device=""):
+        with self.lock:
+            names = list(self.records)
+            target = device if device in self.records else ""
+            if not target:
+                target = self.latest_device if self.latest_device in self.records else (names[-1] if names else "")
+            snapshot = {
+                axis: dict(record)
+                for axis, record in self.records.get(target, {}).items()
+            } if target else {}
+        if not snapshot:
+            return analysis.fft_check_unavailable(
+                "선택된 RAW 데이터가 없습니다. 초음파 H는 위상이 없는 스펙트럼입니다."
+            )
+        has_h = False
+        records = []
+        for axis, record in snapshot.items():
+            if record.get("kind") == "spectrum":
+                has_h = True
+                continue
+            samples = np.asarray(record.get("samples"), dtype=np.float64)
+            fs = float(record.get("fs") or 0)
+            if samples.size >= 2 and fs > 0 and samples.ndim == 1 and np.all(np.isfinite(samples)):
+                records.append((str(record.get("axis") or axis), samples, fs))
+        if not records:
+            message = (
+                "초음파 H는 위상이 없는 스펙트럼이라 FFT/IFFT 검증을 할 수 없습니다."
+                if has_h else
+                "선택된 RAW 데이터가 없습니다. 초음파 H는 위상이 없는 스펙트럼입니다."
+            )
+            return analysis.fft_check_unavailable(message)
+        result = analysis.fft_check_many(records, str(target or ""))
+        if has_h:
+            result["message"] = result["message"] + " | 초음파 H는 위상이 없어 검증에서 제외"
+        return result
 
     def _on_message(self, _client, _userdata, msg):
         with self.lock:
@@ -790,9 +900,16 @@ class MonitorService:
         except Exception:
             self.log(f"{msg.topic} JSON 아님 ({len(msg.payload)} bytes)")
             return
+        # 한 프레임의 오류가 paho 콜백을 끝내면 이후 수신이 멈춘다.
         if isinstance(obj, dict):
-            with self.lock:
-                self._remember(str(msg.topic), obj)
+            try:
+                with self.lock:
+                    self._remember(str(msg.topic), obj)
+            except Exception as exc:
+                self.log(
+                    f"수신 프레임 처리 오류 {msg.topic}: {exc} "
+                    "(해당 프레임 제외, 그래프 처리 계속)"
+                )
 
     def connect_mqtt(self, host, port, topic, csv_enabled=True):
         self.disconnect()
@@ -836,6 +953,7 @@ class MonitorService:
         self.mode = ""
 
     def publish_config(self, macs, payload, label, retain=True):
+        """S/{MAC} 로 설정 JSON을 보낸다. retain 명령은 끝에 CR LF를 붙인다."""
         if self.client is None or not self.connected:
             raise ValueError("먼저 MQTT에 연결하세요")
         if not macs:
@@ -896,9 +1014,20 @@ def generator_page():
     return FileResponse(WEB / "generator.html")
 
 
-def _save_upload(dest: Path, data: bytes) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_bytes(data)
+def _with_upload(filename, data, load):
+    """바이트를 임시 파일로만 넘기고, 파싱이 끝나면 바로 지운다.
+
+    재생에 쓰는 패킷은 메모리에 남는다. web/uploads 폴더는 만들지 않는다.
+    """
+    suffix = Path(filename or "data.txt").suffix or ".txt"
+    handle = tempfile.NamedTemporaryFile(prefix="sensor-upload-", suffix=suffix, delete=False)
+    path = Path(handle.name)
+    try:
+        handle.write(data)
+        handle.close()
+        return load(path)
+    finally:
+        path.unlink(missing_ok=True)
 
 
 @app.get("/monitor")
@@ -915,10 +1044,14 @@ def archive_page():
 async def upload_sensor(sensor: str = Form(...), file: UploadFile = File(...)):
     if sensor not in ("PIEZO", "ADXL", "초음파"):
         raise HTTPException(400, "센서는 PIEZO, ADXL, 초음파 중 하나여야 합니다")
-    dest = UPLOADS / f"{sensor}_{Path(file.filename or 'data.txt').name}"
+    original = Path(file.filename or "data.txt").name
     try:
-        _save_upload(dest, await file.read())
-        count = replay.store(sensor, str(dest))
+        payload = await file.read()
+        count = _with_upload(
+            original,
+            payload,
+            lambda path: replay.store(sensor, str(path), label=original),
+        )
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"sensor": sensor, "count": count, "preview": replay.preview(sensor, 0)}
@@ -937,20 +1070,30 @@ async def upload_adxl_csv(
     z: UploadFile = File(...),
     recover_partial: str = Form("true"),
 ):
-    paths = {}
-    for axis, item in (("X", x), ("Y", y), ("Z", z)):
-        dest = UPLOADS / f"ADXL_{axis}_{Path(item.filename or axis).name}"
-        try:
-            _save_upload(dest, await item.read())
-        except OSError as exc:
-            raise HTTPException(400, f"{axis} CSV 저장 실패: {exc}") from exc
-        paths[axis] = str(dest)
-    recover = _form_flag(recover_partial, default=True)
+    files = {}
     try:
+        for axis, item in (("X", x), ("Y", y), ("Z", z)):
+            files[axis] = (Path(item.filename or f"{axis}.csv").name, await item.read())
+    except Exception as exc:
+        raise HTTPException(400, f"CSV 읽기 실패: {exc}") from exc
+    recover = _form_flag(recover_partial, default=True)
+    handles = []
+    try:
+        paths = {}
+        for axis, (name, payload) in files.items():
+            suffix = Path(name).suffix or ".csv"
+            handle = tempfile.NamedTemporaryFile(prefix=f"sensor-adxl-{axis}-", suffix=suffix, delete=False)
+            handle.write(payload)
+            handle.close()
+            handles.append(Path(handle.name))
+            paths[axis] = handle.name
         count = replay.store_adxl_csv(paths, recover_partial=recover)
         preview = replay.preview("ADXL", 0)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+    finally:
+        for path in handles:
+            path.unlink(missing_ok=True)
     return {"count": count, "sensor": "ADXL", "recover_partial": recover, "preview": preview}
 
 
@@ -958,6 +1101,14 @@ async def upload_adxl_csv(
 def generator_preview(sensor: str, index: int = 1):
     try:
         return replay.preview(sensor, index - 1)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/api/generator/fft-check")
+async def generator_fft_check(body: dict):
+    try:
+        return replay.fft_check(body.get("sensor"))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -995,6 +1146,7 @@ def generator_stop():
 
 @app.get("/api/generator/status")
 def generator_status():
+    # 화면의 Publish/PUBACK/Drop 갱신용. 이 요청은 브로커에 접속하지 않는다.
     return replay.status()
 
 
@@ -1022,6 +1174,14 @@ def monitor_disconnect():
 @app.get("/api/monitor/state")
 def monitor_state(device: str = ""):
     return monitor.state(device)
+
+
+@app.post("/api/monitor/fft-check")
+async def monitor_fft_check(body: dict):
+    try:
+        return monitor.fft_check(str(body.get("device") or ""))
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/api/monitor/view")

@@ -1,14 +1,14 @@
-"""Graph math for the web UI.
+"""웹 그래프 수식. MQTT payload와 저장 HEX는 여기서 바꾸지 않는다.
 
-Curves call the same functions as the desktop programs. Nothing here rewrites
-MQTT payloads or saved HEX. Sample-rate codes such as 15 or 0x0F are turned
-into Hz with the receiver's existing table.
+발생기 곡선은 generator_curves, 모니터 단일 축은 monitor_curves,
+ADXL X/Y/Z 공유 눈금은 monitor_adxl_set이 만든다.
+모니터는 시간을 초, FFT 주파수를 Hz로 되돌린다. 발생기 미리보기는 ms, kHz다.
 
-단위는 이 파일에서만 붙인다.
 PIEZO: K = 1000 × Vmax / Amax [mV/Count], g = (Count−평균) × K / 감도.
 ADXL: g = Count × (g/LSB). FFT g RMS = Count Peak × (g/LSB) / √2.
-ADXL FFT 최종값: G_final = G / S(f), f_final = f / 1.014.
-식과 기본값은 docs/단위환산.md 와 같다.
+ADXL FFT 보정: G_final = G / S(f), f_final = f / 1.014.
+SRSS는 X/Y/Z 단측 peak로 만든 전체 AC RMS 하나이고 FFT 가로선으로만 그린다.
+기본 FFT 창은 Blackman이다. 식의 기본값은 docs/단위환산.md, 화면 동작은 docs/웹-기능상세.md.
 """
 
 from __future__ import annotations
@@ -20,7 +20,8 @@ from web import core as mon
 
 
 PIEZO_UNITS = ("Count", "mV", "g RMS", "mm/s RMS")
-PIEZO_WINDOWS = ("Hann", "Hamming", "Rectangular")
+PIEZO_WINDOWS = ("Blackman", "Hann", "Hamming", "Rectangular")
+SRSS_MISSING = "SRSS: 완전한 XYZ 데이터 없음"
 ADXL_RAW_UNITS = ("자동 (g/mg/µg)", "Count", "g", "mg", "µg")
 ADXL_FFT_UNITS = ("자동 (g RMS)", "Count Peak", "g Peak", "g RMS")
 
@@ -75,16 +76,16 @@ def default_options():
             "vmax": 3.89,
             "amax": 4096,
             "sensitivity": 100,
-            "window": "Hann",
+            "window": "Blackman",
             "window_n": "전체",
             "filters": _filter_block(10, 3000),
         },
         "adxl": {
-            "axes": {"X": True, "Y": True, "Z": True},
+            "axes": {"X": True, "Y": True, "Z": True, "SRSS": True},
             "raw_unit": "자동 (g/mg/µg)",
             "fft_unit": "자동 (g RMS)",
             "g_per_lsb": gen.read_mems_g_per_lsb(),
-            "window": "Hann",
+            "window": "Blackman",
             "window_n": "전체",
             "beta": 8.6,
             "filters": _filter_block(10, 1000),
@@ -191,7 +192,7 @@ def _average(sensor, packets, index, options):
                     raise ValueError("샘플 부족")
                 if sensor == "PIEZO":
                     source = gen.spectral_filter(raw - np.mean(raw), fs, **_filter_kwargs(piezo["filters"], "FFT"))
-                    window = piezo["window"] if piezo["window"] in PIEZO_WINDOWS else "Hann"
+                    window = piezo["window"] if piezo["window"] in PIEZO_WINDOWS else "Blackman"
                     freq, amp = gen.fft_peak(source, fs, window, _window_n(piezo.get("window_n")))
                 else:
                     source = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT"))
@@ -199,7 +200,7 @@ def _average(sensor, packets, index, options):
                     if count is not None and count > raw.size:
                         raise ValueError("FFT Window N이 패킷 샘플 수보다 큼")
                     freq, amp = gen.fft_peak(
-                        source, fs, adxl.get("window") or "Hann", count, _num(adxl.get("beta"), 8.6)
+                        source, fs, _window_name(adxl.get("window")), count, _num(adxl.get("beta"), 8.6)
                     )
                 if reference_f is None:
                     reference_f = freq
@@ -238,7 +239,7 @@ def _piezo_curves(packet, averaged, options):
     centered = raw - np.mean(raw)
     filtered = gen.spectral_filter(centered, fs, **_filter_kwargs(piezo["filters"], "RAW"))
     fft_src = gen.spectral_filter(centered, fs, **_filter_kwargs(piezo["filters"], "FFT"))
-    window = piezo.get("window") if piezo.get("window") in PIEZO_WINDOWS else "Hann"
+    window = piezo.get("window") if piezo.get("window") in PIEZO_WINDOWS else "Blackman"
     count = _window_n(piezo.get("window_n"))
     if count is not None and count > raw.size:
         raise ValueError(f"Window N={count} > 실제 샘플 {raw.size}")
@@ -291,7 +292,119 @@ def _piezo_curves(packet, averaged, options):
     }
 
 
-def _adxl_curves(packet, averaged, options):
+def _window_name(value):
+    name = str(value or "Blackman").strip()
+    if name not in gen.FFT_WINDOWS:
+        return "Blackman"
+    return name
+
+
+def _line_samples(freq, level, limit=256):
+    freq = np.asarray(freq, dtype=np.float64)
+    if freq.size == 0 or not np.isfinite(level):
+        return [], []
+    step = max(1, int(np.ceil(freq.size / float(limit))))
+    index = np.arange(0, freq.size, step)
+    if int(index[-1]) != freq.size - 1:
+        index = np.append(index, freq.size - 1)
+    chosen = freq[index]
+    height = float(level)
+    return [float(value) for value in chosen], [height for _value in chosen]
+
+
+def _srss_from_packets(packets, index, options):
+    """Packet SRSS scalars. Averaging means the scalars, never an averaged spectrum."""
+    adxl = options["adxl"]
+    fft_mode = adxl.get("fft_unit") if adxl.get("fft_unit") in ADXL_FFT_UNITS else ADXL_FFT_UNITS[0]
+    window = _window_name(adxl.get("window"))
+    beta = _num(adxl.get("beta"), 8.6)
+    count = _window_n(adxl.get("window_n"))
+    correction = _correction(options)
+    g_per_lsb = _num(adxl.get("g_per_lsb"), gen.read_mems_g_per_lsb())
+    packets = list(packets or [])
+    if not packets:
+        return [], None, 0, False
+    index = max(0, min(len(packets) - 1, int(index)))
+    averaging = _flag(options.get("fft_avg"))
+    if averaging:
+        choice = str(options.get("fft_avg_count") or "16").strip()
+        amount = (len(packets) - index) if choice == "전체" else int(float(choice))
+        if amount < 1:
+            raise ValueError("FFT 평균 개수는 1 이상이어야 합니다")
+        chosen = packets[index:index + amount]
+    else:
+        chosen = [packets[index]]
+    levels = []
+    reference = None
+    line_freq = None
+    for packet in chosen:
+        try:
+            if not isinstance(packet, dict) or any(packet.get(axis) is None for axis in ("X", "Y", "Z")):
+                continue
+            powers = []
+            signature = None
+            current_f = None
+            for axis in ("X", "Y", "Z"):
+                raw, fs = decode_wave("ADXL", packet[axis])
+                nn = int(raw.size if count is None else count)
+                if nn < 2 or nn > int(raw.size) or fs <= 0:
+                    raise ValueError("SRSS N")
+                sig = (float(fs), int(raw.size), nn)
+                if signature is not None and sig != signature:
+                    raise ValueError("SRSS XYZ mismatch")
+                signature = sig
+                fft_src = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT"))
+                freq, peak = gen.fft_peak(fft_src, fs, window, count, beta)
+                peak_scale = 1.0 if fft_mode == "Count Peak" else g_per_lsb
+                corrected_f, corrected_peak = gen.corrected_mems_fft(
+                    freq,
+                    peak * peak_scale,
+                    correction,
+                    apply_sensitivity=fft_mode != "Count Peak",
+                )
+                if current_f is not None and (
+                    corrected_f.shape != current_f.shape or not np.array_equal(corrected_f, current_f)
+                ):
+                    raise ValueError("SRSS bins")
+                current_f = corrected_f
+                powers.append(gen.srss_axis_power(corrected_peak, nn, gen.fft_window(nn, window, beta)))
+            if reference is not None and signature != reference:
+                continue
+            reference = signature
+            line_freq = current_f
+            levels.append(float(np.sqrt(float(np.sum(powers)))))
+        except (ValueError, TypeError, OverflowError):
+            continue
+    return levels, line_freq, len(chosen), averaging
+
+
+def _adxl_srss(packet, options, packets, index, fft_mode, fft_scale, fft_label, lsb):
+    try:
+        levels, line_freq, searched, averaging = _srss_from_packets(
+            packets if packets else [packet], index, options
+        )
+    except (ValueError, TypeError, OverflowError):
+        levels, line_freq, searched, averaging = [], None, 0, False
+    if not levels or line_freq is None or np.asarray(line_freq).size == 0:
+        return {"ok": False, "text": SRSS_MISSING, "unit": "", "level": None, "f": [], "y": []}
+    level = float(np.mean(levels))
+    if str(fft_mode).startswith("자동"):
+        level *= float(fft_scale) * lsb * np.sqrt(2.0)
+        unit = fft_label
+    elif fft_mode == "Count Peak":
+        unit = "Count RMS"
+    else:
+        unit = "g RMS"
+    if not np.isfinite(level):
+        return {"ok": False, "text": SRSS_MISSING, "unit": "", "level": None, "f": [], "y": []}
+    text = "SRSS = {:.6g} {}".format(level, unit)
+    if averaging:
+        text += " | 평균 {}/{}회".format(len(levels), searched)
+    line_f, line_y = _line_samples(np.asarray(line_freq, dtype=np.float64) / 1000.0, level)
+    return {"ok": True, "text": text, "unit": unit, "level": float(level), "f": line_f, "y": line_y}
+
+
+def _adxl_curves(packet, averaged, options, packets=None, index=0):
     adxl = options["adxl"]
     g_per_lsb = _num(adxl.get("g_per_lsb"), gen.read_mems_g_per_lsb())
     if not 0 < g_per_lsb <= 10:
@@ -301,7 +414,7 @@ def _adxl_curves(packet, averaged, options):
     correction = _correction(options)
     raw_mode = adxl.get("raw_unit") if adxl.get("raw_unit") in ADXL_RAW_UNITS else ADXL_RAW_UNITS[0]
     fft_mode = adxl.get("fft_unit") if adxl.get("fft_unit") in ADXL_FFT_UNITS else ADXL_FFT_UNITS[0]
-    window = adxl.get("window") or "Hann"
+    window = _window_name(adxl.get("window"))
     beta = _num(adxl.get("beta"), 8.6)
     count = _window_n(adxl.get("window_n"))
     enabled = adxl.get("axes") or {}
@@ -385,6 +498,7 @@ def _adxl_curves(packet, averaged, options):
         "AC g RMS=std(Count/LSB) | 미리보기 전용"
     )
     rotation = _rotation(spectra, options)
+    srss = _adxl_srss(packet, options, packets, index, fft_mode, fft_scale, fft_label, lsb)
     return {
         "kind": "waveform",
         "x_label": "Time (ms)",
@@ -393,6 +507,7 @@ def _adxl_curves(packet, averaged, options):
         "fft_label": fft_label,
         "series": series,
         "fft": fft,
+        "srss": srss,
         "info": " | ".join(summaries + peaks) if summaries else "표시할 축 없음",
         "formula": formula,
         "rotation": rotation,
@@ -444,6 +559,7 @@ def _ultrasonic(packet):
 
 
 def generator_curves(sensor, packet, packets, index, options):
+    """파일 한 패킷의 RAW/FFT. 초음파는 스펙트럼만 있고 FFT 서브플롯이 없다."""
     options = resolve_options(options)
     averaged, status = ({}, "")
     if sensor in ("PIEZO", "ADXL"):
@@ -453,7 +569,7 @@ def generator_curves(sensor, packet, packets, index, options):
     elif sensor == "PIEZO":
         curves = _piezo_curves(packet, averaged, options)
     elif sensor == "ADXL":
-        curves = _adxl_curves(packet, averaged, options)
+        curves = _adxl_curves(packet, averaged, options, packets, index)
     else:
         raise ValueError("알 수 없는 센서")
     curves["avg_status"] = status
@@ -477,7 +593,7 @@ def monitor_adxl_set(axis_samples, options):
     if not packet:
         return {}
     options["adxl"]["axes"] = {axis: axis in packet for axis in ("X", "Y", "Z")}
-    curves = _adxl_curves(packet, {}, options)
+    curves = _adxl_curves(packet, {}, options, [packet], 0)
     shown = {}
     for axis in packet:
         wave = curves["series"][axis]
@@ -494,6 +610,15 @@ def monitor_adxl_set(axis_samples, options):
             "fft_log_x": _flag(options.get("fft_log_x")),
             "fft_log_y": _flag(options.get("fft_log_y")),
         }
+    srss = curves.get("srss") or {}
+    shown["_srss"] = {
+        "ok": bool(srss.get("ok")),
+        "text": srss.get("text") or "",
+        "unit": srss.get("unit") or "",
+        "level": None if srss.get("level") is None else float(srss["level"]),
+        "f": [float(value) * 1000.0 for value in (srss.get("f") or [])],
+        "y": [float(value) for value in (srss.get("y") or [])],
+    }
     return shown
 
 
@@ -532,3 +657,79 @@ def monitor_curves(samples, fs, sensor_kind, options, axis="X"):
 def _counts_to_hex(samples):
     clipped = np.clip(np.rint(samples), -32768, 32767).astype(">i2")
     return clipped.tobytes().hex()
+
+
+FFT_CHECK_NOTE = (
+    "① 입력 → ② 양측 FFT → ③ 단측 FFT | "
+    "② 복소수 FFT → ④ IFFT 복원 · 평균 제거/SRSS/물리단위 보정은 검증 제외"
+)
+FFT_CHECK_STEPS = [
+    "① 입력: 원본 RAW Count. 평균을 빼지 않는다.",
+    "② 양측 FFT: np.fft.fft 후 fftshift. 표시 크기 = |FFT| / N.",
+    "③ 단측 FFT: DC와 짝수 N의 Nyquist를 제외하고 양측 크기의 2배.",
+    "④ IFFT: ②의 복소수 FFT를 np.fft.ifft로 되돌린다.",
+    "평균 제거, SRSS, g·mm/s 같은 물리단위 보정은 이 검증에 넣지 않는다.",
+    "PASS: 복원된 실수부가 입력과 allclose (rtol 1e-10, atol 1e-8).",
+]
+
+
+def fft_check_unavailable(message):
+    return {
+        "ok": False,
+        "passed": None,
+        "title": "FFT 과정 / IFFT 검증",
+        "note": FFT_CHECK_NOTE,
+        "steps": list(FFT_CHECK_STEPS),
+        "message": message,
+        "axes": [],
+    }
+
+
+def _decimate_xy(x_values, y_values, limit=160):
+    x_data = np.asarray(x_values, dtype=np.float64)
+    y_data = np.asarray(y_values, dtype=np.float64)
+    count = min(x_data.size, y_data.size)
+    if count == 0:
+        return [], []
+    step = max(1, int(np.ceil(count / float(limit))))
+    index = np.arange(0, count, step)
+    if int(index[-1]) != count - 1:
+        index = np.append(index, count - 1)
+    return [float(value) for value in x_data[index]], [float(value) for value in y_data[index]]
+
+
+def fft_check_many(records, title):
+    """복소수 FFT를 그대로 IFFT로 되돌려 입력과 비교한다.
+
+    평균 제거, SRSS, g·mm/s 환산은 넣지 않는다.
+    미리보기 점만 줄이고, 판정에 쓰는 오차는 원본 길이로 계산한다.
+    """
+    axes = []
+    for label, samples, fs in records:
+        diagnostic = gen.fft_roundtrip_diagnostic(samples, fs)
+        two_f, two_y = _decimate_xy(diagnostic["f"], diagnostic["magnitude"])
+        one_f, one_y = _decimate_xy(diagnostic["single_f"], diagnostic["single_magnitude"])
+        axes.append({
+            "label": str(label),
+            "passed": bool(diagnostic["passed"]),
+            "max_error": float(diagnostic["max_error"]),
+            "rms_error": float(diagnostic["rms_error"]),
+            "imag_error": float(diagnostic["imag_error"]),
+            "n": int(diagnostic["n"]),
+            "fs": float(diagnostic["fs"]),
+            "text": gen.fft_diagnostic_text(diagnostic, str(label)),
+            "two_sided": {"f": two_f, "y": two_y},
+            "single_sided": {"f": one_f, "y": one_y},
+        })
+    if not axes:
+        return fft_check_unavailable("선택된 RAW 데이터가 없습니다. 초음파 H는 위상이 없는 스펙트럼입니다.")
+    passed = all(item["passed"] for item in axes)
+    return {
+        "ok": True,
+        "passed": passed,
+        "title": title,
+        "note": FFT_CHECK_NOTE,
+        "steps": list(FFT_CHECK_STEPS),
+        "message": "IFFT PASS" if passed else "IFFT FAIL",
+        "axes": axes,
+    }

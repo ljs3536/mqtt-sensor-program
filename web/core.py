@@ -1,7 +1,18 @@
-"""Sensor decode, file load, and graph math used by the web app.
+"""웹 전용 디코드·파일 로드·FFT. 데스크톱 py를 import하지 않기 위해 복사해 둔 계산이다.
 
-Copied from the desktop programs so the website does not import those modules.
-JSON scale files stay next to the project root.
+JSON 스케일 파일은 프로젝트 루트(이 패키지의 부모)에 있다.
+화면에서 고른 단위와 SRSS, 필터는 그래프에만 쓰이고 sensorData HEX는 다시 쓰지 않는다.
+기능 설명은 docs/웹-기능상세.md.
+
+구역:
+- MEMS g/LSB와 주파수·감도 보정
+- 발생기 파일 로드(JSON, PIEZO/초음파 CSV, ADXL XYZ CSV, 깨진 HEX 앞부분 복구)
+- decode_packet, 초음파 스펙트럼, spectral_filter, fft_window, fft_peak
+- srss_axis_power: 단측 peak를 창 전력으로 보정한 AC 평균제곱. DC 가중치 0
+- fft_roundtrip_diagnostic: 양측 FFT와 IFFT가 입력을 복원하는지 확인
+- 수신 분류: seq 상위 nibble, classify_vibration, classify_ultrasonic
+  초음파는 samplerate와 numofsample이 둘 다 비어 있을 때만 H다
+- PIEZO는 7D escape를 풀고, ADXL 진동 샘플은 풀지 않은 채 signed int16으로 읽는다
 """
 from __future__ import annotations
 
@@ -672,7 +683,7 @@ def spectral_filter(x, fs, *, hpf=False, hp_cutoff=10.0, hp_order=4,
 
 FFT_WINDOWS=('Rectangular','Hann','Hamming','Blackman','Blackman-Harris','Flat Top','Bartlett','Kaiser')
 
-def fft_window(n, name='Hann', beta=8.6):
+def fft_window(n, name='Blackman', beta=8.6):
     if name=='Rectangular': return np.ones(n)
     if name=='Hamming': return np.hamming(n)
     if name=='Blackman': return np.blackman(n)
@@ -686,7 +697,8 @@ def fft_window(n, name='Hann', beta=8.6):
         return .21557895-.41663158*np.cos(a)+.277263158*np.cos(2*a)-.083578947*np.cos(3*a)+.006947368*np.cos(4*a)
     return np.hanning(n)
 
-def fft_peak(x,fs,window='Hann',window_size=None,beta=8.6):
+def fft_peak(x,fs,window='Blackman',window_size=None,beta=8.6):
+    """평균을 뺀 뒤 창을 곱한 단측 peak. DC와 짝수 N Nyquist는 2배하지 않는다."""
     x=np.asarray(x,dtype=np.float64)
     n=len(x) if window_size is None else min(len(x),max(2,int(window_size)))
     if n<2: return np.array([]),np.array([])
@@ -700,6 +712,62 @@ def fft_peak(x,fs,window='Hann',window_size=None,beta=8.6):
     mag[0]/=2
     if n%2==0: mag[-1]/=2
     return np.fft.rfftfreq(n,d=1/fs),mag
+
+
+def srss_axis_power(peak, n, window):
+    """One-sided coherent-gain peak spectrum -> window-power-corrected AC mean square.
+    DC excluded; Nyquist is not a paired bin. Units follow the input peak amplitudes.
+    """
+    a=np.asarray(peak,dtype=float)
+    w=np.asarray(window,dtype=float)
+    if n<2 or len(w)!=n or len(a)!=n//2+1 or not np.all(np.isfinite(a)):
+        raise ValueError('SRSS: FFT N/Window mismatch')
+    den=n*float(np.sum(w*w))
+    if den<=0: raise ValueError('SRSS: invalid window')
+    weights=np.full(len(a),0.5); weights[0]=0.0
+    if n%2==0: weights[-1]=1.0
+    return float(np.sum(weights*a*a)*float(np.sum(w))**2/den)
+
+
+def fft_roundtrip_diagnostic(samples, fs, gain=None):
+    x = np.asarray(samples, dtype=np.float64)
+    fs = float(fs)
+    if x.ndim != 1 or len(x) < 2 or fs <= 0 or not np.isfinite(fs) or not np.all(np.isfinite(x)):
+        raise ValueError('유효한 RAW 샘플과 Fs가 필요합니다.')
+    n = len(x)
+    spectrum = np.fft.fft(x)
+    reconstructed = np.fft.ifft(spectrum)
+    f = np.fft.fftshift(np.fft.fftfreq(n, d=1.0/fs))
+    shifted = np.fft.fftshift(spectrum)
+    gain = float(n if gain is None else gain)
+    if not np.isfinite(gain) or gain <= 0:
+        raise ValueError('FFT 정규화 분모 오류')
+    # Single-sided amplitude derived from the same complex FFT used for IFFT.
+    # DC and (for even N) Nyquist are unique bins and are not doubled.
+    single_f = np.fft.rfftfreq(n, d=1.0/fs)
+    single_magnitude = np.abs(spectrum[:n//2+1])/gain
+    if n % 2 == 0:
+        single_magnitude[1:-1] *= 2.0
+    else:
+        single_magnitude[1:] *= 2.0
+    error = reconstructed.real - x
+    return dict(t=np.arange(n)/fs, x=x, f=f, magnitude=np.abs(shifted)/gain,
+                single_f=single_f, single_magnitude=single_magnitude,
+                real=shifted.real/gain, imag=shifted.imag/gain,
+                restored=reconstructed.real, error=error,
+                max_error=float(np.max(np.abs(error))),
+                rms_error=float(np.sqrt(np.mean(error**2))),
+                imag_error=float(np.max(np.abs(reconstructed.imag))),
+                passed=bool(np.allclose(reconstructed.real,x,rtol=1e-10,atol=1e-8)),
+                gain=gain, fs=fs, n=n)
+
+
+def fft_diagnostic_text(d, label):
+    return (f'{label} | N={d["n"]:,} / Fs={d["fs"]:g} Hz | '
+            f'IFFT {"PASS" if d["passed"] else "FAIL"} | '
+            f'최대 오차={d["max_error"]:.3e} Count | RMS 오차={d["rms_error"]:.3e} | '
+            f'잔류 허수={d["imag_error"]:.3e} | 양측=|FFT|/{d["gain"]:g} | 단측=2×양측 (DC/Nyquist 제외)')
+
 
 def rotating_candidates(freqs, amps, rpm, min_count=2, max_count=48):
     """Receiver-style relative harmonic matching; exploratory, not a diagnosis."""
@@ -822,6 +890,7 @@ def parse_seq(seq_value):
 
 
 def classify_vibration(obj):
+    # 초음파 H는 여기서 다루지 않는다. samplerate와 numofsample이 둘 다 있어야 진동이다.
     # 초음파 H 제외:
     # 현재 진동 실제 포맷의 samplerate / numofsample 필드를 1차 기준으로 사용.
     if not isinstance(obj, dict):
@@ -851,7 +920,8 @@ def classify_ultrasonic(obj, topic=""):
     초음파(H) 판별.
 
     기존 수신기 규칙:
-    - sensorData는 있으나 samplerate / numofsample이 없는 형식
+    - sensorData는 있으나 samplerate와 numofsample이 둘 다 없는 형식
+    - 둘 중 하나만 있으면 초음파로 보지 않는다
     - 초음파 Topic 문자열(ultrasonic/ultra)이면 우선 H로 간주
 
     현재 실제 H payload는:
@@ -868,11 +938,11 @@ def classify_ultrasonic(obj, topic=""):
     if "ultrasonic" in topic_lower or "/ultra" in topic_lower:
         return True
 
-    has_sample_info = (
-        "samplerate" in obj
-        and "numofsample" in obj
-    )
-    return not has_sample_info
+    # V049: 예전 H 프레임은 samplerate와 numofsample이 둘 다 없다.
+    # 둘 중 하나만 있는 패킷은 불완전한 진동 프레임이지, 초음파가 아니다.
+    has_rate = obj.get("samplerate") not in (None, "")
+    has_count = obj.get("numofsample") not in (None, "")
+    return not has_rate and not has_count
 
 
 def unescape_bytes(data: bytes):

@@ -1,3 +1,6 @@
+// 센서 수신 모니터. MQTT 연결은 서버가 유지하고, 이 스크립트는 1초마다 최신 곡선을 그린다.
+// 그래프 장치 값 "" 는 최근 수신 MAC이다. id="status"는 window.status와 겹치므로 쓰지 않는다.
+// 명령 대상은 체크한 MAC과 직접 입력 MAC이다. 보내기 전에 주소 확인을 받는다.
 if (window.ChartZoom) Chart.register(window.ChartZoom);
 
 const colors = { X: "#1f77b4", Y: "#2ca02c", Z: "#d62728", PIEZO: "#1377a6", ULTRASONIC: "#c05b13", H: "#c05b13" };
@@ -138,6 +141,17 @@ function points(xs, ys, logX, logY) {
   return data;
 }
 
+function srssDataset(srss, logX, logY) {
+  if (!srss || !srss.ok || !srssOn.checked) return null;
+  return {
+    label: "SRSS",
+    borderColor: "#9467BD",
+    borderDash: [5, 3],
+    borderWidth: 1.7,
+    data: pairs(srss.f, srss.y, logX, logY),
+  };
+}
+
 function draw(device) {
   rawChart.data.datasets = [];
   fftChart.data.datasets = [];
@@ -148,7 +162,9 @@ function draw(device) {
   let rawY = "값";
   let fftLabel = "크기";
   let fftX = "Frequency (Hz)";
+  const srss = device && device._srss;
   for (const axis of Object.keys(device || {})) {
+    if (axis.charAt(0) === "_") continue;
     const item = device[axis];
     const color = colors[axis] || "#444";
     if (item.kind === "spectrum") {
@@ -176,8 +192,16 @@ function draw(device) {
       if (item.formula) notes.push(item.formula);
     }
   }
+  const srssLine = srssDataset(srss, logX, logY);
+  if (srssLine) fftChart.data.datasets.push(srssLine);
+  if (srss && srss.text) notes.push(srss.text);
   document.querySelector("#info").textContent = notes.filter((line, index, all) => all.indexOf(line) === index).join("\n") || "수신 대기";
-  fftChart.options.plugins.title = { display: true, text: fftLabel, color: "#17324d", font: { size: 13, weight: "bold" } };
+  fftChart.options.plugins.title = {
+    display: true,
+    text: (srss && srss.text) || fftLabel,
+    color: "#17324d",
+    font: { size: 13, weight: "bold" },
+  };
   fftChart.options.scales.x.type = logX ? "logarithmic" : "linear";
   fftChart.options.scales.y.type = logY ? "logarithmic" : "linear";
   GraphView.axes(rawChart, timeLabel, rawY);
@@ -309,6 +333,23 @@ document.querySelector("#stop").onclick = () => command("stop");
 document.querySelector("#apply").onclick = () => command("apply");
 document.querySelector("#query").onclick = () => command("query");
 document.querySelector("#device").onchange = () => { graphDevice = device.value; refresh(); };
+document.querySelector("#fftCheck").onclick = async () => {
+  const response = await fetch("/api/monitor/fft-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device: graphDevice }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    GraphView.showFftCheck(document.querySelector("#fftCheckBox"), {
+      ok: false,
+      message: data.detail || "검증 실패",
+      note: "① 입력 → ② 양측 FFT → ③ 단측 FFT | ② 복소수 FFT → ④ IFFT 복원 · 평균 제거/SRSS/물리단위 보정은 검증 제외",
+    });
+    return;
+  }
+  GraphView.showFftCheck(document.querySelector("#fftCheckBox"), data);
+};
 
 async function loadDefaults() {
   const data = await (await fetch("/api/analysis/defaults")).json();

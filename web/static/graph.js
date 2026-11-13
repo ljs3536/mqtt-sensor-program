@@ -1,3 +1,7 @@
+// RAW/FFT 두 차트의 확대, 이동, 축 고정.
+// 휠은 X·Y, 왼쪽 버튼을 누른 채 휠은 X만, 오른쪽 버튼을 누른 채 휠은 Y만.
+// 라이브러리 pan은 끄고, 왼쪽 드래그는 pointer capture로 직접 움직인다.
+// X 눈금 사이에는 세로 점선을 그린다. 기능 설명은 docs/웹-기능상세.md.
 const GraphView = (() => {
   const font = '"Malgun Gothic", "Segoe UI", sans-serif';
 
@@ -344,5 +348,90 @@ const GraphView = (() => {
     sync();
   }
 
-  return { chart, axes, xText, yText, bindAxisBar };
+  function paintLine(canvas, xs, ys, color) {
+    if (!canvas) return;
+    const width = Math.max(200, Math.floor(canvas.clientWidth || 320));
+    const height = 110;
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = "#f7fafc";
+    ctx.fillRect(0, 0, width, height);
+    const finite = [];
+    for (let i = 0; i < (xs || []).length; i += 1) {
+      const x = Number(xs[i]);
+      const y = Number((ys || [])[i]);
+      if (Number.isFinite(x) && Number.isFinite(y)) finite.push([x, y]);
+    }
+    if (finite.length < 2) {
+      ctx.fillStyle = "#5d6e80";
+      ctx.font = "12px sans-serif";
+      ctx.fillText("미리보기 없음", 12, 24);
+      return;
+    }
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    finite.forEach(([x, y]) => {
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    });
+    const pad = 10;
+    const sx = (x) => pad + ((x - minX) / (maxX - minX || 1)) * (width - pad * 2);
+    const sy = (y) => height - pad - ((y - minY) / (maxY - minY || 1)) * (height - pad * 2);
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.4;
+    finite.forEach(([x, y], index) => {
+      const px = sx(x);
+      const py = sy(y);
+      if (index === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.stroke();
+  }
+
+  function showFftCheck(box, data) {
+    if (!box) return;
+    box.hidden = false;
+    const payload = data || {};
+    const note = box.querySelector(".fft-check-note");
+    const text = box.querySelector(".fft-check-text");
+    const axisBox = box.querySelector(".fft-check-axis");
+    const axisLabel = box.querySelector(".fft-check-axis-label");
+    if (note) note.textContent = payload.note || "";
+    const lines = [];
+    if (!payload.ok) {
+      lines.push(payload.message || "선택된 RAW 데이터가 없습니다.");
+      lines.push("이 경우는 PASS로 처리하지 않습니다.");
+    } else {
+      lines.push(payload.passed ? "IFFT PASS" : "IFFT FAIL");
+      lines.push("최대 절대 오차는 각 축 줄의 최대 오차입니다.");
+      (payload.steps || []).forEach((step) => lines.push(step));
+      (payload.axes || []).forEach((axis) => lines.push(axis.text));
+    }
+    if (text) text.textContent = lines.join("\n");
+    const axes = payload.axes || [];
+    const drawAxis = () => {
+      const item = axes[Number(axisBox && axisBox.value) || 0];
+      paintLine(box.querySelector("canvas.two"), item && item.two_sided && item.two_sided.f, item && item.two_sided && item.two_sided.y, "#9467BD");
+      paintLine(box.querySelector("canvas.one"), item && item.single_sided && item.single_sided.f, item && item.single_sided && item.single_sided.y, "#d62728");
+    };
+    if (axisBox) {
+      axisBox.innerHTML = axes.map((axis, index) => `<option value="${index}">${axis.label}</option>`).join("");
+      axisBox.onchange = (event) => {
+        event.stopPropagation();
+        drawAxis();
+      };
+    }
+    if (axisLabel) axisLabel.hidden = axes.length < 2;
+    drawAxis();
+    requestAnimationFrame(drawAxis);
+  }
+
+  return { chart, axes, xText, yText, bindAxisBar, showFftCheck };
 })();

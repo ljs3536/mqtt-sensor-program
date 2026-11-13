@@ -1,9 +1,10 @@
+<!-- MQTT 파형 발생기. RAW/FFT는 이 페이지에 항상 있다. 상태 폴링은 송신 횟수 표시용이다. -->
 <!doctype html>
 <html lang="ko">
   <head>
     <meta charset="utf-8" />
     <title>MQTT 파형 발생기</title>
-    <link rel="stylesheet" href="/static/style.css?v=3" />
+    <link rel="stylesheet" href="/static/style.css?v=4" />
   </head>
   <body>
     <header>
@@ -117,9 +118,6 @@
             <label>패킷 번호<input id="index" class="w-num" value="1" /></label>
             <button type="button" class="secondary" id="go">번호 이동</button>
             <span id="position" class="stats">파일을 선택하세요</span>
-            <button type="button" class="secondary" id="openGraph">
-              RAW / FFT 그래프 열기
-            </button>
           </div>
           <button type="button" class="secondary" id="resetZoom">
             그래프 전체 보기
@@ -136,7 +134,7 @@
         <p id="rotation" class="formula"></p>
       </section>
 
-      <div id="graphWindow" hidden>
+      <div id="graphWindow">
         <details class="card" id="analysis" open>
           <summary>그래프 설정</summary>
           <p class="hint">
@@ -172,6 +170,7 @@
                 >FFT Y 로그</span
               ></label
             >
+            <button type="button" class="secondary" id="fftCheck">FFT 과정 / IFFT 검증</button>
           </div>
           <div class="split">
             <fieldset id="piezoBox">
@@ -198,6 +197,7 @@
                 <label
                   >FFT 창
                   <select id="piezoWindow">
+                    <option selected>Blackman</option>
                     <option>Hann</option>
                     <option>Hamming</option>
                     <option>Rectangular</option>
@@ -240,6 +240,11 @@
                     >Z</span
                   ></label
                 >
+                <label class="check"
+                  ><input id="srssOn" type="checkbox" checked /><span
+                    >SRSS</span
+                  ></label
+                >
                 <label
                   >RAW 단위
                   <select id="adxlRaw">
@@ -278,9 +283,9 @@
                   >FFT Window
                   <select id="adxlWindow">
                     <option>Rectangular</option>
-                    <option selected>Hann</option>
+                    <option>Hann</option>
                     <option>Hamming</option>
-                    <option>Blackman</option>
+                    <option selected>Blackman</option>
                     <option>Blackman-Harris</option>
                     <option>Flat Top</option>
                     <option>Bartlett</option>
@@ -366,6 +371,15 @@
             </fieldset>
           </div>
         </details>
+        <div id="fftCheckBox" class="fft-check" hidden>
+          <p class="fft-check-note hint"></p>
+          <label class="fft-check-axis-label">축 <select class="fft-check-axis"></select></label>
+          <pre class="fft-check-text"></pre>
+          <div class="fft-previews">
+            <div><p>② 양측 FFT</p><canvas class="two" width="520" height="110"></canvas></div>
+            <div><p>③ 단측 FFT</p><canvas class="one" width="520" height="110"></canvas></div>
+          </div>
+        </div>
         <section class="card">
           <h2>RAW / FFT 그래프</h2>
           <p class="hint">
@@ -416,7 +430,7 @@
     <script src="/static/chart.umd.min.js"></script>
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
-    <script src="/static/graph.js?v=7"></script>
-    <script src="/static/generator.js?v=7"></script>
+    <script src="/static/graph.js?v=8"></script>
+    <script src="/static/generator.js?v=9"></script>
   </body>
 </html>
