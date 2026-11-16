@@ -1,0 +1,192 @@
+/* 계측 예시. 센서 데이터 분석과 같은 화면을 어두운 계측기 배치로 입힌다. */
+body.deck {
+  background: #1b1b1b;
+  color: #d5d5d5;
+}
+body.deck header {
+  height: 46px;
+  padding: 0 12px;
+  background: #3a3a3a;
+  border-bottom: 1px solid #111;
+}
+body.deck .brand {
+  color: #f0a05a;
+  letter-spacing: 0.04em;
+}
+body.deck header a {
+  color: #d0d0d0;
+  border-radius: 2px;
+}
+body.deck header a.active,
+body.deck header a:hover {
+  background: #c45c12;
+  color: white;
+}
+body.deck main.studio {
+  margin: 6px;
+  gap: 6px;
+}
+body.deck main.studio.pinned {
+  grid-template-columns: 320px minmax(0, 1fr);
+}
+body.deck .studio-settings {
+  scrollbar-gutter: stable;
+}
+body.deck .studio-settings button,
+body.deck .studio-settings .check span,
+body.deck .stage-bar button,
+body.deck .packet-bar button,
+body.deck .axis-bar button {
+  white-space: nowrap;
+}
+body.deck .studio-settings,
+body.deck .studio-stage,
+body.deck .chart-card,
+body.deck fieldset {
+  background: #242424;
+  border: 1px solid #111;
+  border-radius: 2px;
+  color: #d7d7d7;
+  box-shadow: none;
+}
+body.deck .studio-stage {
+  background: #101010;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+body.deck h2,
+body.deck legend,
+body.deck label,
+body.deck .hint,
+body.deck .formula,
+body.deck summary {
+  color: #c8c8c8;
+}
+body.deck .tabs {
+  background: #1a1a1a;
+}
+body.deck .tabs button {
+  color: #c8c8c8;
+}
+body.deck .tabs button.active {
+  background: #3a3a3a;
+  color: #f0a05a;
+  box-shadow: none;
+}
+body.deck input,
+body.deck select,
+body.deck button,
+body.deck .icon-btn {
+  background: #2c2c2c;
+  color: #e6e6e6;
+  border: 1px solid #4a4a4a;
+  border-radius: 2px;
+}
+body.deck button {
+  background: #3d3d3d;
+}
+body.deck button.go { background: #2f7d32; }
+body.deck button.stop { background: #8d2b2b; }
+body.deck .segmented {
+  background: #1a1a1a;
+  border-radius: 2px;
+}
+body.deck .segmented button.active {
+  background: #c45c12;
+  color: white;
+}
+body.deck .stage-bar,
+body.deck .packet-bar,
+body.deck .axis-bar {
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 2px;
+}
+body.deck .packet-bar strong,
+body.deck #dbStatus {
+  color: #39ff4a;
+  font-family: Consolas, "Malgun Gothic", monospace;
+}
+body.deck .packet-info {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: #050505;
+  border: 1px solid #2f2f2f;
+  min-height: 54px;
+}
+body.deck .info-chip,
+body.deck .info-chip:first-child {
+  background: #050505;
+  border: 0;
+  border-radius: 0;
+  color: #39ff4a;
+  font-family: Consolas, "Malgun Gothic", monospace;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 8px 12px;
+}
+body.deck .studio-charts {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+body.deck .studio-charts .chart-card {
+  background: #070707;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+body.deck .studio-charts .chart-card h2 {
+  margin: 0;
+  padding: 6px 10px;
+  color: #f0a05a;
+  background: #161616;
+  border-bottom: 1px solid #2a2a2a;
+}
+body.deck .studio-charts .plot {
+  background: #070707;
+}
+body.deck pre,
+body.deck .fft-check {
+  background: #111;
+  color: #d0d0d0;
+  border-color: #333;
+}
+body.deck .formula-fold {
+  background: #161616;
+  color: #c8c8c8;
+}
+body.deck,
+body.deck * {
+  scrollbar-width: thin;
+  scrollbar-color: #6a6a6a #141414;
+}
+body.deck *::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+body.deck *::-webkit-scrollbar-track {
+  background: #141414;
+}
+body.deck *::-webkit-scrollbar-thumb {
+  background: #5c5c5c;
+  border: 2px solid #141414;
+  border-radius: 8px;
+}
+body.deck *::-webkit-scrollbar-thumb:hover {
+  background: #c45c12;
+}
+body.deck *::-webkit-scrollbar-corner {
+  background: #141414;
+}
