@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from web import core as gen
+from web_db.src import core as gen
 
 
 def _parse_samples(text):

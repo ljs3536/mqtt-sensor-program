@@ -10,9 +10,17 @@ function showPanels() {
   adxlBox.hidden = sensor !== "ADXL";
   ultraBox.hidden = sensor !== "초음파";
   fftCard.hidden = sensor === "초음파";
-  singleFile.hidden = sensor === "ADXL";
-  xyzFiles.hidden = sensor !== "ADXL";
+  const single = document.getElementById("singleFile");
+  const xyz = document.getElementById("xyzFiles");
+  if (single) single.hidden = sensor === "ADXL";
+  if (xyz) xyz.hidden = sensor !== "ADXL";
   settingsTitle.textContent = sensor === "PIEZO" ? "PIEZO 설정" : sensor === "ADXL" ? "MEMS 설정" : "초음파 설정";
+  document.querySelectorAll("#sensors .sensor-line").forEach((row) => {
+    const on = row.dataset.sensor === sensor;
+    row.hidden = !on;
+    const box = row.querySelector(".enabled");
+    if (box) box.checked = on;
+  });
   document.querySelectorAll("[data-sensor-pick]").forEach((button) => {
     button.classList.toggle("active", button.dataset.sensorPick === sensor);
   });
@@ -77,12 +85,15 @@ document.querySelector("#closeFftCheck").addEventListener("click", () => {
   document.querySelector("#fftCheckBox").hidden = true;
 });
 
-document.querySelector("#stageFile").addEventListener("change", () => {
-  const file = stageFile.files && stageFile.files[0];
-  if (!file) return;
-  stageFileName.textContent = file.name;
-  upload(sensorPick.value, file).catch((error) => alert(error.message));
-});
+const stageInput = document.getElementById("stageFile");
+if (stageInput) {
+  stageInput.addEventListener("change", () => {
+    const file = stageInput.files && stageInput.files[0];
+    if (!file) return;
+    stageFileName.textContent = file.name;
+    upload(sensorPick.value, file).catch((error) => alert(error.message));
+  });
+}
 
 const originalDraw = draw;
 draw = function studioDraw(preview) {

@@ -17,11 +17,11 @@ from pathlib import Path
 
 import numpy as np
 
-from web import core as gen
-from web_db.grouping import assign_set, continues_set, seq_low
-from web_db.stats_calc import adxl_set_stats
+from web_db.src import core as gen
+from web_db.src.grouping import assign_set, continues_set, seq_low
+from web_db.src.stats_calc import adxl_set_stats
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 DB_PATH = ROOT / "sensor.sqlite"
 
 
