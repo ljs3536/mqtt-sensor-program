@@ -4,7 +4,7 @@
   <head>
     <meta charset="utf-8" />
     <title>센서 데이터 분석</title>
-    <link rel="stylesheet" href="/static/style.css?v=12" />
+    <link rel="stylesheet" href="/static/style.css?v=13" />
   </head>
   <body class="layout-pin">
     <header>
@@ -243,25 +243,6 @@
                 <button type="button" class="secondary" id="saveCorrection">
                   보정 적용/저장
                 </button>
-                <div class="pair">
-                  <label>RPM<input id="rpm" value="1800" /></label>
-                  <label>축
-                    <select id="rotAxis">
-                      <option>X</option>
-                      <option>Y</option>
-                      <option>Z</option>
-                    </select>
-                  </label>
-                </div>
-                <label>유형
-                  <select id="rotType">
-                    <option>미지정</option>
-                    <option>블레이드</option>
-                    <option>기어</option>
-                    <option>플런저</option>
-                    <option>DC 정류자</option>
-                  </select>
-                </label>
               </div>
             </fieldset>
             <div id="ultraBox" hidden>
@@ -271,7 +252,6 @@
               </p>
             </div>
             <p id="formula" class="formula"></p>
-            <p id="rotation" class="formula"></p>
           </div>
         </div>
         <div id="transmitTab" class="tab-page">
@@ -465,7 +445,7 @@
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
     <script src="/static/graph.js?v=8"></script>
-    <script src="/static/generator.js?v=13"></script>
-    <script src="/static/studio.js?v=2"></script>
+    <script src="/static/generator.js?v=14"></script>
+    <script src="/static/studio.js?v=3"></script>
   </body>
 </html>

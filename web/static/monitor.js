@@ -123,6 +123,41 @@ function fillProfiles() {
   else if (items.length) box.value = items[items.length - 1];
 }
 
+const sensorTypeText = {
+  0: "0: collection 종료 / normal 복귀",
+  1: "1: PIEZO normal",
+  2: "2: MEMS normal",
+  3: "3: PIEZO collection",
+  4: "4: MEMS collection",
+};
+
+function syncSensorType(fromKind) {
+  const typeBox = document.querySelector("#sensorType");
+  if (!typeBox) return;
+  const desc = document.querySelector("#sensorTypeDesc");
+  const gain = document.querySelector("#piezoGain");
+  const range = document.querySelector("#gRange");
+  if (fromKind) {
+    const collection = typeBox.value === "3" || typeBox.value === "4";
+    typeBox.value = sensor.value === "PIEZO" ? (collection ? "3" : "1") : (collection ? "4" : "2");
+  } else if (typeBox.value === "1" || typeBox.value === "3") {
+    if (sensor.value !== "PIEZO") {
+      sensor.value = "PIEZO";
+      fillProfiles();
+    }
+  } else if (typeBox.value === "2" || typeBox.value === "4") {
+    if (sensor.value !== "ADXL") {
+      sensor.value = "ADXL";
+      fillProfiles();
+    }
+  }
+  if (desc) desc.textContent = sensorTypeText[typeBox.value] || "";
+  const piezo = typeBox.value === "1" || typeBox.value === "3";
+  const adxl = typeBox.value === "2" || typeBox.value === "4";
+  if (gain) gain.disabled = !piezo;
+  if (range) range.disabled = !adxl;
+}
+
 function selectedList() {
   return [...selectedMacs];
 }
@@ -137,9 +172,10 @@ function commandTargets() {
 function renderMacs(devices, arrivals) {
   const box = document.querySelector("#macs");
   box.innerHTML = (devices || []).map((mac) => {
-    const stat = (arrivals || {})[mac];
-    const stamp = stat && stat.count ? ` ${stat.last} (${stat.count})` : "";
-    return `<label><input type="checkbox" value="${mac}" ${selectedMacs.has(mac) ? "checked" : ""}> ${mac}<span class="stats">${stamp}</span></label>`;
+    const stat = (arrivals || {})[mac] || {};
+    const when = stat.last ? `<span class="mac-time">${stat.last}</span>` : "";
+    const count = stat.count ? `<span class="mac-count">${stat.count}</span>` : "";
+    return `<label class="mac-chip"><input type="checkbox" value="${mac}" ${selectedMacs.has(mac) ? "checked" : ""}><span class="mac-addr">${mac}</span>${when}${count}</label>`;
   }).join("");
   document.querySelector("#macCount").textContent = `${selectedMacs.size}개 선택`;
 }
@@ -225,7 +261,23 @@ function draw(device) {
     if (limit.value != null && document.activeElement !== srssLimit) srssLimit.value = limit.value;
   }
   if (srss && srss.text) notes.push(srss.text);
-  document.querySelector("#info").textContent = notes.filter((line, index, all) => all.indexOf(line) === index).join("\n") || "수신 대기";
+  if (!lockX.checked) {
+    delete rawChart.options.scales.x.min;
+    delete rawChart.options.scales.x.max;
+    delete fftChart.options.scales.x.min;
+    delete fftChart.options.scales.x.max;
+  }
+  if (!lockY.checked) {
+    delete rawChart.options.scales.y.min;
+    delete rawChart.options.scales.y.max;
+    delete fftChart.options.scales.y.min;
+    delete fftChart.options.scales.y.max;
+  }
+  const info = document.querySelector("#info");
+  const lines = notes.filter((line, index, all) => all.indexOf(line) === index);
+  info.innerHTML = lines.length
+    ? lines.map((line) => `<span class="info-chip">${line.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]))}</span>`).join("")
+    : `<span class="info-chip">수신 대기</span>`;
   fftChart.options.plugins.title = {
     display: true,
     text: (srss && srss.text) || fftLabel,
@@ -303,6 +355,9 @@ async function command(action) {
       sensor: sensor.value,
       period: Number(period.value),
       profile: profile.value,
+      sensor_type: document.querySelector("#sensorType") ? sensorType.value : "",
+      g_range: document.querySelector("#gRange") ? gRange.value : "16",
+      piezo_gain: document.querySelector("#piezoGain") ? piezoGain.value : "30",
     }),
   });
   const data = await response.json();
@@ -313,7 +368,11 @@ async function command(action) {
   preview.textContent = data.payload || "";
 }
 
-document.querySelector("#sensor").onchange = fillProfiles;
+document.querySelector("#sensor").onchange = () => {
+  fillProfiles();
+  syncSensorType(true);
+};
+document.querySelector("#sensorType")?.addEventListener("change", () => syncSensorType(false));
 document.querySelector("#macs").onchange = (event) => {
   const input = event.target;
   if (!input.value) return;
@@ -378,8 +437,21 @@ document.querySelector("#applySrssLimit").onclick = async () => {
   srssLimit.value = data.value;
   pushView();
 };
-document.querySelector("#start").onclick = () => command("start");
-document.querySelector("#stop").onclick = () => command("stop");
+document.querySelector("#start").onclick = () => {
+  if (document.querySelector("#sensorType")) {
+    sensorType.value = sensor.value === "PIEZO" ? "3" : "4";
+    syncSensorType(false);
+  }
+  command("start");
+};
+document.querySelector("#stop").onclick = () => {
+  if (document.querySelector("#sensorType")) {
+    sensorType.value = "0";
+    syncSensorType(false);
+  }
+  command("stop");
+};
+syncSensorType(false);
 document.querySelector("#apply").onclick = () => command("apply");
 document.querySelector("#query").onclick = () => command("query");
 document.querySelector("#device").onchange = () => { graphDevice = device.value; refresh(); };

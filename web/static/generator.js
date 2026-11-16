@@ -37,8 +37,8 @@ sensorBox.innerHTML = sensors
     }
     return `
   <div class="sensor-line" data-sensor="${name}">
-    ${enabled}
-    ${topic}
+    <input class="enabled" type="checkbox" hidden ${name === "PIEZO" ? "checked" : ""}>
+    <input class="topic" type="hidden" value="${topics[name]}">
     <div class="pair">
       <label>주기(ms)<input class="period" value="${periods[name]}"></label>
       <label>±Jitter<input class="jitter" value="0"></label>
@@ -205,14 +205,28 @@ function loosen(target) {
 }
 
 function draw(preview) {
-  document.querySelector("#position").textContent =
-    `${preview.sensor} ${preview.index} / ${preview.count} | ${preview.info || ""}`;
-  document.querySelector("#index").value = preview.index;
-  formula.textContent = [preview.formula, preview.avg_status, preview.srss && preview.srss.text]
+  const infoBox = document.querySelector("#packetInfo") || document.querySelector("#position");
+  const bits = [];
+  if (preview.sensor) bits.push(preview.sensor);
+  if (preview.index && preview.count) bits.push(`${preview.index} / ${preview.count}`);
+  String(preview.info || "")
+    .split("|")
+    .map((part) => part.trim())
     .filter(Boolean)
-    .join("\n");
-  const rotationBox = document.getElementById("rotation");
-  if (rotationBox) rotationBox.textContent = preview.rotation || "";
+    .forEach((part) => bits.push(part));
+  if (preview.srss && preview.srss.text) bits.push(preview.srss.text);
+  if (infoBox) {
+    infoBox.innerHTML = bits
+      .map((text) => `<span class="info-chip">${text.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]))}</span>`)
+      .join("");
+  }
+  document.querySelector("#index").value = preview.index;
+  const formulaBox = document.getElementById("formula");
+  if (formulaBox) {
+    formulaBox.textContent = [preview.formula, preview.avg_status]
+      .filter(Boolean)
+      .join("\n");
+  }
   const logX = !!preview.fft_log_x;
   const logY = !!preview.fft_log_y;
   if (preview.kind === "spectrum") {
@@ -356,14 +370,16 @@ async function uploadAdxlCsv() {
   await move(1);
 }
 
-document.querySelector("#loadAdxlCsv").onclick = () =>
-  uploadAdxlCsv().catch((error) => alert(error.message));
-for (const id of ["adxlX", "adxlY", "adxlZ"]) {
-  document.querySelector("#" + id).addEventListener("change", () => {
-    if (adxlX.files[0] && adxlY.files[0] && adxlZ.files[0]) {
-      uploadAdxlCsv().catch((error) => alert(error.message));
-    }
-  });
+const loadAdxlButton = document.querySelector("#loadAdxlCsv");
+if (loadAdxlButton) {
+  loadAdxlButton.onclick = () => uploadAdxlCsv().catch((error) => alert(error.message));
+  for (const id of ["adxlX", "adxlY", "adxlZ"]) {
+    document.querySelector("#" + id).addEventListener("change", () => {
+      if (adxlX.files[0] && adxlY.files[0] && adxlZ.files[0]) {
+        uploadAdxlCsv().catch((error) => alert(error.message));
+      }
+    });
+  }
 }
 
 async function upload(sensor, file) {

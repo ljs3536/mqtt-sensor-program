@@ -51,6 +51,27 @@
             </label>
           </div>
           <div class="row" style="margin-top:8px">
+            <label>센서 타입
+              <select id="sensorType">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </label>
+            <span id="sensorTypeDesc" class="stats">2: MEMS normal</span>
+            <label>G Range
+              <select id="gRange">
+                <option>2</option>
+                <option>4</option>
+                <option>8</option>
+                <option selected>16</option>
+              </select>
+            </label>
+            <label>게인<input id="piezoGain" class="w-num" value="30" disabled></label>
+          </div>
+          <div class="row" style="margin-top:8px">
             <label>MAC 직접 입력<input id="manualMac" placeholder="감지 전 MAC" style="width:150px"></label>
             <button type="button" class="go" id="start">START</button>
             <button type="button" class="stop" id="stop">STOP</button>
@@ -193,6 +214,6 @@
   <script src="/static/hammer.min.js"></script>
   <script src="/static/chartjs-plugin-zoom.min.js"></script>
   <script src="/static/graph.js?v=8"></script>
-  <script src="/static/monitor.js?v=11"></script>
+  <script src="/static/monitor.js?v=12"></script>
 </body>
 </html>

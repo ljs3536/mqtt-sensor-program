@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>센서 통계</title>
+  <link rel="stylesheet" href="/static/style.css?v=12">
+  <style>
+    .dash-note { color: #64748b; margin: 0 0 12px; }
+    .board { display: grid; gap: 14px; }
+    .channel {
+      display: grid;
+      grid-template-columns: 180px minmax(220px, 1.4fr) minmax(160px, 1fr) minmax(160px, 1fr);
+      gap: 12px;
+      align-items: center;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .mac { font-weight: 800; word-break: break-all; }
+    .mac small { display: block; font-weight: 500; color: #64748b; }
+    .metric-title { font-size: 12px; color: #64748b; margin-bottom: 4px; }
+    .track { position: relative; height: 22px; background: #e2e8f0; border-radius: 6px; overflow: hidden; }
+    .fill { height: 100%; background: #1f77b4; }
+    .fill.warn { background: #d97706; }
+    .fill.over { background: #dc2626; }
+    .limit-mark { position: absolute; top: 0; bottom: 0; width: 2px; background: #b45309; }
+    .metric-value { font-variant-numeric: tabular-nums; font-size: 13px; margin-top: 4px; }
+    .spark { height: 72px; position: relative; }
+    .spark canvas { display: block; width: 100% !important; height: 100% !important; }
+    @media (max-width: 900px) {
+      .channel { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <strong class="brand">센서 통계</strong>
+    <nav>
+      <a href="/">센서 수신 모니터</a>
+      <a href="/generator">데이터 분석 CSV</a>
+      <a href="/studio">센서 데이터 분석</a>
+      <a class="active" href="/dashboard">통계</a>
+    </nav>
+  </header>
+  <main>
+    <section class="card">
+      <h2>MAC별 통계</h2>
+      <p class="dash-note" id="updatedNote">통계는 수신 중에 계산하지 않습니다. 새로고침을 누르면 마지막 최신화 이후의 측정만 계산합니다.</p>
+      <button type="button" class="secondary" id="reload">새로고침</button>
+      <div class="board" id="board"></div>
+    </section>
+  </main>
+  <script src="/static/chart.umd.min.js"></script>
+  <script>
+    const board = document.querySelector("#board");
+    const charts = [];
+
+    function num(value, digits) {
+      const number = Number(value);
+      return Number.isFinite(number) ? number.toFixed(digits) : "-";
+    }
+
+    function drawCharts() {
+      charts.splice(0).forEach((chart) => chart.destroy());
+      board.querySelectorAll("canvas").forEach((canvas) => {
+        const values = JSON.parse(canvas.dataset.values || "[]").map(Number);
+        charts.push(new Chart(canvas, {
+          type: "line",
+          data: {
+            labels: values.map((_, index) => index + 1),
+            datasets: [{
+              data: values,
+              borderColor: canvas.dataset.color,
+              borderWidth: 1.5,
+              pointRadius: 0,
+              tension: 0.15,
+              fill: false,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            scales: {
+              x: { display: false },
+              y: { ticks: { maxTicksLimit: 3, font: { size: 10 } }, grid: { color: "#e2e8f0" } },
+            },
+          },
+        }));
+      });
+    }
+
+    function hoursSince(updatedAt) {
+      if (!updatedAt) return null;
+      const stamp = new Date(updatedAt).getTime();
+      if (!Number.isFinite(stamp)) return null;
+      return Math.max(0, Math.floor((Date.now() - stamp) / 3600000));
+    }
+
+    function paint(data) {
+      const items = data.items || [];
+      const hours = hoursSince(data.updated_at);
+      document.querySelector("#updatedNote").textContent = hours === null
+        ? "통계 데이터가 아직 최신화되지 않았습니다."
+        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다.`;
+      if (!items.length) {
+        board.innerHTML = "<p>등록된 MAC이 없습니다.</p>";
+        return;
+      }
+      const srssValues = items.map((item) => Number(item.srss_mms) || 0);
+      const limits = items.map((item) => Number(item.limit) || 4.5);
+      const scale = Math.max(4.5, ...srssValues, ...limits, 0.001) * 1.15;
+      board.innerHTML = items.map((item) => {
+        const value = Number(item.srss_mms);
+        const limit = Number(item.limit) || 4.5;
+        const width = Number.isFinite(value) ? Math.min(100, (value / scale) * 100) : 0;
+        const mark = Math.min(100, (limit / scale) * 100);
+        const level = !Number.isFinite(value) ? "" : value >= limit ? "over" : value >= limit * 0.8 ? "warn" : "";
+        const series = item.series || [];
+        const rms = JSON.stringify(series.map((point) => point.rms));
+        const peak = JSON.stringify(series.map((point) => point.peak));
+        const name = item.display_name ? `<small>${item.display_name}</small>` : "";
+        return `<div class="channel">
+          <div class="mac">${item.mac}${name}</div>
+          <div>
+            <div class="metric-title">SRSS mm/s RMS</div>
+            <div class="track"><div class="fill ${level}" style="width:${width}%"></div><div class="limit-mark" style="left:${mark}%"></div></div>
+            <div class="metric-value">${num(value, 3)} / ${limit}</div>
+          </div>
+          <div>
+            <div class="metric-title">RMS ${num(item.rms, 4)} g</div>
+            <div class="spark"><canvas data-color="#1f77b4" data-values='${rms}'></canvas></div>
+          </div>
+          <div>
+            <div class="metric-title">PEAK ${num(item.peak, 4)} g</div>
+            <div class="spark"><canvas data-color="#d62728" data-values='${peak}'></canvas></div>
+          </div>
+        </div>`;
+      }).join("");
+      drawCharts();
+    }
+
+    async function load() {
+      const data = await (await fetch("/api/db/dashboard")).json();
+      paint(data);
+    }
+
+    document.querySelector("#reload").onclick = async () => {
+      const data = await fetch("/api/db/dashboard").then((response) => response.json());
+      const hours = hoursSince(data.updated_at);
+      const message = hours === null
+        ? "통계 데이터가 아직 최신화되지 않았습니다. 최신화 하시겠습니까?"
+        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다. 최신화 하시겠습니까?`;
+      if (!confirm(message)) {
+        paint(data);
+        return;
+      }
+      const updated = await fetch("/api/db/update-stats", { method: "POST" }).then((response) => response.json());
+      if (updated.detail) {
+        alert(updated.detail);
+        return;
+      }
+      await load();
+    };
+    load().catch((error) => alert(error.message));
+    setInterval(() => load().catch(() => {}), 5000);
+  </script>
+</body>
+</html>

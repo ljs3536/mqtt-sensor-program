@@ -1,8 +1,8 @@
-# 로컬 웹 서버. 페이지는 센서 수신 모니터(/)와 MQTT 파형 발생기(/generator) 두 개다.
-# 브라우저는 화면만 그린다. MQTT, HEX 디코드, FFT, CSV는 이 프로세스가 한다.
-# 데스크톱 py는 import하지 않는다. 계산은 web.core, 그래프 수식은 web.analysis.
+# 로컬 웹 서버.
+# 역할: web.core 는 디코드·FFT, web.analysis 는 그래프 수식.
+# 이 파일은 수신(MonitorService), CSV(CsvWriter), 발생(ReplayService), HTTP 라우트만 둔다.
+# 브라우저는 화면만 그린다. 데스크톱 py는 import하지 않는다.
 # 실행: .venv\Scripts\python.exe -m uvicorn web.server:app --host 127.0.0.1 --port 8080
-# 기능 설명: docs/웹-기능상세.md
 
 from __future__ import annotations
 
@@ -495,40 +495,48 @@ def _picked(values, index):
     return [round(float(data[i]), 6) for i in index]
 
 
-def _sensor_config(sensor, period, profile, stop=False):
+def _sensor_config(sensor, period, profile, stop=False, sensor_type=None, g_range="16", piezo_gain="30"):
     """모니터 명령 JSON. COMMPATH는 0으로 고정한다.
 
-    STOP은 SENSORTYPE 0, PIEZO 동작은 1, ADXL 동작은 2다.
-    데스크톱 모드 A의 collection 3/4와 retain 삭제 단계는 여기서 만들지 않는다.
+    0은 종료, 1/3은 PIEZO normal/collection, 2/4는 MEMS normal/collection이다.
+    G Range와 PIEZO 게인은 화면 환산 LSB와 별개로 센서에 보낸다.
     """
+    code = str(sensor_type).strip() if sensor_type is not None else ""
+    if stop or code == "0":
+        return {"COMMPATH": "0", "SENSORTYPE": "0"}
+    if code not in ("1", "2", "3", "4"):
+        code = "1" if str(sensor).upper() == "PIEZO" else "2"
     period_text = str(int(period))
     if int(period) < 0:
         raise ValueError("측정 주기는 0 이상의 정수(초)여야 합니다")
-    if stop:
-        return {"COMMPATH": "0", "SENSORTYPE": "0", "SENSING_PERIOD": period_text}
-    sensor = str(sensor).upper()
-    if sensor == "PIEZO":
+    payload = {"COMMPATH": "0", "SENSORTYPE": code, "SENSING_PERIOD": period_text}
+    if code in ("1", "3"):
         rate, count = mon.PIEZO_PROFILE_MAP[profile]
-        return {
-            "COMMPATH": "0",
-            "SENSORTYPE": "1",
-            "SENSING_PERIOD": period_text,
+        gain = str(piezo_gain).strip()
+        if not gain.isdigit():
+            raise ValueError("PIEZO_GAIN은 0 이상의 정수여야 합니다")
+        payload.update({
             "PIEZO_SAMPLE_RATE": rate,
             "PIEZO_SAMPLE_COUNT": count,
-        }
-    if sensor == "ADXL":
-        rate, count = mon.ADXL_PROFILE_MAP[profile]
-        code = mon.ADXL_RATE_TO_CODE.get(str(rate))
-        if not code:
-            raise ValueError(f"ADXL Sample Rate 코드 변환 실패: {rate}")
-        return {
-            "COMMPATH": "0",
-            "SENSORTYPE": "2",
-            "SENSING_PERIOD": period_text,
-            "MEMS_SAMPLE_RATE": code,
-            "MEMS_SAMPLE_COUNT": count,
-        }
-    raise ValueError("센서 종류는 PIEZO 또는 ADXL이어야 합니다")
+            "PIEZO_GAIN": gain,
+        })
+        return payload
+    rate, count = mon.ADXL_PROFILE_MAP[profile]
+    sample_code = mon.ADXL_RATE_TO_CODE.get(str(rate))
+    if not sample_code:
+        raise ValueError(f"ADXL Sample Rate 코드 변환 실패: {rate}")
+    if str(sample_code).lower().startswith("0x"):
+        sample_code = str(sample_code)[2:]
+    ranges = {"2": "0", "4": "1", "8": "2", "16": "3"}
+    chosen = str(g_range).strip()
+    if chosen not in ranges:
+        raise ValueError("MEMS G Range는 2, 4, 8, 16 중 선택하세요")
+    payload.update({
+        "MEMS_SAMPLE_RATE": sample_code,
+        "MEMS_SAMPLE_COUNT": count,
+        "MEMS_G_RANGE": ranges[chosen],
+    })
+    return payload
 
 
 class CsvWriter:
@@ -1233,10 +1241,23 @@ async def monitor_command(body: dict):
                 raise ValueError("현재 설정 조회는 센서 MAC 1개만 선택하세요")
             payload = monitor.publish_config(macs, {"CONFIG": "?"}, "현재 설정 조회", retain=False)
         elif action == "stop":
-            payload = monitor.publish_config(macs, _sensor_config(sensor, period, profile, stop=True), "STOP")
+            payload = monitor.publish_config(
+                macs, _sensor_config(sensor, period, profile, stop=True), "STOP"
+            )
         elif action in ("start", "apply"):
             label = "START" if action == "start" else "설정 적용"
-            payload = monitor.publish_config(macs, _sensor_config(sensor, period, profile), label)
+            payload = monitor.publish_config(
+                macs,
+                _sensor_config(
+                    sensor,
+                    period,
+                    profile,
+                    sensor_type=body.get("sensor_type"),
+                    g_range=body.get("g_range") or "16",
+                    piezo_gain=body.get("piezo_gain") if body.get("piezo_gain") is not None else "30",
+                ),
+                label,
+            )
         else:
             raise ValueError("명령은 start, stop, apply, query 중 하나여야 합니다")
     except Exception as exc:

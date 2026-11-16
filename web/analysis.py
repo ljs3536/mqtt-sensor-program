@@ -731,6 +731,11 @@ def monitor_adxl_set(axis_samples, options):
             "fft_log_y": _flag(options.get("fft_log_y")),
         }
     def _hz_trace(item):
+        def series(key):
+            value = item.get(key)
+            if value is None:
+                return []
+            return np.asarray(value, dtype=np.float64).reshape(-1)
         return {
             "ok": bool(item.get("ok")),
             "text": item.get("text") or "",
@@ -738,8 +743,8 @@ def monitor_adxl_set(axis_samples, options):
             "value": None if item.get("value") is None else float(item["value"]),
             "device": item.get("device") or "",
             "level": None if item.get("level") is None else float(item["level"]),
-            "f": [float(value) * 1000.0 for value in (item.get("f") or [])],
-            "y": [float(value) for value in (item.get("y") or [])],
+            "f": [float(value) * 1000.0 for value in series("f")],
+            "y": [float(value) for value in series("y")],
         }
     shown["_srss"] = _hz_trace(curves.get("srss") or {})
     shown["_gn"] = _hz_trace(curves.get("gn") or {})

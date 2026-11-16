@@ -1,0 +1,98 @@
+// 8081 수신 모니터. 설정 적용 JSON과 표시 이름을 SQLite에 남긴다.
+const nameMac = document.querySelector("#nameMac");
+const deviceName = document.querySelector("#deviceName");
+const savedConfig = document.querySelector("#savedConfig");
+
+function listedMacs() {
+  const values = [...document.querySelectorAll("#macs input")].map((input) => input.value).filter(Boolean);
+  const manual = document.querySelector("#manualMac").value.trim();
+  if (manual && !values.includes(manual)) values.push(manual);
+  return values;
+}
+
+function refreshNameMacs() {
+  const current = nameMac.value;
+  const values = listedMacs();
+  nameMac.innerHTML = "";
+  if (!values.length) {
+    nameMac.innerHTML = '<option value="">MAC 없음</option>';
+    return;
+  }
+  values.forEach((mac) => {
+    const option = document.createElement("option");
+    option.value = mac;
+    option.textContent = mac;
+    nameMac.appendChild(option);
+  });
+  if (values.includes(current)) nameMac.value = current;
+}
+
+async function loadProfile() {
+  if (!nameMac.value) {
+    deviceName.value = "";
+    return;
+  }
+  const response = await fetch(`/api/db/profile?mac=${encodeURIComponent(nameMac.value)}`);
+  const data = await response.json();
+  if (!response.ok) {
+    savedConfig.textContent = data.detail || "이름 조회 실패";
+    return;
+  }
+  deviceName.value = data.display_name || "";
+  if (data.payload) {
+    savedConfig.textContent = `저장된 설정 ${data.action || ""} ${data.updated_at || ""} ${JSON.stringify(data.payload)}`;
+  } else {
+    savedConfig.textContent = "저장된 설정 JSON이 없습니다. 설정 적용을 누르면 이 MAC에 남습니다.";
+  }
+}
+
+document.querySelector("#macs").addEventListener("change", (event) => {
+  const input = event.target;
+  if (input && input.value && input.checked) {
+    refreshNameMacs();
+    nameMac.value = input.value;
+    loadProfile().catch((error) => {
+      savedConfig.textContent = error.message;
+    });
+  }
+});
+
+nameMac.addEventListener("change", () => {
+  loadProfile().catch((error) => {
+    savedConfig.textContent = error.message;
+  });
+});
+
+document.querySelector("#saveDeviceName").onclick = async () => {
+  refreshNameMacs();
+  if (!nameMac.value) {
+    alert("이름을 저장할 MAC을 선택하세요.");
+    return;
+  }
+  const response = await fetch("/api/db/device-name", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mac: nameMac.value, display_name: deviceName.value.trim() }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    alert(data.detail || "이름 저장 실패");
+    return;
+  }
+  savedConfig.textContent = `${data.mac} 이름을 '${data.display_name}'로 저장했습니다.`;
+};
+
+const monitorCommand = command;
+command = async function saveCommand(action) {
+  await monitorCommand(action);
+  if (action === "apply" || action === "start" || action === "stop") {
+    refreshNameMacs();
+    await loadProfile();
+  }
+};
+
+new MutationObserver(refreshNameMacs).observe(document.querySelector("#macs"), {
+  childList: true,
+  subtree: true,
+});
+refreshNameMacs();

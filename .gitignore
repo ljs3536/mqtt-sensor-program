@@ -1,6 +1,9 @@
 .venv/
 data_csv/
 web/uploads/
+web_db/sensor.sqlite
+web_db/sensor.sqlite-wal
+web_db/sensor.sqlite-shm
 __pycache__/
 *.pyc
 build/

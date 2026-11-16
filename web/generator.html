@@ -129,7 +129,6 @@
           <span id="stats" class="stats">Publish 0 / PUBACK 0 / Drop 0</span>
         </div>
         <p id="formula" class="formula"></p>
-        <p id="rotation" class="formula"></p>
       </section>
 
       <div id="graphWindow">
@@ -364,31 +363,6 @@
                   보정 적용/저장
                 </button>
               </div>
-              <p id="correctionFormula" class="formula"></p>
-              <div class="row">
-                <label>RPM<input id="rpm" class="w-num" value="1800" /></label>
-                <label
-                  >유형
-                  <select id="rotType">
-                    <option>미지정</option>
-                    <option>블레이드</option>
-                    <option>기어</option>
-                    <option>플런저</option>
-                    <option>DC 정류자</option>
-                  </select>
-                </label>
-                <label
-                  >축
-                  <select id="rotAxis">
-                    <option>X</option>
-                    <option>Y</option>
-                    <option>Z</option>
-                  </select>
-                </label>
-              </div>
-              <p class="hint">
-                회전부품 역추정: FFT 데이터 로드 후 실행 (상대 점수/후보)
-              </p>
             </fieldset>
           </div>
         </details>
