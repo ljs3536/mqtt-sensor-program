@@ -23,7 +23,8 @@ function refreshNameMacs() {
   values.forEach((mac) => {
     const option = document.createElement("option");
     option.value = mac;
-    option.textContent = mac;
+    // 이름이 있으면 "MAC · 이름"으로 보여 준다. 값은 MAC 그대로다.
+    option.textContent = macNames[mac] ? `${mac} · ${macNames[mac]}` : mac;
     nameMac.appendChild(option);
   });
   if (values.includes(current)) nameMac.value = current;
@@ -83,6 +84,8 @@ document.querySelector("#saveDeviceName").onclick = async () => {
     return;
   }
   savedConfig.textContent = `${data.mac} 이름을 '${data.display_name}'로 저장했습니다.`;
+  // MAC 칩의 이름을 바로 바꾼다. 연결이 끊겨 있으면 1초 갱신이 없으므로 직접 한 번 읽는다.
+  refresh().catch(() => {});
 };
 
 /** 설정 적용 뒤에 이름 목록과 저장된 JSON을 다시 읽는다. */

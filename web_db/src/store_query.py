@@ -10,6 +10,17 @@ from web_db.src.stats_calc import adxl_set_stats, summarize_mac
 class QueryMixin:
     """MAC 목록, 통계 조회, 측정 최신화, 분석용 패킷 조회."""
 
+    def display_names(self):
+        """이름이 있는 MAC만 {MAC: 표시 이름}으로 돌려준다.
+
+        수신 화면이 상태를 읽을 때마다(연결 중 1초) 부른다. device 표는 MAC당 한 줄이라 가볍다.
+        """
+        with self.lock:
+            rows = self._conn.execute(
+                "SELECT mac, display_name FROM device WHERE display_name<>''"
+            ).fetchall()
+        return {row["mac"]: row["display_name"] for row in rows}
+
     def devices(self):
         """MAC 목록과 패킷 수를 돌려준다."""
         with self.lock:

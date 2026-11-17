@@ -226,6 +226,24 @@ pre.short { height: 72px; }
   background: #f8fbfe;
 }
 .mac-addr { font-family: Consolas, "Malgun Gothic", monospace; font-weight: 700; letter-spacing: 0.2px; }
+/* 표시 이름 배지. MAC 바로 옆에 두고, 길면 말줄임표로 줄인다(전체는 title). */
+.mac-name {
+  display: inline-flex;
+  align-items: center;
+  max-width: 160px;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: #e3effa;
+  border: 1px solid #b9d4ec;
+  color: #1b5a8c;
+  font-size: 12px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mac-chip.named { border-color: #a9c8e4; box-shadow: inset 3px 0 0 #1f6aa5; }
 .mac-time { color: #5c7286; font-size: 12px; }
 .mac-count {
   min-width: 22px;
@@ -446,18 +464,23 @@ body.layout-pin .formula-fold {
   font-size: 12px;
 }
 body.layout-pin .formula-fold summary { cursor: pointer; }
+/* 센서 선택(PIEZO/MEMS/초음파). 바깥 높이를 메뉴 버튼·파일 버튼과 같은 34px로 맞춘다.
+   안쪽 버튼 30px + 위아래 여백 2px씩 = 34px. 여백이 3px이면 38px이 되어 위로 튀어나온다. */
 body.layout-pin .segmented {
   display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 34px;
   background: #e7eef5;
   border-radius: 8px;
-  padding: 3px;
+  padding: 2px;
   gap: 2px;
 }
 body.layout-pin .segmented button {
   background: transparent;
   color: #234055;
   box-shadow: none;
-  height: 32px;
+  height: 30px;
 }
 body.layout-pin .segmented button.active {
   background: white;

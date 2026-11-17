@@ -181,13 +181,31 @@ function commandTargets() {
 }
 
 /** 수신 MAC 칩을 다시 그린다. 체크 상태는 selectedMacs를 유지한다. */
-function renderMacs(devices, arrivals) {
+/* MAC별 표시 이름. renderMacs가 상태 응답마다 바꾸고, 이름 선택 상자(monitor-db.js)도 읽는다. */
+let macNames = {};
+
+/** 화면에 넣을 글자의 &, <, >, ", ' 를 바꾼다. 표시 이름은 사용자가 입력한 값이다. */
+function escapeHtml(text) {
+  return String(text ?? "").replace(/[&<>"']/g, (ch) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]
+  ));
+}
+
+/**
+ * 수신 MAC 목록을 칩으로 그린다.
+ * 칩 한 개 = 체크박스 · MAC · 표시 이름(있을 때) · 마지막 수신 시각 · 받은 패킷 수.
+ * names는 서버 상태 응답의 {MAC: 이름}이다. 이름이 길면 말줄임표로 줄이고 전체는 마우스를 올리면 보인다.
+ */
+function renderMacs(devices, arrivals, names) {
+  macNames = names || {};
   const box = document.querySelector("#macs");
   box.innerHTML = (devices || []).map((mac) => {
     const stat = (arrivals || {})[mac] || {};
+    const label = macNames[mac] || "";
+    const name = label ? `<span class="mac-name" title="${escapeHtml(label)}">${escapeHtml(label)}</span>` : "";
     const when = stat.last ? `<span class="mac-time">${stat.last}</span>` : "";
     const count = stat.count ? `<span class="mac-count">${stat.count}</span>` : "";
-    return `<label class="mac-chip"><input type="checkbox" value="${mac}" ${selectedMacs.has(mac) ? "checked" : ""}><span class="mac-addr">${mac}</span>${when}${count}</label>`;
+    return `<label class="mac-chip${label ? " named" : ""}"><input type="checkbox" value="${escapeHtml(mac)}" ${selectedMacs.has(mac) ? "checked" : ""}><span class="mac-addr">${escapeHtml(mac)}</span>${name}${when}${count}</label>`;
   }).join("");
   document.querySelector("#macCount").textContent = `${selectedMacs.size}개 선택`;
 }
@@ -216,8 +234,15 @@ function draw(device) {
   let fftLabel = "크기";
   let fftX = "Frequency (Hz)";
   const srss = device && device._srss;
-  for (const axis of Object.keys(device || {})) {
-    if (axis.charAt(0) === "_") continue;
+  // 서버는 축을 도착 순서로 준다. 그래프 범례와 수신 정보가 늘 같은 순서가 되게 X, Y, Z, PIEZO, H 순으로 그린다.
+  const axisOrder = ["X", "Y", "Z", "PIEZO", "H"];
+  const rank = (axis) => (axisOrder.includes(axis) ? axisOrder.indexOf(axis) : axisOrder.length);
+  const axes = Object.keys(device || {})
+    .filter((axis) => axis.charAt(0) !== "_")
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+  // 축별 값(AC RMS, N, Fs)을 먼저 X·Y·Z 순으로 모으고, 계산식처럼 축과 무관한 줄은 뒤에 붙인다.
+  const formulas = [];
+  for (const axis of axes) {
     const item = device[axis];
     const color = colors[axis] || "#444";
     if (item.kind === "spectrum") {
@@ -242,7 +267,7 @@ function draw(device) {
         data: pairs(item.fft_f, item.fft_y, logX, logY),
       });
       notes.push(`${axis} ${item.unit || ""} AC RMS=${item.rms_value} N=${item.n} Window=${item.window} Fs=${item.fs}`);
-      if (item.formula) notes.push(item.formula);
+      if (item.formula) formulas.push(item.formula);
     }
   }
   const gn = device && device._gn;
@@ -262,6 +287,7 @@ function draw(device) {
     });
     if (limit.value != null && document.activeElement !== srssLimit) srssLimit.value = limit.value;
   }
+  notes.push(...formulas);
   if (srss && srss.text) notes.push(srss.text);
   if (!lockX.checked) {
     delete rawChart.options.scales.x.min;

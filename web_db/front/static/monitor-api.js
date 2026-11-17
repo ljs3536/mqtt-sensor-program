@@ -26,7 +26,7 @@ async function refresh() {
   const logBox = document.querySelector("#log");
   if (logBox) logBox.scrollTop = logBox.scrollHeight;
   window._monitorDevice = graphDevice || data.latest_device || "";
-  renderMacs(data.devices || [], data.arrivals || {});
+  renderMacs(data.devices || [], data.arrivals || {}, data.names || {});
   const box = document.querySelector("#device");
   const devices = data.graph_devices || Object.keys(data.latest || {});
   const previous = box.value;

@@ -514,5 +514,10 @@ class MonitorService:
                 "csv_errors": self.csv.errors,
                 "profiles": {"ADXL": list(mon.ADXL_PROFILE_LABELS), "PIEZO": list(mon.PIEZO_PROFILE_LABELS)},
             }
+        # 표시 이름은 SQLite에 있다. MonitorService.lock을 푼 뒤에 읽어 수신 스레드를 막지 않는다.
+        try:
+            payload["names"] = self.store.display_names()
+        except Exception:
+            payload["names"] = {}
         payload["latest"] = {target: self._device_views(snapshot, window, options)} if target else {}
         return payload
