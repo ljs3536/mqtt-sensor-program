@@ -15,8 +15,8 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from web_db.src.db_util import _float, _int, _iso, _samples_text
-from web_db.src.grouping import assign_set, continues_set, seq_low
+from web_db.src.db_util import _float, _int, _iso, _rate, _samples_text
+from web_db.src.grouping import assign_set
 from web_db.src.store_query import QueryMixin
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,10 +24,24 @@ DB_PATH = ROOT / "sensor.sqlite"
 
 
 class Store(QueryMixin):
+    """sensor.sqlite 하나를 프로세스 전체가 같이 쓰는 저장소.
+
+    연결은 하나다(check_same_thread=False). MQTT 수신 스레드, HTTP 요청 스레드,
+    하루 통계 스레드가 모두 이 연결을 쓰므로, 쿼리와 commit은 반드시 self.lock 안에서 한다.
+    lock 없이 두 스레드가 쓰면 한쪽 commit이 다른 쪽의 반쯤 한 작업까지 확정할 수 있다.
+
+    self.stats_lock은 통계 최신화(update_statistics) 전체를 한 번에 하나만 돌리는 잠금이다.
+    최신화는 계산하는 동안 self.lock을 풀기 때문에, 이것이 없으면 두 최신화가 같은 위치를
+    읽어 같은 세트를 두 번 넣을 수 있다. 자세한 순서는 store_query._update_statistics.
+
+    self.lock은 재진입이 안 된다. lock을 잡은 메서드 안에서 lock을 잡는 공개 메서드
+    (get_srss_limit 등)를 부르면 멈춘다. 그런 곳은 _read_srss_limit처럼 lock 없는 내부 함수를 쓴다.
+    """
     def __init__(self, path=DB_PATH):
         """DB 파일을 열고 스키마를 맞춘다."""
         self.path = Path(path)
         self.lock = threading.Lock()
+        self.stats_lock = threading.Lock()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
@@ -36,32 +50,26 @@ class Store(QueryMixin):
         self._migrate()
 
     def _migrate(self):
-        """테이블이 없으면 만들고, 예전 session 스키마면 표를 비운 뒤 다시 만든다."""
-        names = {row[0] for row in self._conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        packet_cols = set()
-        if "packet" in names:
-            packet_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(packet)")}
-        if "session" in names or "session_id" in packet_cols:
-            self._conn.executescript(
-                """
-                DROP TABLE IF EXISTS measurement;
-                DROP TABLE IF EXISTS daily_stat;
-                DROP TABLE IF EXISTS packet;
-                DROP TABLE IF EXISTS device;
-                DROP TABLE IF EXISTS session;
-                DROP TABLE IF EXISTS srss_limit;
-                """
-            )
-            self._conn.commit()
+        """테이블과 인덱스가 없으면 만든다. 이미 있으면 그대로 둔다.
+
+        테이블 역할은 docs/web_db-DB명세서.md에 있다.
+        - device: MAC 명부, 표시 이름, 마지막 수신 정보
+        - packet: 수신 원본. 지우지 않는다
+        - measurement: 최신화 구간마다 한 줄인 통계
+        - stat_cursor: MAC별 통계 읽기 위치
+        - srss_limit, sensor_config, stat_meta: 한계값, 마지막 설정 JSON, 마지막 최신화 시각
+        """
         self._conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS device (
                 mac TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL DEFAULT '',
-                location TEXT NOT NULL DEFAULT '',
-                asset_no TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                last_gw TEXT NOT NULL DEFAULT '',
+                last_battery TEXT NOT NULL DEFAULT '',
+                last_sensor TEXT NOT NULL DEFAULT '',
+                last_at TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS packet (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,26 +105,17 @@ class Store(QueryMixin):
                 rms REAL,
                 peak REAL,
                 srss REAL,
+                srss_mms REAL,
                 unit TEXT NOT NULL,
                 g_per_lsb REAL,
                 set_key TEXT NOT NULL UNIQUE,
-                packet_id INTEGER,
-                packet_x_id INTEGER,
-                packet_y_id INTEGER,
-                packet_z_id INTEGER
+                set_count INTEGER,
+                first_at TEXT,
+                last_at TEXT,
+                computed_at TEXT,
+                through_id INTEGER
             );
             CREATE INDEX IF NOT EXISTS idx_measurement_mac_time ON measurement(mac, received_at);
-            CREATE TABLE IF NOT EXISTS daily_stat (
-                mac TEXT NOT NULL,
-                stat_date TEXT NOT NULL,
-                srss_avg REAL,
-                srss_count INTEGER NOT NULL DEFAULT 0,
-                rms_avg REAL,
-                peak_max REAL,
-                unit TEXT NOT NULL DEFAULT '',
-                computed_at TEXT NOT NULL,
-                PRIMARY KEY (mac, stat_date)
-            );
             CREATE TABLE IF NOT EXISTS srss_limit (
                 mac TEXT PRIMARY KEY,
                 limit_mm_s REAL NOT NULL,
@@ -128,69 +127,16 @@ class Store(QueryMixin):
                 payload TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS stat_cursor (
+                mac TEXT PRIMARY KEY,
+                through_id INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS stat_meta (
                 key TEXT PRIMARY KEY,
                 updated_at TEXT NOT NULL
             );
-            """
-        )
-        for name, ddl in (
-            ("last_gw", "TEXT NOT NULL DEFAULT ''"),
-            ("last_battery", "TEXT NOT NULL DEFAULT ''"),
-            ("last_sensor", "TEXT NOT NULL DEFAULT ''"),
-            ("last_at", "TEXT NOT NULL DEFAULT ''"),
-        ):
-            self._add_column("device", name, ddl)
-        self._add_column("packet", "set_no", "INTEGER")
-        self._add_column("measurement", "srss_mms", "REAL")
-        self._add_column("measurement", "set_count", "INTEGER")
-        self._add_column("measurement", "first_at", "TEXT")
-        self._add_column("measurement", "last_at", "TEXT")
-        self._add_column("measurement", "computed_at", "TEXT")
-        self._conn.commit()
-        self._import_srss_limits()
-        self._regroup_adxl()
-
-    def _add_column(self, table, name, ddl):
-        """이미 있는 표에 컬럼이 없을 때만 추가한다."""
-        names = {row[1] for row in self._conn.execute(f"PRAGMA table_info({table})")}
-        if name not in names:
-            self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-
-    def _regroup_adxl(self):
-        """저장된 ADXL 패킷의 set_no만 seq 규칙으로 다시 맞춘다. 통계 줄은 만들지 않는다."""
-        rows = self._conn.execute(
-            """
-            SELECT id, mac, axis, seq FROM packet
-            WHERE sensor_type='ADXL' ORDER BY mac, id
-            """
-        ).fetchall()
-        current = None
-        last_axis = None
-        last_low = None
-        set_no = 0
-        for row in rows:
-            if row["mac"] != current:
-                current = row["mac"]
-                last_axis = None
-                last_low = None
-                set_no = 0
-            low = seq_low(row["seq"])
-            if not continues_set(last_axis, last_low, row["axis"], low):
-                set_no += 1
-            last_axis, last_low = row["axis"], low
-            key = f"ADXL|{row['mac']}|{set_no}"
-            self._conn.execute(
-                "UPDATE packet SET set_key=?, set_no=? WHERE id=?",
-                (key, set_no, row["id"]),
-            )
-        self._conn.execute(
-            """
-            UPDATE device SET
-                last_at=COALESCE((SELECT MAX(received_at) FROM packet p WHERE p.mac=device.mac), last_at),
-                last_gw=COALESCE((SELECT gw_mac FROM packet p WHERE p.mac=device.mac ORDER BY id DESC LIMIT 1), last_gw),
-                last_battery=COALESCE((SELECT battery FROM packet p WHERE p.mac=device.mac ORDER BY id DESC LIMIT 1), last_battery),
-                last_sensor=COALESCE((SELECT sensor_type FROM packet p WHERE p.mac=device.mac ORDER BY id DESC LIMIT 1), last_sensor)
+            DROP TABLE IF EXISTS daily_stat;
             """
         )
         self._conn.commit()
@@ -302,35 +248,6 @@ class Store(QueryMixin):
             self._conn.execute("DELETE FROM srss_limit WHERE mac=?", (key,))
             self._conn.commit()
 
-    def _import_srss_limits(self):
-        """예전에 홈 JSON에 있던 한계를 테이블에 한 번 옮긴다. 이미 있는 키는 유지한다."""
-        path = Path.home() / ".sensor-program" / "srss_limits.json"
-        if not path.exists():
-            return
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return
-        if not isinstance(data, dict):
-            return
-        now = _iso()
-        for raw, value in data.items():
-            key = self.limit_key(raw)
-            try:
-                number = float(value)
-            except (TypeError, ValueError):
-                continue
-            if not key or not math.isfinite(number) or number <= 0:
-                continue
-            self._conn.execute(
-                """
-                INSERT OR IGNORE INTO srss_limit(mac, limit_mm_s, updated_at)
-                VALUES (?,?,?)
-                """,
-                (key, number, now),
-            )
-        self._conn.commit()
-
     def save_sensor_config(self, mac, payload, action):
         """설정 적용으로 보낸 JSON을 그 MAC의 sensor_config에 남긴다."""
         mac = str(mac or "").strip()
@@ -388,7 +305,17 @@ class Store(QueryMixin):
         self._conn.close()
 
     def save_packet(self, item):
-        """수신 원본 한 줄을 packet에 넣는다. 통계는 계산하지 않는다."""
+        """수신 원본 한 줄을 packet에 넣고 새 id를 돌려준다. 통계는 계산하지 않는다.
+
+        MonitorService._save_csv가 MQTT 수신 스레드에서 패킷마다 부른다.
+        - 센서 종류: kind가 ULTRASONIC이면 초음파(축 H), ADXL-로 시작하면 ADXL, 나머지는 PIEZO.
+        - sample_rate: 수신 JSON 값을 그대로 둔다(_rate). 장비 코드 `0x0F`도 글자로 남고,
+          Hz로 읽는 것은 쓰는 쪽(stats_calc, 그래프)이 normalize_sample_rate로 한다.
+        - decoded_samples: 디코드한 샘플을 쉼표 문자열로. 통계가 HEX를 다시 풀지 않게 한다.
+        - set_key / set_no: assign_set이 직전 패킷과 seq를 비교해 정한다. 같은 lock 안에서
+          '직전 패킷 조회 → INSERT'를 하므로, 두 패킷이 같은 직전 값을 보고 번호가 꼬이지 않는다.
+        한 패킷마다 commit한다. 서버가 꺼져도 받은 패킷까지는 남는다.
+        """
         mac = str(item.get("device") or "UNKNOWN").strip() or "UNKNOWN"
         kind = str(item.get("kind") or "")
         sensor_type = "ULTRASONIC" if kind == "ULTRASONIC" else ("ADXL" if kind.startswith("ADXL") else "PIEZO")
@@ -419,7 +346,7 @@ class Store(QueryMixin):
                     seq,
                     tick,
                     str(item.get("battery") or ""),
-                    _float(item.get("sample_rate")),
+                    _rate(item.get("sample_rate")),
                     _int(item.get("num_samples")),
                     _int(item.get("payload_bytes")),
                     str(item.get("sensor_data") or ""),

@@ -1,5 +1,13 @@
 /* 분석 화면이 파일, 미리보기, 송신을 서버와 주고받는 부분. */
 
+/*
+ * 마지막 송신 상태 조회에서 전송 중이었는지.
+ * generator.js의 1초 갱신은 이 값이 true일 때만 /api/generator/status를 부른다.
+ * 전송 중이 아니면 Publish 수와 로그는 사용자가 무언가 할 때만 바뀐다. 그때는 그 동작 끝에서
+ * pollStatus를 한 번 부른다(업로드·미리보기 이동·DB 열기·시작·중지·연결 테스트).
+ */
+let replayLive = false;
+
 /** 송신 줄에서 해당 센서 체크를 켠다. */
 function enableSensor(name) {
   const box = document.querySelector(`[data-sensor="${name}"] .enabled`);
@@ -25,6 +33,7 @@ async function uploadAdxlCsv() {
   enableSensor("ADXL");
   showPanels();
   await move(1);
+  pollStatus().catch(() => {});
 }
 
 /** PIEZO 또는 초음파 파일 하나를 서버에 올리고 첫 패킷을 그린다. */
@@ -39,6 +48,7 @@ async function upload(sensor, file) {
   enableSensor(sensor);
   showPanels();
   await move(1);
+  pollStatus().catch(() => {});
 }
 
 /** 서버에 미리보기를 요청하고 받은 곡선을 그린다. */
@@ -116,6 +126,7 @@ async function saveJson(url, body) {
 /** 송신 횟수와 로그를 1초마다 갱신한다. 브로커 접속 상태는 아니다. */
 async function pollStatus() {
   const data = await (await fetch("/api/generator/status")).json();
+  replayLive = !!data.running;
   stats.textContent =
     `Publish ${data.sent} / PUBACK ${data.acked || 0} / Drop ${data.dropped} | ` +
     Object.entries(data.counter)

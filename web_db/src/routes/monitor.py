@@ -64,13 +64,6 @@ async def monitor_view(body: dict):
     return monitor.state(str(body.get("device") or ""))
 
 
-@router.post("/api/monitor/window")
-async def monitor_window(body: dict):
-    """모니터 그래프의 창 길이만 바꾼다."""
-    monitor.window = str(body.get("window") or "전체")
-    return {"window": monitor.window}
-
-
 @router.post("/api/monitor/command")
 async def monitor_command(body: dict):
     """고른 MAC에 START, STOP, 설정 적용, 설정 조회를 보낸다."""

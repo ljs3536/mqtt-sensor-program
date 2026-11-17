@@ -1,7 +1,7 @@
 """화면 HTML. /, /generator, /studio, /dashboard, /settings."""
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 
 from web_db.src.paths import FRONT
 
@@ -36,17 +36,5 @@ def dashboard_page():
 def settings_page():
     """장치 표시 이름과 통계 SRSS 한계."""
     return FileResponse(FRONT / "settings.html")
-
-
-@router.get("/monitor")
-def monitor_page():
-    """수신 모니터 화면을 연다. 주소만 /monitor다."""
-    return FileResponse(FRONT / "index.html")
-
-
-@router.get("/archive")
-def archive_page():
-    """예전 보관 주소를 CSV 분석 화면으로 보낸다."""
-    return RedirectResponse("/generator")
 
 

@@ -31,6 +31,15 @@ def _float(value):
     return number if np.isfinite(number) else None
 
 
+def _rate(value):
+    """samplerate 원본. 숫자면 숫자로, `0x0F`처럼 숫자가 아니면 글자 그대로 둔다. 비면 None."""
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None
+    number = _float(text)
+    return number if number is not None else text
+
+
 def _int(value):
     """정수가 아니면 None."""
     try:

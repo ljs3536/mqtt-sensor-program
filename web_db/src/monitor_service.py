@@ -55,21 +55,6 @@ def _sliding_ac_rms(values, window_n):
     return curve
 
 
-def _sample_index(length, limit=1800):
-    """긴 파형에서 고르게 고른 인덱스를 만든다."""
-    if length <= limit:
-        return np.arange(length)
-    return np.linspace(0, length - 1, limit).astype(int)
-
-
-def _picked(values, index):
-    """고른 인덱스의 값을 소수 6자리로 꺼낸다."""
-    data = np.asarray(values, dtype=np.float64)
-    if data.size == 0:
-        return []
-    return [round(float(data[i]), 6) for i in index]
-
-
 def _sensor_config(sensor, period, profile, stop=False, sensor_type=None, g_range="16", piezo_gain="30"):
     """모니터 명령 JSON. COMMPATH는 0으로 고정한다.
 
@@ -152,7 +137,16 @@ class MonitorService:
             self.logs.clear()
 
     def _remember(self, topic, obj):
-        """측정 패킷을 디코드해 최신 파형으로 두고 CSV와 SQLite에 넘긴다."""
+        """측정 패킷을 디코드해 최신 파형으로 두고 CSV와 SQLite에 넘긴다.
+
+        _on_message가 self.lock을 잡은 채 부른다. 순서는 다음과 같다.
+        1. S/{MAC} 토픽이면 센서가 retain으로 들고 있는 설정이다. configs에만 두고 끝낸다.
+        2. classify_vibration(PIEZO / ADXL-X·Y·Z)으로 먼저 보고, 아니면 초음파인지 본다.
+           samplerate와 numofsample이 다 있어야 진동이다.
+        3. sensorData HEX를 샘플로 푼다. 실패하면 로그만 남기고 이 패킷은 저장하지 않는다.
+        4. records[MAC][축]에 최신 한 개만 둔다. 수신 화면 그래프는 이것만 그린다.
+        5. _save_csv로 CSV 큐와 SQLite packet에 같은 원본을 넘긴다.
+        """
         if str(topic).startswith("S/"):
             mac = str(topic).split("/", 1)[1]
             self.configs[mac] = obj
@@ -208,7 +202,12 @@ class MonitorService:
         self.log(f"{record['device']} {kind} N={len(samples) if kind != 'ULTRASONIC' else len(record['y'])}{rms}")
 
     def _save_csv(self, obj, kind, axis, sensor_hex, decoded, meta):
-        """같은 패킷을 CSV 큐와 SQLite packet에 넣는다. 통계는 계산하지 않는다."""
+        """같은 패킷을 CSV 큐와 SQLite packet에 넣는다. 통계는 계산하지 않는다.
+
+        CSV는 큐에 넣고 바로 돌아온다(CsvWriter 스레드가 쓴다).
+        SQLite는 이 자리에서 바로 INSERT·commit한다. 저장이 실패해도 로그만 남기고
+        수신은 계속한다. 그때 그 패킷은 CSV에만 남는다.
+        """
         device = str(obj.get("dvicMacAddr") or obj.get("deviceId") or "UNKNOWN").strip()
         item = {
             "device": device,
@@ -387,7 +386,11 @@ class MonitorService:
         return result
 
     def _on_message(self, _client, _userdata, msg):
-        """MQTT 메시지 하나를 해석한다. 한 프레임 오류로 수신을 멈추지 않는다."""
+        """MQTT 메시지 하나를 해석한다. 한 프레임 오류로 수신을 멈추지 않는다.
+
+        paho의 네트워크 스레드(loop_start)에서 메시지마다 불린다. 여기서 시간이 오래 걸리면
+        다음 메시지 수신과 keepalive 응답이 늦어진다. 그래서 무거운 통계 계산은 하지 않는다.
+        """
         with self.lock:
             self.messages += 1
         try:
@@ -407,7 +410,12 @@ class MonitorService:
                 )
 
     def connect_mqtt(self, host, port, topic, csv_enabled=True):
-        """브로커에 붙고 토픽을 구독한다. CSV가 켜지면 저장 폴더를 연다."""
+        """브로커에 붙고 토픽을 구독한다. CSV가 켜지면 저장 폴더를 연다.
+
+        이전 연결은 먼저 끊는다. 사용자가 고른 토픽에 설정 토픽 S/#를 항상 더한다.
+        구독은 이 함수에서 한 번만 한다. paho가 끊긴 뒤 스스로 다시 붙어도 구독은
+        다시 하지 않으므로, 끊김 로그가 보이면 화면에서 다시 연결해야 한다.
+        """
         self.disconnect()
         client = mqtt_client(f"web-monitor-{int(time.time())}")
         client.on_message = self._on_message
@@ -451,7 +459,12 @@ class MonitorService:
         self.mode = ""
 
     def publish_config(self, macs, payload, label, retain=True):
-        """S/{MAC} 로 설정 JSON을 보낸다. retain 명령은 끝에 CR LF를 붙인다."""
+        """S/{MAC} 로 설정 JSON을 보낸다. retain 명령은 끝에 CR LF를 붙인다.
+
+        retain=True(설정 적용, START, STOP)면 브로커가 마지막 값을 들고 있다가,
+        센서가 나중에 붙어도 그 설정을 받는다. 그 JSON을 sensor_config에 MAC별로 남긴다.
+        retain=False(현재 설정 조회 CONFIG ?)는 남기지 않는다. QoS는 0이다.
+        """
         if self.client is None or not self.connected:
             raise ValueError("먼저 MQTT에 연결하세요")
         if not macs:

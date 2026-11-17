@@ -47,11 +47,17 @@ document.querySelector("#fftCheck").onclick = async () => {
 document.querySelector("#start").onclick = async () => {
   const { response, data } = await postJson("/api/generator/start", config());
   if (!response.ok) alert(data.detail || "시작 실패");
+  // 시작되었으면 running=true를 받아 1초 갱신이 켜진다.
+  await pollStatus().catch(() => {});
 };
-document.querySelector("#stop").onclick = () =>
-  fetch("/api/generator/stop", { method: "POST" });
+document.querySelector("#stop").onclick = async () => {
+  await fetch("/api/generator/stop", { method: "POST" });
+  // running=false를 받아 1초 갱신이 멈추고, 마지막 숫자와 '전송 중지' 로그가 남는다.
+  await pollStatus().catch(() => {});
+};
 document.querySelector("#testBroker").onclick = async () => {
   const { response, data } = await postJson("/api/generator/test", config());
+  await pollStatus().catch(() => {});
   alert(response.ok ? "MQTT 연결 성공" : data.detail || "연결 실패");
 };
 document.querySelector("#resetZoom").onclick = () => {
@@ -92,7 +98,12 @@ showPanels();
 loadDefaults()
   .then(() => { ready = true; })
   .catch(() => { ready = true; });
-setInterval(() => { pollStatus().catch(() => {}); }, 1000);
+// 처음 한 번은 꼭 읽는다. 페이지를 다시 열었을 때 전송이 아직 돌고 있으면 그대로 이어서 갱신한다.
+pollStatus().catch(() => {});
+// 전송 중일 때만 1초마다 Publish/PUBACK/Drop과 로그를 가져온다.
+setInterval(() => {
+  if (replayLive) pollStatus().catch(() => {});
+}, 1000);
 
 const clearLog = document.querySelector("#clearLog");
 if (clearLog) {

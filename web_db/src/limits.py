@@ -23,8 +23,3 @@ def srss_limit_get(device):
 def srss_limit_save(device, value):
     """장치 SRSS 한계를 srss_limit 테이블에 저장한다."""
     return _store().save_srss_limit(device, value)
-
-
-def srss_limit_delete(device):
-    """장치 SRSS 한계 줄을 지운다. 없으면 그대로 둔다."""
-    _store().delete_srss_limit(device)

@@ -78,6 +78,7 @@ def _pack_curves(curves):
         "fft": {},
     }
     def _pack_trace(item):
+        """SRSS·gN·한계선 곡선 하나의 점을 줄여 JSON에 넣을 수 있게 만든다. 곡선이 없으면 None."""
         if not item:
             return None
         freq, amp = _pack_pair(item.get("f"), item.get("y"))

@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import sys
-import threading
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -18,8 +17,8 @@ if str(ROOT) not in sys.path:
 
 from web_db.src.paths import FRONT
 from web_db.src.routes.analysis import router as analysis_router
-from web_db.src.routes.db import _daily_stats
 from web_db.src.routes.db import router as db_router
+from web_db.src.routes.db import start_daily_stats
 from web_db.src.routes.generator import router as generator_router
 from web_db.src.routes.monitor import router as monitor_router
 from web_db.src.routes.pages import router as pages_router
@@ -32,4 +31,4 @@ app.include_router(monitor_router)
 app.include_router(analysis_router)
 app.include_router(db_router)
 
-threading.Thread(target=_daily_stats, name="daily-stats", daemon=True).start()
+start_daily_stats()

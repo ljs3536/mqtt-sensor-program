@@ -108,6 +108,8 @@ document.querySelector("#dbLoad").onclick = async () => {
   const how = mode === "range" ? "기간" : `최근 ${limit}`;
   dbStatus.textContent = `${how} ${data.count}세트를 열었습니다. ${describeStats(data.stats)}`;
   draw(data.preview);
+  // 'SQLite … 로드' 로그를 바로 보이게 한다. 전송 중이 아니면 1초 갱신이 없기 때문이다.
+  pollStatus().catch(() => {});
 };
 
 dbMode.addEventListener("change", () => {

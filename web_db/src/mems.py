@@ -34,10 +34,6 @@ def save_mems_g_per_lsb(value):
     temp.write_text(json.dumps({"g_per_lsb": value}, indent=2) + "\n", encoding="utf-8")
     temp.replace(path)
 
-def get_mems_lsb_per_g():
-    """g/LSB의 역수인 LSB/g를 돌려준다."""
-    return 1.0 / read_mems_g_per_lsb()
-
 
 
 # V022/V027: MEMS FFT display calibration; never changes raw packets or MQTT.
@@ -103,26 +99,6 @@ def mems_sensitivity(measured_hz, config):
     if np.any(result <= 0):
         raise ValueError("MEMS 보정 감도가 0 이하입니다.")
     return result
-
-
-def format_mems_correction_formula(config):
-    """Human-readable displayed formulas using the currently selected parameters."""
-    fmt=lambda v: f"{float(v):.9g}"
-    lo, hi = fmt(config['low_hz']), fmt(config['high_hz'])
-    div=fmt(config['frequency_divisor'])
-    sl=fmt(config['low_sensitivity'])
-    sm=fmt(config['mid_intercept'])
-    slope=fmt(config['mid_slope'])
-    sh=fmt(config['high_sensitivity'])
-    return (
-        f"주파수: f_real = f_measure / {div} "
-        f"({'ON' if config['frequency_enabled'] else 'OFF'})\n"
-        f"Sensitivity S(f_measure): f ≤ {lo} Hz → {sl}; "
-        f"{lo} < f ≤ {hi} Hz → {sm} − f × {slope}; "
-        f"f > {hi} Hz → {sh}\n"
-        f"가속도: G_real(f) = G_measure(f) / S(f_measure) "
-        f"({'ON' if config['sensitivity_enabled'] else 'OFF'}; FFT g Peak/g RMS만 해당)"
-    )
 
 def corrected_mems_fft(measured_hz, g_amplitude, config, *, apply_sensitivity=True):
     """FFT 주파수와 진폭에 주파수 나눗수와 감도 보정을 적용한다."""

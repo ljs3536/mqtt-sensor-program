@@ -19,7 +19,15 @@ def _parse_samples(text):
 
 
 def adxl_set_stats(found):
-    """X/Y/Z 행 dict에서 RMS, PEAK, SRSS(g RMS), SRSS(mm/s RMS)를 계산한다."""
+    """X/Y/Z 행 dict에서 RMS, PEAK, SRSS(g RMS), SRSS(mm/s RMS)를 계산한다.
+
+    found는 {"X": row, "Y": row, "Z": row}이고 row는 packet 줄이다.
+    샘플 단위는 LSB이고, 지금 저장된 1 LSB(g)를 곱해 g로 바꾼다.
+    다음 경우는 ValueError로 이 세트를 버린다(최신화는 failed_sets로 센다).
+    - 축 하나라도 샘플이 2개 미만이거나 샘플링 속도를 Hz로 읽을 수 없을 때
+    - 세 축의 샘플 수 또는 샘플링 속도가 서로 다를 때
+    그래프의 필터, Window N, 주파수·감도 보정은 넣지 않는다. 창은 Blackman 고정이다.
+    """
     g_per_lsb = float(gen.read_mems_g_per_lsb())
     rates = []
     counts = []
@@ -30,7 +38,9 @@ def adxl_set_stats(found):
     for axis in ("X", "Y", "Z"):
         row = found[axis]
         samples = _parse_samples(row["decoded_samples"])
-        rate = float(row["sample_rate"] or 0)
+        # packet에는 수신 값 그대로 있다. 그래프와 같은 규칙으로 장비 코드(10~15, 0x0A~0x0F)를 Hz로 읽는다.
+        raw_rate = row["sample_rate"]
+        rate = float(gen.normalize_sample_rate("ADXL", raw_rate, 0)) if raw_rate not in (None, "") else 0.0
         count = int(samples.size)
         if count < 2 or rate <= 0:
             raise ValueError("ADXL 통계에는 샘플 2개 이상과 샘플링 속도가 필요합니다")

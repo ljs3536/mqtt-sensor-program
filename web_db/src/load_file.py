@@ -11,12 +11,15 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-
-
-APP_TITLE = 'MQTT H/ADXL/PIEZO 발생기 V029 — ADXL CSV 부분 복구'
 TYPE_NIBBLE = {'PIEZO': 0, 'X': 1, 'Y': 2, 'Z': 3}
 
 def sensor_type_from_seq(seq: str) -> str:
+    """seq 상위 4비트로 센서 종류를 고른다.
+
+    seq는 16진수 두 자리다. 상위 4비트가 0이면 PIEZO, 1/2/3이면 ADXL X/Y/Z이다.
+    하위 4비트는 보낼 때마다 1씩 오르는 카운터라 여기서는 보지 않는다.
+    예: "21" → 상위 2 → "Y". 해석할 수 없거나 4 이상이면 "UNKNOWN".
+    """
     try:
         high = int(str(seq), 16) // 16
     except Exception:
@@ -34,6 +37,11 @@ def sensor_type_from_seq(seq: str) -> str:
 
 
 def period_ms_from_payload(obj: dict) -> float:
+    """패킷 한 개가 담은 시간(ms) = numofsample / samplerate × 1000.
+
+    재전송에서 '자동 주기'를 켰을 때, 실제 센서가 한 패킷을 채우는 시간만큼 기다리려고 쓴다.
+    예: 3200 Hz에 4096개면 1280 ms. 값이 없거나 0이면 0을 돌려주고, 부르는 쪽이 화면 주기를 쓴다.
+    """
     try:
         rate = float(obj.get("samplerate", 0))
         count = float(obj.get("numofsample", 0))
@@ -76,6 +84,7 @@ def parse_json_objects(text: str) -> list[dict]:
 
 
 def load_json_objects(path: str) -> list[dict]:
+    """파일을 UTF-8(BOM 허용)로 읽어 안의 JSON object를 모두 꺼낸다. 하나도 없으면 ValueError."""
     text = Path(path).read_text(encoding="utf-8-sig", errors="strict")
     objects = parse_json_objects(text)
 
@@ -86,6 +95,10 @@ def load_json_objects(path: str) -> list[dict]:
 
 
 def load_adxl_templates(path: str) -> dict[str, list[dict]]:
+    """ADXL JSON 파일 하나를 seq 상위 4비트로 X/Y/Z 목록에 나눈다.
+
+    파일 안 순서를 그대로 유지한다. 축 사이 짝 맞추기는 부르는 쪽(세트 묶기)이 한다.
+    """
     objects = load_json_objects(path)
 
     axes = {"X": [], "Y": [], "Z": []}
@@ -466,6 +479,12 @@ class SequenceState:
         self.lock = threading.Lock()
 
     def next_seq(self, sensor_type: str) -> str:
+        """재전송 패킷에 붙일 다음 seq. 상위 4비트는 종류, 하위 4비트는 0~F를 돈다.
+
+        PIEZO와 ADXL 세 축이 카운터 하나를 같이 쓴다. 그래서 X, Y, Z를 차례로 보내면
+        "1n", "2(n+1)", "3(n+2)"가 되어 수신 쪽 grouping.continues_set이 한 세트로 묶는다.
+        송신 스레드가 여럿이라 lock으로 카운터를 지킨다.
+        """
         with self.lock:
             low = self.value
             self.value = (self.value + 1) & 0xF

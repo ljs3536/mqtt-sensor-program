@@ -17,7 +17,14 @@ def seq_low(seq):
 
 
 def continues_set(last_axis, last_low, axis, low):
-    """직전 축 다음 순서로 seq 하위 값이 이어지면 같은 측정이다."""
+    """직전 축 다음 순서로 seq 하위 값이 이어지면 같은 측정이다.
+
+    축 순서는 X → Y → Z만 허용한다. 뒤 축의 seq 하위 4비트는 앞 축보다
+    (축 차이)만큼 커야 한다(0xF 다음은 0).
+    - X "1A" 뒤 Y "2B" → 이어짐. X "1A" 뒤 Z "3C" → Y가 빠졌어도 같은 세트(차이 2).
+    - Z 뒤에는 무엇이 와도 새 세트다. 같은 축이 두 번 와도 새 세트다.
+    - seq를 해석할 수 없으면 이어지지 않는 것으로 본다.
+    """
     if last_axis not in ("X", "Y", "Z") or axis not in ("X", "Y", "Z"):
         return False
     if last_low is None or low is None:
@@ -30,7 +37,14 @@ def continues_set(last_axis, last_low, axis, low):
 
 
 def assign_set(conn, mac, seq, sensor_type, axis):
-    """이번 패킷의 set_key와 set_no를 정한다. 이어지는 ADXL 축은 번호를 공유한다."""
+    """이번 패킷의 set_key와 set_no를 정한다. 이어지는 ADXL 축은 번호를 공유한다.
+
+    Store.save_packet이 self.lock을 잡은 채 부른다(conn은 그 연결).
+    - ADXL: 그 MAC의 직전 ADXL 패킷과 continues_set으로 비교한다. 이어지면 같은 set_no,
+      아니면 +1. 축이 빠져도 번호만 넘어가고 패킷은 저장된다.
+    - PIEZO·초음파: 패킷 하나가 측정 하나라 매번 +1.
+    set_key는 `{종류}|{MAC}|{set_no}`이고, 분석 화면이 세트 단위로 고를 때 쓴다.
+    """
     if sensor_type != "ADXL":
         row = conn.execute(
             "SELECT COALESCE(MAX(set_no), 0) AS n FROM packet WHERE mac=? AND sensor_type=?",
@@ -88,8 +102,8 @@ def group_adxl(rows):
     return items
 
 
-def complete_sets(rows):
-    """id 순 패킷을 완성된 X/Y/Z 세트 목록으로 나눈다. 각 세트는 축별 행이다."""
+def _axis_groups(rows):
+    """id 순 패킷을 seq가 이어지는 묶음으로 나눈다. 축이 빠진 묶음도 그대로 둔다."""
     sets = []
     current = {}
     last_axis = None
@@ -105,4 +119,30 @@ def complete_sets(rows):
             last_axis, last_low = axis, low
     if current:
         sets.append(current)
-    return [item for item in sets if all(axis in item for axis in ("X", "Y", "Z"))]
+    return sets
+
+
+def complete_sets(rows):
+    """id 순 패킷을 완성된 X/Y/Z 세트 목록으로 나눈다. 각 세트는 축별 행이다.
+
+    통계 최신화가 쓴다. 저장된 set_no를 믿지 않고 seq로 다시 묶는다. 그래서 서버가
+    재시작되어 set_no가 다시 매겨져도 통계 결과는 같다. 세 축이 다 있는 묶음만 돌려준다.
+    """
+    return [item for item in _axis_groups(rows) if all(axis in item for axis in ("X", "Y", "Z"))]
+
+
+def settled_through(rows, base):
+    """이번에 다 본 것으로 칠 마지막 packet id.
+
+    완성 세트는 계산 성공 여부와 관계없이 끝난 것이다. 축이 빠진 묶음도 뒤에 다른 묶음이
+    왔으면 더 채워지지 않는다. 마지막 묶음만, Z가 없으면 뒤 축이 아직 올 수 있어 남긴다.
+    """
+    if not rows:
+        return base
+    last_id = max(int(row["id"]) for row in rows)
+    groups = _axis_groups(rows)
+    if not groups or "Z" in groups[-1]:
+        return last_id
+    first_open = min(int(row["id"]) for row in groups[-1].values())
+    earlier = [int(row["id"]) for row in rows if int(row["id"]) < first_open]
+    return max(earlier) if earlier else base

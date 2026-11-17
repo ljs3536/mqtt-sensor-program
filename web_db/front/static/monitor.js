@@ -105,4 +105,8 @@ loadDefaults()
   .then(() => pushView())
   .catch(() => {})
   .then(() => { ready = true; });
-setInterval(refresh, 1000);
+// 연결 중일 때만 1초마다 최신 파형·로그·MAC 목록을 가져온다.
+// 연결이 끊긴 것을 본 조회 다음부터는 서버를 부르지 않는다.
+setInterval(() => {
+  if (monitorLive) refresh().catch(() => {});
+}, 1000);

@@ -16,6 +16,12 @@ class CsvWriter:
 
     측정 START와 무관하게, CSV 저장이 켜진 연결 세션 동안만 기록한다.
     축 패킷은 도착 즉시 그 축 파일에 쓰고, 행마다 flush한다.
+
+    파일은 MAC과 종류마다 두 개다.
+    - {MAC}_{종류}_sensorData_hex.csv: 받은 HEX 그대로
+    - {MAC}_{종류}_decoded_samples.csv: 디코드한 샘플(초음파는 주파수 범위 포함)
+    packet_no는 파일마다 1부터 센다. 그래서 X/Y/Z 파일의 packet_no는 짝이 아니다.
+    수신 스레드가 디스크를 기다리지 않도록, 쓰기는 큐를 받는 별도 스레드 하나가 한다.
     """
     def __init__(self):
         """저장 큐와 백그라운드 기록 스레드를 만든다."""
@@ -56,6 +62,11 @@ class CsvWriter:
         counters = {}
 
         def writer_for(path, header):
+            """파일별 csv.writer를 한 번만 열어 재사용한다.
+
+            파일이 새로 생기거나 비어 있으면 머리줄을 먼저 쓴다. 같은 폴더에 다시
+            연결해도(같은 초에 재연결) 이어 쓰기만 하고 머리줄을 겹쳐 쓰지 않는다.
+            """
             key = str(path)
             if key not in files:
                 is_new = not path.exists() or path.stat().st_size == 0
@@ -68,6 +79,7 @@ class CsvWriter:
             return writers[key], files[key]
 
         def close_all():
+            """열린 CSV를 모두 닫고 packet_no 카운터를 0으로 돌린다. 연결 시작·해제 때 부른다."""
             for handle in files.values():
                 try:
                     handle.flush()

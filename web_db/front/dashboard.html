@@ -9,8 +9,8 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=16">
-  <link rel="stylesheet" href="/static/theme.css?v=6">
+  <link rel="stylesheet" href="/static/style.css?v=18">
+  <link rel="stylesheet" href="/static/theme.css?v=8">
   <style>
     .dash-note { color: #64748b; margin: 0 0 12px; }
     .board { display: grid; gap: 14px; }
@@ -52,19 +52,30 @@
   <main>
     <section class="card">
       <h2>MAC별 통계</h2>
-      <p class="dash-note" id="updatedNote">통계는 수신 중에 계산하지 않습니다. 새로고침을 누르면 각 MAC의 패킷을 읽어 통계 한 줄로 바꿉니다.</p>
-      <button type="button" class="secondary" id="reload">새로고침</button>
+      <p class="dash-note" id="updatedNote">막대와 숫자는 전체 평균입니다. 작은 그래프는 최신화마다 새로 들어온 구간입니다.</p>
+      <button type="button" class="secondary" id="reload">최신화</button>
       <div class="board" id="board"></div>
     </section>
   </main>
+  <script src="/static/chart.umd.min.js"></script>
   <script>
+    /*
+     * 통계 화면. 서버가 이미 만든 measurement 값만 읽어 그린다. 이 화면에서는 계산하지 않는다.
+     * - 페이지를 열 때 /api/db/dashboard를 한 번 읽어 그린다. 반복 조회는 하지 않는다.
+     *   measurement는 최신화(이 버튼 또는 하루 스케줄러) 때만 바뀌므로, 그 사이에는 값이 그대로다.
+     *   열어 둔 동안 스케줄러가 돌았으면 페이지를 다시 열 때 반영된다.
+     * - 최신화 버튼만 확인을 받은 뒤 /api/db/update-stats로 최신화를 요청하고, 끝나면 다시 읽는다.
+     */
     const board = document.querySelector("#board");
+    const charts = [];
 
+    /* 숫자면 소수 digits자리 글자, 아니면 "-". */
     function num(value, digits) {
       const number = Number(value);
       return Number.isFinite(number) ? number.toFixed(digits) : "-";
     }
 
+    /* 마지막 최신화 시각부터 지금까지 몇 시간인지. 시각이 없거나 읽을 수 없으면 null. */
     function hoursSince(updatedAt) {
       if (!updatedAt) return null;
       const stamp = new Date(updatedAt).getTime();
@@ -72,12 +83,62 @@
       return Math.max(0, Math.floor((Date.now() - stamp) / 3600000));
     }
 
+    /*
+     * paint가 만든 canvas마다 작은 꺾은선(RMS, PEAK 구간 변화)을 그린다.
+     * 값은 canvas의 data-values, data-labels에 JSON으로 들어 있다.
+     * 다시 그릴 때마다 이전 Chart 객체를 destroy해서 메모리에 쌓이지 않게 한다.
+     */
+    function drawCharts() {
+      charts.splice(0).forEach((chart) => chart.destroy());
+      board.querySelectorAll("canvas").forEach((canvas) => {
+        const values = JSON.parse(canvas.dataset.values || "[]").map(Number);
+        const labels = JSON.parse(canvas.dataset.labels || "[]");
+        charts.push(new Chart(canvas, {
+          type: "line",
+          data: {
+            labels,
+            datasets: [{
+              data: values,
+              borderColor: canvas.dataset.color,
+              borderWidth: 1.5,
+              pointRadius: values.length > 1 ? 2 : 3,
+              tension: 0.15,
+              fill: false,
+            }],
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            plugins: { legend: { display: false }, tooltip: { enabled: true } },
+            scales: {
+              x: {
+                ticks: { maxTicksLimit: 4, font: { size: 9 }, color: document.documentElement.getAttribute("data-theme") === "white" ? "#64748b" : "#9aa8b5" },
+                grid: { display: false },
+              },
+              y: {
+                ticks: { maxTicksLimit: 3, font: { size: 10 }, color: document.documentElement.getAttribute("data-theme") === "white" ? "#64748b" : "#9aa8b5" },
+                grid: { color: document.documentElement.getAttribute("data-theme") === "dark" ? "rgba(170, 200, 170, 0.16)" : "#e2e8f0" },
+              },
+            },
+          },
+        }));
+      });
+    }
+
+    /*
+     * MAC마다 한 줄을 만든다.
+     * - SRSS 막대: 구간 줄을 세트 수로 가중한 전체 평균(mm/s RMS). 눈금 끝은 모든 MAC의 SRSS·한계·4.5 중 가장 큰 값의 1.15배라
+     *   MAC끼리 같은 눈금으로 비교된다.
+     *   한계 이상이면 over, 한계의 80% 이상이면 warn 색이다. 세로 표시는 SRSS 한계 위치다.
+     * - RMS, PEAK: 숫자는 전체 평균과 최댓값, 작은 그래프는 최근 구간 최대 40개.
+     */
     function paint(data) {
       const items = data.items || [];
       const hours = hoursSince(data.updated_at);
       document.querySelector("#updatedNote").textContent = hours === null
-        ? "통계 데이터가 아직 최신화되지 않았습니다."
-        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다.`;
+        ? "통계 데이터가 아직 최신화되지 않았습니다. 막대는 전체 평균이고, 그래프는 구간별 변화입니다."
+        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다. 막대는 전체 평균이고, 그래프는 구간별 변화입니다.`;
       if (!items.length) {
         board.innerHTML = "<p>등록된 MAC이 없습니다.</p>";
         return;
@@ -91,39 +152,50 @@
         const width = Number.isFinite(value) ? Math.min(100, (value / scale) * 100) : 0;
         const mark = Math.min(100, (limit / scale) * 100);
         const level = !Number.isFinite(value) ? "" : value >= limit ? "over" : value >= limit * 0.8 ? "warn" : "";
+        const series = item.series || [];
+        const labels = JSON.stringify(series.map((point) => String(point.t || "").slice(5, 16)));
+        const rms = JSON.stringify(series.map((point) => point.rms));
+        const peak = JSON.stringify(series.map((point) => point.peak));
         const name = item.display_name ? `<small>${item.display_name}</small>` : "";
         const sets = Number(item.set_count) || 0;
-        const range = sets ? `완성 세트 ${sets}개` : "최신화 전";
+        const range = sets ? `전체 ${sets}세트 · 구간 ${series.length}개` : "최신화 전";
         return `<div class="channel">
           <div class="mac">${item.mac}${name}<small>${range}</small></div>
           <div>
-            <div class="metric-title">SRSS mm/s RMS</div>
+            <div class="metric-title">SRSS 전체 평균 mm/s RMS</div>
             <div class="track"><div class="fill ${level}" style="width:${width}%"></div><div class="limit-mark" style="left:${mark}%"></div></div>
             <div class="metric-value">${num(value, 3)} / ${limit}</div>
           </div>
           <div>
-            <div class="metric-title">RMS g</div>
-            <div class="metric-value">${num(item.rms, 4)}</div>
+            <div class="metric-title">RMS 평균 ${num(item.rms, 4)} g</div>
+            <div class="spark"><canvas data-color="#1f77b4" data-values='${rms}' data-labels='${labels}'></canvas></div>
           </div>
           <div>
-            <div class="metric-title">PEAK g</div>
-            <div class="metric-value">${num(item.peak, 4)}</div>
+            <div class="metric-title">PEAK 최대 ${num(item.peak, 4)} g</div>
+            <div class="spark"><canvas data-color="#d62728" data-values='${peak}' data-labels='${labels}'></canvas></div>
           </div>
         </div>`;
       }).join("");
+      drawCharts();
     }
 
+    /* 저장된 통계를 읽어 그린다. 최신화는 하지 않는다. */
     async function load() {
       const data = await (await fetch("/api/db/dashboard")).json();
       paint(data);
     }
 
+    /*
+     * 최신화: 마지막 최신화가 몇 시간 전인지 보여 주고 확인을 받는다.
+     * 확인하면 서버가 마지막 위치 뒤의 완성 X/Y/Z 세트만 새 구간으로 넣는다.
+     * 다른 최신화(하루 스케줄러)가 도는 중이면 서버에서 끝날 때까지 기다린 뒤 이어서 한다.
+     */
     document.querySelector("#reload").onclick = async () => {
       const data = await fetch("/api/db/dashboard").then((response) => response.json());
       const hours = hoursSince(data.updated_at);
       const message = hours === null
-        ? "통계 데이터가 아직 최신화되지 않았습니다. 최신화 하시겠습니까?"
-        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다. 최신화 하시겠습니까?`;
+        ? "통계 데이터가 아직 최신화되지 않았습니다. 마지막 통계 이후의 완성 세트만 구간으로 넣습니다. 최신화 하시겠습니까?"
+        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다. 그 이후에 들어온 완성 세트만 새 구간으로 넣습니다. 최신화 하시겠습니까?`;
       if (!confirm(message)) {
         paint(data);
         return;
@@ -133,10 +205,13 @@
         alert(updated.detail);
         return;
       }
+      const added = Number(updated.macs) || 0;
       await load();
+      alert(added
+        ? `${added}개 MAC에 새 구간을 넣었습니다. 막대는 전체 평균이고, 작은 그래프에 점이 추가됩니다.`
+        : "마지막 통계 이후에 넣을 완성 세트가 없습니다. 새로 들어온 X/Y/Z 세트가 있어야 값이 바뀝니다.");
     };
     load().catch((error) => alert(error.message));
-    setInterval(() => load().catch(() => {}), 5000);
   </script>
   <script src="/static/theme.js?v=2"></script>
 </body>

@@ -1,9 +1,17 @@
 /* 수신 모니터가 서버 /api/monitor 와 그래프 설정을 주고받는 부분. */
 
+/*
+ * 마지막 상태 조회에서 MQTT가 연결되어 있었는지.
+ * monitor.js의 1초 갱신은 이 값이 true일 때만 서버를 부른다. 끊겨 있으면 새 패킷이 없으니
+ * 화면이 바뀔 일이 없다. 연결·해제·로그 지우기·장치 선택·그래프 옵션 변경은 각자 refresh를 부른다.
+ */
+let monitorLive = false;
+
 /** 연결 상태, MAC 목록, 최신 곡선을 받아 화면에 반영한다. */
 async function refresh() {
   const query = graphDevice ? `?device=${encodeURIComponent(graphDevice)}` : "";
   const data = await (await fetch(`/api/monitor/state${query}`)).json();
+  monitorLive = !!data.connected;
   profiles = data.profiles || profiles;
   if (!document.querySelector("#profile").options.length) fillProfiles();
   const linkStatus = document.querySelector("#linkStatus");

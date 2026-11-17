@@ -620,7 +620,13 @@ def monitor_adxl_set(axis_samples, options):
             "fft_log_y": _flag(options.get("fft_log_y")),
         }
     def _hz_trace(item):
+        """SRSS·gN·한계선 곡선 하나를 모니터 형식으로 바꾼다.
+
+        graph_curves 안의 주파수는 kHz라서, 모니터 FFT 축(Hz)에 맞게 1000을 곱한다.
+        값이 없는 곡선도 같은 키를 가진 빈 dict로 돌려 화면이 조건문 없이 그리게 한다.
+        """
         def series(key):
+            """키의 값을 1차원 float 배열로. 없으면 빈 목록."""
             value = item.get(key)
             if value is None:
                 return []

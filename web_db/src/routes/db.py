@@ -31,7 +31,11 @@ class DeviceName(BaseModel):
 
 
 def _query_time(value, end):
-    """datetime-local 값을 packet.received_at 문자열 비교에 맞춘다."""
+    """datetime-local 값을 packet.received_at 문자열 비교에 맞춘다.
+
+    브라우저는 "2026-11-17T14:00"처럼 분까지 보낸다. received_at은 밀리초까지 있는
+    ISO 문자열이라, 시작은 ":00", 끝은 ":59.999"를 붙여 그 분 전체가 들어가게 한다.
+    """
     text = str(value or "").strip()
     if len(text) == 16:
         return text + (":59.999" if end else ":00")
@@ -59,7 +63,13 @@ def _load_items(mac, sensor, mode="recent", limit=50, start="", end=""):
 
 
 def _daily_stats():
-    """날짜가 바뀌었고 오늘 통계가 없으면 한 번 최신화한다."""
+    """날짜가 바뀌었고 오늘 통계가 없으면 한 번 최신화한다.
+
+    10분마다 깨어나 stat_meta의 마지막 최신화 날짜를 본다. 오늘보다 이전이면 최신화한다.
+    그래서 자정 뒤 최대 10분 안에 하루 한 번 돈다. 서버가 꺼져 있던 날은 건너뛰고,
+    다시 켜진 뒤 첫 확인 때 그동안 쌓인 패킷을 한 구간으로 넣는다.
+    예외는 삼키고 다음 확인을 기다린다(스레드가 죽지 않게).
+    """
     while True:
         time.sleep(600)
         try:
@@ -71,7 +81,17 @@ def _daily_stats():
             continue
 
 
-threading.Thread(target=_daily_stats, name="daily-stats", daemon=True).start()
+_daily_thread = None
+
+
+def start_daily_stats():
+    """하루 통계 스레드를 프로세스에 하나만 켠다. 두 번 불려도 새로 만들지 않는다."""
+    global _daily_thread
+    if _daily_thread is not None and _daily_thread.is_alive():
+        return _daily_thread
+    _daily_thread = threading.Thread(target=_daily_stats, name="daily-stats", daemon=True)
+    _daily_thread.start()
+    return _daily_thread
 
 
 @router.get("/api/db/dashboard")
@@ -82,7 +102,7 @@ def db_dashboard():
 
 @router.post("/api/db/update-stats")
 def db_update_stats():
-    """확인된 새로고침 또는 호출 시 새 측정만 통계로 만든다."""
+    """통계 화면의 최신화 버튼. 마지막 읽기 위치 뒤의 새 완성 세트만 통계로 만든다."""
     return store.update_statistics()
 
 
@@ -99,13 +119,6 @@ def db_stats(mac: str):
     if not mac:
         raise HTTPException(400, "MAC이 필요합니다")
     return store.stats(mac)
-
-
-@router.post("/api/db/refresh")
-def db_refresh():
-    """날짜별 통계 표를 measurement에서 다시 만든다."""
-    count = store.rebuild_daily()
-    return {"days": count}
 
 
 @router.post("/api/db/load")

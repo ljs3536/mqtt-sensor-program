@@ -9,25 +9,6 @@ import numpy as np
 from web_db.src.signal import ADXL_CODE_TO_RATE
 
 
-def decode_packet(sensor_kind, obj):
-    """Decode a single selected packet for preview. Never rewrite MQTT data."""
-    raw_hex = str(obj.get('sensorData','')).strip()
-    raw = bytes.fromhex(''.join(raw_hex.split()))
-    if sensor_kind == 'PIEZO':
-        if len(raw) % 2: raise ValueError('PIEZO bytes 길이는 짝수여야 합니다')
-        samples=np.frombuffer(raw,dtype='>i2').astype(np.float64)
-        fs=float(obj.get('samplerate') or 25600)
-        return samples, fs, 'Count'
-    if sensor_kind == 'ADXL':
-        if len(raw) % 2: raise ValueError('ADXL bytes 길이는 짝수여야 합니다')
-        samples=np.frombuffer(raw,dtype='>i2').astype(np.float64)
-        fs=float(obj.get('samplerate') or 3200)
-        return samples, fs, 'Count'
-    # Ultrasonic H data: source payload contains float32 samples after optional prefix.
-    # Without knowing the concrete H binary envelope, preview must not invent a decoder.
-    raise ValueError('초음파 H는 현재 RAW 바이너리 포맷 미확정: 송신은 지원, 그래프는 미지원')
-
-
 
 def decode_ultrasonic_spectrum(packet):
     """Decode receiver-compatible H frame for plotting, without touching MQTT payload.

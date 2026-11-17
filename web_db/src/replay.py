@@ -180,6 +180,10 @@ class ReplayService:
         result = {}
 
         def on_connect(_client, _userdata, _flags, reason_code, _properties=None):
+            """브로커의 CONNACK 결과를 받아 기다리는 쪽(done.wait)을 깨운다.
+
+            paho 버전에 따라 reason_code가 정수 또는 ReasonCode 객체라 두 경우를 다 본다.
+            """
             try:
                 result["ok"] = int(reason_code) == 0
             except (TypeError, ValueError):

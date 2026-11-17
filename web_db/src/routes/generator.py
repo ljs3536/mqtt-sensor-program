@@ -86,15 +86,6 @@ async def upload_adxl_csv(
     return {"count": count, "sensor": "ADXL", "recover_partial": recover, "preview": preview}
 
 
-@router.get("/api/generator/preview")
-def generator_preview(sensor: str, index: int = 1):
-    """파일 패킷의 그래프 미리보기를 돌려준다."""
-    try:
-        return replay.preview(sensor, index - 1)
-    except Exception as exc:
-        raise HTTPException(400, str(exc)) from exc
-
-
 @router.post("/api/generator/fft-check")
 async def generator_fft_check(body: dict):
     """파일에서 고른 패킷의 FFT 왕복 검사를 돌려준다."""
