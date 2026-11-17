@@ -105,3 +105,4 @@ draw = function studioDraw(preview) {
 
 showPanels();
 showDrawerTab("settings");
+if (document.querySelector("#pinMode")) document.querySelector("#pinMode").click();

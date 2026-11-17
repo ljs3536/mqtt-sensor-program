@@ -315,12 +315,12 @@ body.layout-pin main.studio {
   margin: 8px;
   padding: 0;
 }
-body.layout-pin main.studio.pinned { grid-template-columns: minmax(200px, 15%) minmax(0, 1fr); gap: 8px; }
+body.layout-pin main.studio.pinned { grid-template-columns: 320px minmax(0, 1fr); gap: 8px; }
 body.layout-pin main.studio.pinned.collapsed { grid-template-columns: 44px minmax(0, 1fr); }
 body.layout-pin .studio-settings {
   background: #f7f9fb;
   border: 1px solid #c5d0dc;
-  border-radius: 10px;
+  border-radius: 2px;
   padding: 10px;
   display: flex;
   flex-direction: column;
@@ -353,7 +353,7 @@ body.layout-pin .studio-stage {
   min-height: 0;
   background: #f7f9fb;
   border: 1px solid #c5d0dc;
-  border-radius: 10px;
+  border-radius: 2px;
   padding: 8px 10px;
 }
 body.layout-pin .stage-bar, body.layout-pin .packet-bar, body.layout-pin .axis-bar {
@@ -366,6 +366,8 @@ body.layout-pin .stage-bar, body.layout-pin .packet-bar, body.layout-pin .axis-b
 body.layout-pin .stage-bar button,
 body.layout-pin .packet-bar button,
 body.layout-pin .axis-bar button,
+body.layout-pin .studio-settings button,
+body.layout-pin .studio-settings .check span,
 body.layout-pin .stage-bar input,
 body.layout-pin .stage-bar select,
 body.layout-pin .packet-bar input,
@@ -373,6 +375,13 @@ body.layout-pin .axis-bar input,
 body.layout-pin .axis-bar select {
   height: 34px;
   box-sizing: border-box;
+}
+body.layout-pin .stage-bar button,
+body.layout-pin .packet-bar button,
+body.layout-pin .axis-bar button,
+body.layout-pin .studio-settings button,
+body.layout-pin .studio-settings .check span {
+  white-space: nowrap;
 }
 body.layout-pin .packet-info {
   display: flex;
@@ -430,9 +439,11 @@ body.layout-pin .studio-charts .chart-card {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
   background: white;
   border: 1px solid #d5dee8;
-  border-radius: 8px;
+  border-radius: 2px;
   padding: 6px 8px 8px;
 }
 body.layout-pin .studio-charts .plot { flex: 1 1 auto; height: auto; min-height: 0; }

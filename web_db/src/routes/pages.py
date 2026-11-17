@@ -1,4 +1,4 @@
-"""화면 HTML. /, /generator, /studio, /deck, /dashboard."""
+"""화면 HTML. /, /generator, /studio, /dashboard."""
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, RedirectResponse
@@ -24,12 +24,6 @@ def generator_page():
 def studio_page():
     """센서 데이터 분석. SQLite 수신 기록만 연다."""
     return FileResponse(FRONT / "studio.html")
-
-
-@router.get("/deck")
-def deck_page():
-    """센서 데이터 분석과 같은 기능의 계측 예시 화면."""
-    return FileResponse(FRONT / "deck.html")
 
 
 @router.get("/dashboard")

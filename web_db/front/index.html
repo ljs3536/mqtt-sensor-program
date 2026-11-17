@@ -4,7 +4,14 @@
 <head>
   <meta charset="utf-8">
   <title>센서 수신 모니터</title>
-  <link rel="stylesheet" href="/static/style.css?v=15">
+  <script>
+  (function () {
+    var theme = localStorage.getItem("sensor-theme") || "white";
+    document.documentElement.setAttribute("data-theme", theme);
+  })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v=16">
+  <link rel="stylesheet" href="/static/theme.css?v=3">
 </head>
 <body>
   <header>
@@ -13,7 +20,6 @@
       <a class="active" href="/">센서 수신 모니터</a>
       <a href="/generator">데이터 분석 CSV</a>
       <a href="/studio">센서 데이터 분석</a>
-      <a href="/deck">계측 예시</a>
       <a href="/dashboard">통계</a>
     </nav>
   </header>
@@ -225,5 +231,6 @@
   <script src="/static/graph.js?v=8"></script>
   <script src="/static/monitor.js?v=13"></script>
   <script src="/static/monitor-db.js?v=1"></script>
+  <script src="/static/theme.js?v=2"></script>
 </body>
 </html>

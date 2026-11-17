@@ -1,0 +1,273 @@
+/* 전체 페이지 색. 틀은 style.css가 맡고, 여기서는 White / Gray / Dark 색만 바꾼다. */
+.header-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+#themePick {
+  height: 28px;
+  margin: 0;
+  padding: 0 8px;
+  border-radius: 2px;
+}
+
+html[data-theme="white"] input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 16px;
+  border-radius: 4px;
+  border: 1px solid #8aa0b5;
+  background: #fff;
+  cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px 12px;
+}
+html[data-theme="white"] input[type="checkbox"]:checked {
+  border-color: #1f6aa5;
+  background-color: #1f6aa5;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.2 6.3 11.2 12.8 4.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+html[data-theme="gray"] {
+  color: #2c3338;
+  background: #c7cfd6;
+}
+html[data-theme="gray"] body {
+  background: #c7cfd6;
+  color: #2c3338;
+}
+html[data-theme="gray"] header {
+  background: #d7e0e6;
+  color: #2c3338;
+  border-bottom: 1px solid #aeb8c0;
+}
+html[data-theme="gray"] .brand { color: #c45c12; }
+html[data-theme="gray"] header a { color: #2c3338; }
+html[data-theme="gray"] header a.active,
+html[data-theme="gray"] header a:hover { background: #c45c12; color: white; }
+html[data-theme="gray"] .card,
+html[data-theme="gray"] body.layout-pin .studio-settings,
+html[data-theme="gray"] body.layout-pin .studio-stage,
+html[data-theme="gray"] body.layout-pin fieldset,
+html[data-theme="gray"] body.layout-pin .stage-bar,
+html[data-theme="gray"] body.layout-pin .packet-bar,
+html[data-theme="gray"] body.layout-pin .axis-bar,
+html[data-theme="gray"] body.layout-pin .formula-fold {
+  background: #d7e0e6;
+  border-color: #aeb8c0;
+  color: #2c3338;
+}
+html[data-theme="gray"] body.layout-pin {
+  background: #c7cfd6;
+}
+html[data-theme="gray"] body.layout-pin .studio-stage { background: #c7cfd6; }
+html[data-theme="gray"] h2,
+html[data-theme="gray"] legend,
+html[data-theme="gray"] label,
+html[data-theme="gray"] .hint,
+html[data-theme="gray"] .card h2 {
+  color: #2c3338;
+}
+html[data-theme="gray"] input,
+html[data-theme="gray"] select,
+html[data-theme="gray"] button,
+html[data-theme="gray"] .icon-btn {
+  background: #eef3f6;
+  color: #2c3338;
+  border: 1px solid #9aa8b2;
+}
+html[data-theme="gray"] button { background: #e4ebf0; }
+html[data-theme="gray"] button.go { background: #2f7d32; color: white; border-color: #2f7d32; }
+html[data-theme="gray"] button.stop { background: #f4e4e4; color: #8d2b2b; border-color: #e2b4b4; }
+html[data-theme="gray"] body.layout-pin .tabs,
+html[data-theme="gray"] body.layout-pin .segmented { background: #b7c2c9; }
+html[data-theme="gray"] body.layout-pin .tabs button,
+html[data-theme="gray"] body.layout-pin .segmented button { color: #2c3338; background: transparent; }
+html[data-theme="gray"] body.layout-pin .tabs button.active,
+html[data-theme="gray"] body.layout-pin .segmented button.active { background: #c45c12; color: white; }
+html[data-theme="gray"] body.layout-pin .studio-charts .chart-card,
+html[data-theme="gray"] .chart-card {
+  background: #111418;
+  border-color: #8e99a3;
+  color: #d7e4c8;
+}
+html[data-theme="gray"] body.layout-pin .studio-charts .chart-card h2,
+html[data-theme="gray"] .chart-card h2 {
+  color: #f0a05a;
+  background: #1b2128;
+}
+html[data-theme="gray"] .plot { background: #111418; }
+html[data-theme="gray"] body.layout-pin .packet-info,
+html[data-theme="gray"] body.layout-pin .info-chip,
+html[data-theme="gray"] body.layout-pin .info-chip:first-child {
+  background: #111418;
+  border-color: #111418;
+  color: #39ff4a;
+  border-radius: 0;
+}
+html[data-theme="gray"] fieldset,
+html[data-theme="gray"] .mac-chip,
+html[data-theme="gray"] .save-notes .info-chip {
+  background: #eef3f6;
+  border-color: #aeb8c0;
+  color: #2c3338;
+}
+html[data-theme="gray"] .mac-time,
+html[data-theme="gray"] .stats,
+html[data-theme="gray"] legend { color: #4d5b66; }
+html[data-theme="gray"] .mac-count { background: #c45c12; color: white; }
+html[data-theme="gray"] .pill { background: #e4ebf0; color: #4d5b66; }
+html[data-theme="gray"] .pill.on { background: #d9f3e2; color: #0d7a3a; }
+html[data-theme="gray"] .pill.off { background: #e7edf1; color: #5c6d7a; }
+html[data-theme="gray"] button.secondary { background: #eef3f6; color: #2c3338; border-color: #9aa8b2; }
+html[data-theme="gray"] .channel { border-color: #aeb8c0; }
+html[data-theme="gray"] .track { background: #eef3f6; }
+html[data-theme="gray"] .mac small,
+html[data-theme="gray"] .metric-title,
+html[data-theme="gray"] .dash-note { color: #4d5b66; }
+html[data-theme="gray"] body.layout-pin input[type="checkbox"],
+html[data-theme="gray"] input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid #8e99a3;
+  background: #fff;
+  cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px 12px;
+}
+html[data-theme="gray"] input[type="checkbox"]:checked {
+  border-color: #c45c12;
+  background-color: #c45c12;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.2 6.3 11.2 12.8 4.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+html[data-theme="dark"] body,
+html[data-theme="dark"] body.layout-pin {
+  background: #1b1b1b;
+  color: #d5d5d5;
+}
+html[data-theme="dark"] header {
+  background: #3a3a3a;
+  color: #d0d0d0;
+  border-bottom: 1px solid #111;
+}
+html[data-theme="dark"] .brand { color: #f0a05a; }
+html[data-theme="dark"] header a { color: #d0d0d0; }
+html[data-theme="dark"] header a.active,
+html[data-theme="dark"] header a:hover { background: #c45c12; color: white; }
+html[data-theme="dark"] .card,
+html[data-theme="dark"] body.layout-pin .studio-settings,
+html[data-theme="dark"] body.layout-pin .studio-stage,
+html[data-theme="dark"] body.layout-pin fieldset,
+html[data-theme="dark"] body.layout-pin .stage-bar,
+html[data-theme="dark"] body.layout-pin .packet-bar,
+html[data-theme="dark"] body.layout-pin .axis-bar,
+html[data-theme="dark"] body.layout-pin .formula-fold,
+html[data-theme="dark"] pre {
+  background: #242424;
+  border-color: #111;
+  color: #d7d7d7;
+}
+html[data-theme="dark"] body.layout-pin .studio-stage { background: #101010; }
+html[data-theme="dark"] h2,
+html[data-theme="dark"] legend,
+html[data-theme="dark"] label,
+html[data-theme="dark"] .hint,
+html[data-theme="dark"] .card h2,
+html[data-theme="dark"] summary { color: #c8c8c8; }
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] button,
+html[data-theme="dark"] .icon-btn {
+  background: #2c2c2c;
+  color: #e6e6e6;
+  border: 1px solid #4a4a4a;
+}
+html[data-theme="dark"] button { background: #3d3d3d; }
+html[data-theme="dark"] button.go { background: #2f7d32; color: white; }
+html[data-theme="dark"] button.stop { background: #8d2b2b; color: white; }
+html[data-theme="dark"] body.layout-pin .tabs,
+html[data-theme="dark"] body.layout-pin .segmented { background: #1a1a1a; }
+html[data-theme="dark"] body.layout-pin .tabs button,
+html[data-theme="dark"] body.layout-pin .segmented button { color: #c8c8c8; background: transparent; }
+html[data-theme="dark"] body.layout-pin .tabs button.active,
+html[data-theme="dark"] body.layout-pin .segmented button.active { background: #c45c12; color: white; }
+html[data-theme="dark"] body.layout-pin .studio-charts .chart-card,
+html[data-theme="dark"] .chart-card,
+html[data-theme="dark"] .plot {
+  background: #070707;
+  border-color: #2a2a2a;
+  color: #d7e4c8;
+}
+html[data-theme="dark"] body.layout-pin .studio-charts .chart-card h2,
+html[data-theme="dark"] .chart-card h2 {
+  color: #f0a05a;
+  background: #161616;
+}
+html[data-theme="dark"] body.layout-pin .packet-info,
+html[data-theme="dark"] body.layout-pin .info-chip,
+html[data-theme="dark"] body.layout-pin .info-chip:first-child {
+  background: #050505;
+  border-color: #050505;
+  color: #39ff4a;
+  border-radius: 0;
+}
+html[data-theme="dark"] fieldset,
+html[data-theme="dark"] .mac-chip,
+html[data-theme="dark"] .save-notes .info-chip,
+html[data-theme="dark"] pre {
+  background: #1a1a1a;
+  border-color: #333;
+  color: #d7e4f0;
+}
+html[data-theme="dark"] .mac-addr { color: #e6e6e6; }
+html[data-theme="dark"] .mac-time,
+html[data-theme="dark"] .stats,
+html[data-theme="dark"] legend { color: #9aa8b5; }
+html[data-theme="dark"] .mac-count { background: #c45c12; color: white; }
+html[data-theme="dark"] .pill { background: #2c2c2c; color: #c8c8c8; }
+html[data-theme="dark"] .pill.on { background: #1d3d28; color: #7dffa2; }
+html[data-theme="dark"] .pill.off { background: #2a2a2a; color: #9aa8b5; }
+html[data-theme="dark"] button.secondary { background: #2c2c2c; color: #e6e6e6; border-color: #4a4a4a; }
+html[data-theme="dark"] .channel { border-color: #333; }
+html[data-theme="dark"] .track { background: #1a1a1a; }
+html[data-theme="dark"] .mac,
+html[data-theme="dark"] .metric-value { color: #e6e6e6; }
+html[data-theme="dark"] .mac small,
+html[data-theme="dark"] .metric-title,
+html[data-theme="dark"] .dash-note { color: #9aa8b5; }
+html[data-theme="dark"] input[type="checkbox"] {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px solid #6d6d6d;
+  background: #141414;
+  cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 12px 12px;
+}
+html[data-theme="dark"] input[type="checkbox"]:checked {
+  border-color: #c45c12;
+  background-color: #c45c12;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.2 6.3 11.2 12.8 4.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+html[data-theme="gray"] body,
+html[data-theme="dark"] body {
+  scrollbar-width: thin;
+}
+html[data-theme="gray"] { scrollbar-color: #8e99a3 #d7e0e6; }
+html[data-theme="dark"] { scrollbar-color: #5c5c5c #141414; }
