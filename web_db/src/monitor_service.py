@@ -126,7 +126,7 @@ class MonitorService:
         self.store = store
         self.lock = threading.Lock()
         self.client = None
-        self.logs = deque(maxlen=400)
+        self.logs = deque(maxlen=200)
         self.messages = 0
         self.records = {}
         self.devices = []
@@ -143,8 +143,13 @@ class MonitorService:
         self.topic = "V/#,D/#"
 
     def log(self, text):
-        """시각을 붙여 로그 한 줄을 남긴다."""
+        """시각을 붙여 로그 한 줄을 남긴다. 200줄을 넘으면 오래된 줄부터 버린다."""
         self.logs.append(f"{time.strftime('%H:%M:%S')} {text}")
+
+    def clear_logs(self):
+        """화면의 수신 로그만 비운다. 저장된 패킷과 CSV는 그대로다."""
+        with self.lock:
+            self.logs.clear()
 
     def _remember(self, topic, obj):
         """측정 패킷을 디코드해 최신 파형으로 두고 CSV와 SQLite에 넘긴다."""

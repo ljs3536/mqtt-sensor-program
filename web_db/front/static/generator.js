@@ -586,4 +586,13 @@ setInterval(async () => {
       .join(", ") +
     (data.running ? " | 전송 중" : " | 대기");
   log.textContent = data.logs.join("\n");
+  if (log) log.scrollTop = log.scrollHeight;
 }, 1000);
+
+const clearLog = document.querySelector("#clearLog");
+if (clearLog) {
+  clearLog.onclick = () => {
+    fetch("/api/generator/logs/clear", { method: "POST" });
+    log.textContent = "";
+  };
+}

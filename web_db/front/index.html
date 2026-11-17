@@ -11,7 +11,7 @@
   })();
   </script>
   <link rel="stylesheet" href="/static/style.css?v=16">
-  <link rel="stylesheet" href="/static/theme.css?v=3">
+  <link rel="stylesheet" href="/static/theme.css?v=6">
 </head>
 <body>
   <header>
@@ -112,7 +112,7 @@
       <div id="info" class="save-notes">수신 대기</div>
     </section>
 
-    <details class="card" id="analysis" open>
+    <details class="card" id="analysis">
       <summary>그래프 설정</summary>
       <p class="hint">화면 표시만 바꿉니다. 저장 CSV와 수신 HEX는 그대로입니다.</p>
       <div class="row">
@@ -221,7 +221,11 @@
     </section>
 
     <section class="card">
-      <h2>시스템 로그</h2>
+      <div class="between">
+        <h2>시스템 로그</h2>
+        <button type="button" class="secondary" id="clearLog">로그 지우기</button>
+      </div>
+      <p class="hint">최근 200줄만 남습니다. 더 오래되면 앞줄부터 지워집니다.</p>
       <pre id="log"></pre>
     </section>
   </main>
@@ -229,7 +233,7 @@
   <script src="/static/hammer.min.js"></script>
   <script src="/static/chartjs-plugin-zoom.min.js"></script>
   <script src="/static/graph.js?v=8"></script>
-  <script src="/static/monitor.js?v=13"></script>
+  <script src="/static/monitor.js?v=14"></script>
   <script src="/static/monitor-db.js?v=1"></script>
   <script src="/static/theme.js?v=2"></script>
 </body>

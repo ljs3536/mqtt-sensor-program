@@ -11,7 +11,7 @@
     })();
     </script>
     <link rel="stylesheet" href="/static/style.css?v=15" />
-    <link rel="stylesheet" href="/static/theme.css?v=3" />
+    <link rel="stylesheet" href="/static/theme.css?v=6" />
   </head>
   <body class="layout-pin">
     <header>
@@ -301,7 +301,11 @@
             <button type="button" class="stop" id="stop">중지</button>
             <p id="stats" class="hint">Publish 0 / PUBACK 0 / Drop 0</p>
             <div id="sensors"></div>
-            <h2>송신 로그</h2>
+            <div class="between">
+              <h2>송신 로그</h2>
+              <button type="button" class="secondary" id="clearLog">로그 지우기</button>
+            </div>
+            <p class="hint">최근 200줄만 남습니다.</p>
             <pre id="log"></pre>
           </div>
         </div>
@@ -454,7 +458,7 @@
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
     <script src="/static/graph.js?v=8"></script>
-    <script src="/static/generator.js?v=17"></script>
+    <script src="/static/generator.js?v=18"></script>
     <script src="/static/studio.js?v=5"></script>
     <script src="/static/theme.js?v=2"></script>
   </body>

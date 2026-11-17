@@ -30,7 +30,7 @@ class ReplayService:
         self.templates = {}
         self.index = {"PIEZO": 0, "ADXL": 0, "초음파": 0}
         self.paths = {}
-        self.logs = deque(maxlen=300)
+        self.logs = deque(maxlen=200)
         self.sent = 0
         self.acked = 0
         self.dropped = 0
@@ -61,8 +61,13 @@ class ReplayService:
         self.view_options = None
 
     def log(self, text):
-        """시각을 붙여 로그 한 줄을 남긴다."""
+        """송신 로그 한 줄을 시각과 함께 남긴다. 200줄을 넘으면 오래된 줄부터 버린다."""
         self.logs.append(f"{time.strftime('%H:%M:%S')} {text}")
+
+    def clear_logs(self):
+        """화면의 송신 로그만 비운다. 불러 둔 패킷은 그대로다."""
+        with self.lock:
+            self.logs.clear()
 
     def store(self, sensor, path, label=None):
         """파일에서 센서 패킷을 읽어 그 센서의 전송 목록으로 둔다."""

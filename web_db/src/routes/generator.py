@@ -139,6 +139,14 @@ def generator_stop():
     return replay.status()
 
 
+@router.post("/api/generator/logs/clear")
+def generator_clear_logs():
+    """송신 화면 로그를 비우고 한 줄 안내만 남긴다."""
+    replay.clear_logs()
+    replay.log("로그를 지웠습니다")
+    return replay.status()
+
+
 @router.get("/api/generator/status")
 def generator_status():
     """송신 횟수와 로그만 돌려준다. 브로커에 다시 접속하지 않는다."""

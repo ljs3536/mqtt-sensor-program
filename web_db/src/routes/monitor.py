@@ -32,6 +32,14 @@ def monitor_disconnect():
     return monitor.state()
 
 
+@router.post("/api/monitor/logs/clear")
+def monitor_clear_logs():
+    """수신 화면 로그를 비우고 한 줄 안내만 남긴다."""
+    monitor.clear_logs()
+    monitor.log("로그를 지웠습니다")
+    return {"ok": True}
+
+
 @router.get("/api/monitor/state")
 def monitor_state(device: str = ""):
     """지금 수신 상태와 최신 그래프를 돌려준다."""

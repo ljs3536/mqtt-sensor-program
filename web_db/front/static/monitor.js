@@ -306,6 +306,8 @@ async function refresh() {
     ? `저장 폴더: ${data.csv_dir}`
     : "CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다. HEX와 decoded CSV를 저장 폴더에 나눕니다.";
   log.textContent = (data.logs || []).join("\n");
+  const logBox = document.querySelector("#log");
+  if (logBox) logBox.scrollTop = logBox.scrollHeight;
   window._monitorDevice = graphDevice || data.latest_device || "";
   renderMacs(data.devices || [], data.arrivals || {});
   const box = document.querySelector("#device");
@@ -368,6 +370,9 @@ async function command(action) {
   preview.textContent = data.payload || "";
 }
 
+document.querySelector("#clearLog").onclick = () => {
+  fetch("/api/monitor/logs/clear", { method: "POST" }).then(() => refresh());
+};
 document.querySelector("#sensor").onchange = () => {
   fillProfiles();
   syncSensorType(true);

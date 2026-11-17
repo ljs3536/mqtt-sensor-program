@@ -13,9 +13,9 @@
 
 html[data-theme="white"] input[type="checkbox"] {
   appearance: none;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
   margin: 0;
   padding: 0;
   flex: 0 0 16px;
@@ -28,9 +28,8 @@ html[data-theme="white"] input[type="checkbox"] {
   background-size: 12px 12px;
 }
 html[data-theme="white"] input[type="checkbox"]:checked {
-  border-color: #1f6aa5;
-  background-color: #1f6aa5;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.2 6.3 11.2 12.8 4.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  border-color: #1f6aa5 !important;
+  background: #1f6aa5 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 8.2 6.2 12 13.4 3.8' fill='none' stroke='white' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px 14px no-repeat !important;
 }
 
 html[data-theme="gray"] {
@@ -73,7 +72,7 @@ html[data-theme="gray"] .hint,
 html[data-theme="gray"] .card h2 {
   color: #2c3338;
 }
-html[data-theme="gray"] input,
+html[data-theme="gray"] input:not([type="checkbox"]),
 html[data-theme="gray"] select,
 html[data-theme="gray"] button,
 html[data-theme="gray"] .icon-btn {
@@ -133,12 +132,12 @@ html[data-theme="gray"] .dash-note { color: #4d5b66; }
 html[data-theme="gray"] body.layout-pin input[type="checkbox"],
 html[data-theme="gray"] input[type="checkbox"] {
   appearance: none;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
   padding: 0;
   border-radius: 4px;
-  border: 1px solid #8e99a3;
+  border: 1px solid #5c6b76;
   background: #fff;
   cursor: pointer;
   background-repeat: no-repeat;
@@ -146,9 +145,8 @@ html[data-theme="gray"] input[type="checkbox"] {
   background-size: 12px 12px;
 }
 html[data-theme="gray"] input[type="checkbox"]:checked {
-  border-color: #c45c12;
-  background-color: #c45c12;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.2 6.3 11.2 12.8 4.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  border-color: #9a3e08 !important;
+  background: #c45c12 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 8.2 6.2 12 13.4 3.8' fill='none' stroke='white' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px 14px no-repeat !important;
 }
 
 html[data-theme="dark"] body,
@@ -185,7 +183,7 @@ html[data-theme="dark"] label,
 html[data-theme="dark"] .hint,
 html[data-theme="dark"] .card h2,
 html[data-theme="dark"] summary { color: #c8c8c8; }
-html[data-theme="dark"] input,
+html[data-theme="dark"] input:not([type="checkbox"]),
 html[data-theme="dark"] select,
 html[data-theme="dark"] button,
 html[data-theme="dark"] .icon-btn {
@@ -248,9 +246,9 @@ html[data-theme="dark"] .metric-title,
 html[data-theme="dark"] .dash-note { color: #9aa8b5; }
 html[data-theme="dark"] input[type="checkbox"] {
   appearance: none;
-  width: 16px;
-  height: 16px;
-  min-width: 16px;
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
   padding: 0;
   border-radius: 4px;
   border: 1px solid #6d6d6d;
@@ -261,9 +259,31 @@ html[data-theme="dark"] input[type="checkbox"] {
   background-size: 12px 12px;
 }
 html[data-theme="dark"] input[type="checkbox"]:checked {
-  border-color: #c45c12;
-  background-color: #c45c12;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.2 8.2 6.3 11.2 12.8 4.6' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  border-color: #c45c12 !important;
+  background: #c45c12 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.6 8.2 6.2 12 13.4 3.8' fill='none' stroke='white' stroke-width='2.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px 14px no-repeat !important;
+}
+html[data-theme="dark"] :is(
+  .hint, label, legend, summary, .stats, .formula, .fft-previews p, .file-name,
+  .dash-note, .metric-title, .metric-value, .mac, .mac small, .mac-time, .mac-addr,
+  #info, #commandInfo, #csvInfo, #savedConfig, #sensorTypeDesc, #formula, #adxlFftHint,
+  #linkStatus.pill.off
+) {
+  color: #e6e6e6;
+}
+html[data-theme="dark"] input:not([type="checkbox"]),
+html[data-theme="dark"] select,
+html[data-theme="dark"] option {
+  color: #f2f2f2;
+  background-color: #2c2c2c;
+}
+html[data-theme="dark"] input:disabled {
+  color: #b7b7b7;
+  background-color: #1a1a1a;
+}
+html[data-theme="gray"] :is(
+  .hint, #commandInfo, #csvInfo, #savedConfig, #sensorTypeDesc, #formula, #adxlFftHint, .file-name
+) {
+  color: #2c3338;
 }
 html[data-theme="gray"] body,
 html[data-theme="dark"] body {
