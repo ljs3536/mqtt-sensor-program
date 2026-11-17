@@ -1,7 +1,4 @@
-"""센서별 RAW, FFT, SRSS 곡선. 저장 HEX는 바꾸지 않는다.
-
-web 패키지를 import하지 않는다.
-"""
+"""센서별 RAW, FFT, SRSS 곡선. 저장 HEX는 바꾸지 않는다."""
 
 from __future__ import annotations
 

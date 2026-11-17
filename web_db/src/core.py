@@ -1,4 +1,4 @@
-"""web_db 디코드·파일 로드·FFT. web 패키지를 import하지 않는다.
+"""web_db 디코드·파일 로드·FFT.
 
 역할별 구현:
 - mems: g/LSB, 주파수·감도 보정

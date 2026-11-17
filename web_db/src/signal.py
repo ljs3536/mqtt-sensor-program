@@ -1,7 +1,4 @@
-"""필터, FFT, SRSS 전력, 샘플링 프로필.
-
-web 패키지를 import하지 않는다.
-"""
+"""필터, FFT, SRSS 전력, 샘플링 프로필."""
 
 from __future__ import annotations
 

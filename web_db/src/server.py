@@ -1,6 +1,5 @@
 """web_db HTTP 입구. 화면은 front, 구현은 역할별 모듈이다.
 
-web 패키지를 import하지 않는다.
 실행: .venv\\Scripts\\python.exe -m uvicorn web_db.server:app --host 127.0.0.1 --port 8081
 """
 

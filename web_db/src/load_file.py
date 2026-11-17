@@ -1,7 +1,4 @@
-"""발생기용 JSON·CSV를 패킷으로 읽는다.
-
-web 패키지를 import하지 않는다.
-"""
+"""발생기용 JSON·CSV를 패킷으로 읽는다."""
 
 from __future__ import annotations
 

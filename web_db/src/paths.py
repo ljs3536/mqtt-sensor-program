@@ -1,4 +1,4 @@
-"""프로젝트 경로. web 패키지를 쓰지 않는다."""
+"""프로젝트 경로."""
 
 from pathlib import Path
 

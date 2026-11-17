@@ -1,7 +1,4 @@
-"""MEMS g/LSB와 주파수·감도 보정 파일.
-
-web 패키지를 import하지 않는다.
-"""
+"""MEMS g/LSB와 주파수·감도 보정 파일."""
 
 from __future__ import annotations
 

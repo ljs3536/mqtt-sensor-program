@@ -1,7 +1,4 @@
-"""파일에 있는 패킷을 MQTT로 반복 송신한다.
-
-web 패키지를 import하지 않는다.
-"""
+"""파일에 있는 패킷을 MQTT로 반복 송신한다."""
 
 from __future__ import annotations
 

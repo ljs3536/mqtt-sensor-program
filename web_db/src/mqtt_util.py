@@ -1,7 +1,4 @@
-"""MQTT 클라이언트 생성.
-
-web 패키지를 import하지 않는다.
-"""
+"""MQTT 클라이언트 생성."""
 
 from __future__ import annotations
 

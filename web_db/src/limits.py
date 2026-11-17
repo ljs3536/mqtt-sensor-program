@@ -1,7 +1,4 @@
-"""장치별 SRSS 한계. 데스크톱과 같은 사용자 홈 파일을 쓴다.
-
-web 패키지를 import하지 않는다.
-"""
+"""장치별 SRSS 한계. 데스크톱과 같은 사용자 홈 파일을 쓴다."""
 
 from __future__ import annotations
 

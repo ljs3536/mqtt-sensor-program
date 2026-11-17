@@ -1,7 +1,4 @@
-"""MQTT 수신, 최신 파형, CSV·SQLite 저장.
-
-web 패키지를 import하지 않는다.
-"""
+"""MQTT 수신, 최신 파형, CSV·SQLite 저장."""
 
 from __future__ import annotations
 

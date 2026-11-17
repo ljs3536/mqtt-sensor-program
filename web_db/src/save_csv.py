@@ -1,7 +1,4 @@
-"""수신 패킷을 data_csv 폴더의 HEX CSV와 decoded CSV로 쓴다.
-
-web 패키지를 import하지 않는다.
-"""
+"""수신 패킷을 data_csv 폴더의 HEX CSV와 decoded CSV로 쓴다."""
 
 from __future__ import annotations
 

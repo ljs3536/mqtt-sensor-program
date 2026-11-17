@@ -1,7 +1,4 @@
-"""수신 패킷 분류와 sensorData HEX 디코드.
-
-web 패키지를 import하지 않는다.
-"""
+"""수신 패킷 분류와 sensorData HEX 디코드."""
 
 from __future__ import annotations
 

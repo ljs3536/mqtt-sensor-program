@@ -510,10 +510,16 @@ async function loadDefaults() {
     highS.value = correction.high_sensitivity;
 }
 
+function loadedWave() {
+  const box = document.querySelector("#packetInfo") || document.querySelector("#position");
+  if (!box) return false;
+  const text = box.textContent || "";
+  return text.trim() !== "" && !text.includes("선택하세요");
+}
+
 document.querySelector("#analysis").addEventListener("change", () => {
   if (!ready) return;
-  if (document.querySelector("#position").textContent.includes("선택하세요"))
-    return;
+  if (!loadedWave()) return;
   move(Number(document.querySelector("#index").value)).catch((error) =>
     alert(error.message),
   );
@@ -527,7 +533,7 @@ async function saveJson(url, body) {
   });
   const data = await readBody(response);
   if (!response.ok) throw new Error(data.detail || "저장 실패");
-  if (!document.querySelector("#position").textContent.includes("선택하세요")) {
+  if (loadedWave()) {
     await move(Number(document.querySelector("#index").value));
   }
 }
@@ -549,7 +555,7 @@ document.querySelector("#applySrssLimit").onclick = async () => {
     return;
   }
   srssLimit.value = data.value;
-  if (!document.querySelector("#position").textContent.includes("선택하세요")) {
+  if (loadedWave()) {
     await move(Number(document.querySelector("#index").value));
   }
 };

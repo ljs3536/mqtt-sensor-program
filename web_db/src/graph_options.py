@@ -1,7 +1,4 @@
-"""그래프 옵션 기본값과 파형 HEX 해석.
-
-web 패키지를 import하지 않는다.
-"""
+"""그래프 옵션 기본값과 파형 HEX 해석."""
 
 from __future__ import annotations
 
