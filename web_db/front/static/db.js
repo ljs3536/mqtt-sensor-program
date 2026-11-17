@@ -39,8 +39,8 @@ async function loadDbMacs() {
   data.forEach((item) => {
     const option = document.createElement("option");
     option.value = item.mac;
-    const name = item.display_name ? ` ${item.display_name}` : "";
-    option.textContent = `${item.mac}${name} (${item.packets})`;
+    // 패킷 수는 보이지 않는다. ADXL은 축마다 한 줄이라 세트 수와 맞지 않아 헷갈린다.
+    option.textContent = item.display_name ? `${item.mac} · ${item.display_name}` : item.mac;
     dbMac.appendChild(option);
   });
   if ([...dbMac.options].some((option) => option.value === current))

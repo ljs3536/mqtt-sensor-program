@@ -27,6 +27,7 @@
 | `web_db/src/graph_curves.py` | 화면용 RAW, FFT, SRSS 곡선 |
 | `web_db/src/view_pack.py` | 계산이 끝난 곡선을 브라우저에 보내기 전에 점 수를 줄임 |
 | `web_db/front` | HTML. `/static`은 이 폴더의 `static` |
+| `web_db/front/partials` | 여러 페이지가 같이 쓰는 HTML 조각. 지금은 분석 화면 설정 서랍 `drawer.html` 하나 |
 | `web_db/sensor.sqlite` | 패킷, 이름, 설정 JSON, 통계. 없으면 서버가 켜질 때 만든다 |
 
 화면은 다섯 개다. 브라우저 스크립트는 `web_db/front/static`에 있고, 계산은 하지 않는다. 서버 JSON을 받아 칸을 채우거나, 칸의 값을 JSON으로 보낸다.
@@ -34,8 +35,10 @@
 | 주소 | 파일 | 하는 일 |
 | --- | --- | --- |
 | `/` | `front/index.html` | 수신, 명령, CSV와 SQLite 저장 |
-| `/generator` | `front/generator.html` | 외부 CSV 분석과 MQTT 재전송 |
-| `/studio` | `front/studio.html` | DB 패킷 분석과 MQTT 재전송 |
+| `/generator` | `front/generator.html` + `partials/drawer.html` | 외부 CSV 분석과 MQTT 재전송 |
+| `/studio` | `front/studio.html` + `partials/drawer.html` | DB 패킷 분석과 MQTT 재전송 |
+
+`/generator`와 `/studio`의 설정 서랍(필터, 단위, FFT, SRSS, MEMS 보정, 전송, 로그)은 내용이 같아서 `partials/drawer.html` 한 파일에 둔다. 두 페이지 HTML에는 그 자리에 `<!-- @include partials/drawer.html -->` 주석만 있고, `routes/pages.py`의 `_with_includes`가 요청마다 파일을 읽어 그 자리에 넣은 뒤 한 장의 HTML로 보낸다. 브라우저가 따로 불러오는 방식이 아니라서, 스크립트가 처음 실행될 때 서랍의 입력 칸이 이미 있다. 서랍을 고칠 때는 이 파일 하나만 고치면 되고, 서버를 다시 켜지 않아도 새로고침하면 반영된다. 화면별 차이(전송 체크와 Topic 숨김 등)는 `studio.js`가 불러온 뒤에 처리한다.
 | `/dashboard` | `front/dashboard.html` | 저장된 SRSS, RMS, PEAK만 조회 |
 | `/settings` | `front/settings.html` | MAC 표시 이름과 SRSS 한계 |
 
@@ -111,7 +114,7 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 | `POST /api/generator/preview`, `/fft-check` | 재전송 목록의 패킷 하나를 옵션대로 그린다, FFT 왕복 검사 |
 | `POST /api/generator/test`, `/start`, `/stop`, `/logs/clear`, `GET /status` | 브로커 시험, 반복 송신 시작·중지, 송신 수와 로그 |
 | `GET /api/analysis/defaults`, `GET·POST /srss-limit`, `POST /mems-scale`, `/mems-correction` | 그래프 기본값, SRSS 한계, 1 LSB, MEMS 보정 저장 |
-| `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON |
+| `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON. 분석 화면 MAC 선택 상자는 `MAC · 이름`만 보이고 패킷 수는 보이지 않는다. 패킷 수는 설정 화면이 이름 삭제 때 목록에서 뺄지 정하는 데 쓴다 |
 | `POST /api/db/load` | DB 패킷을 골라 재전송 목록에 올리고 첫 미리보기를 준다 |
 | `GET /api/db/dashboard`, `POST /api/db/update-stats` | 저장된 통계 읽기, 통계 최신화 |
 | `POST·DELETE /api/db/device-name` | 표시 이름 저장·삭제 |

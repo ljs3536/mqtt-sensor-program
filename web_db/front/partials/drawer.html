@@ -1,0 +1,292 @@
+<!--
+  분석 화면 설정 서랍. /generator(데이터 분석 CSV)와 /studio(센서 데이터 분석)가 같이 쓴다.
+  routes/pages.py가 페이지를 보낼 때, 페이지 안의 include 표시 주석 자리에 이 파일을 넣는다.
+  화면별 차이(전송 체크·Topic 숨김 등)는 HTML이 아니라 studio.js가 불러온 뒤에 처리한다.
+  id는 generator-*.js, studio.js, db.js가 찾으므로 바꿀 때 스크립트도 같이 본다.
+-->
+<aside class="studio-settings hidden-drawer" id="settings">
+        <div class="drawer-tools">
+          <button
+            type="button"
+            class="icon-btn"
+            id="menuMode"
+            title="메뉴로 두기"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M4 7h16M4 12h16M4 17h16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="icon-btn"
+            id="pinMode"
+            title="왼쪽에 고정"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <circle
+                cx="12"
+                cy="7"
+                r="3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+              <path
+                d="M12 10v11"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+          <button type="button" class="icon-btn" id="pinClose" title="닫기">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M6 6l12 12M18 6L6 18"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+        <div class="tabs" id="drawerTabs">
+          <button type="button" data-tab="settings" class="active">설정</button>
+          <button type="button" data-tab="transmit">전송</button>
+        </div>
+        <div id="settingsTab" class="tab-page active">
+          <h2 id="settingsTitle">PIEZO 설정</h2>
+          <div id="analysis">
+            <div class="stack">
+              <div class="pair">
+                <label class="check"><input id="fftAvg" type="checkbox" /><span>FFT 평균 적용</span></label>
+                <label>평균 개수
+                  <select id="fftAvgCount">
+                    <option>2</option>
+                    <option>4</option>
+                    <option>8</option>
+                    <option selected>16</option>
+                    <option>32</option>
+                    <option>64</option>
+                    <option>128</option>
+                    <option>전체</option>
+                  </select>
+                </label>
+              </div>
+              <div class="pair">
+                <label class="check"><input id="fftLogX" type="checkbox" /><span>FFT X 로그</span></label>
+                <label class="check"><input id="fftLogY" type="checkbox" /><span>FFT Y 로그</span></label>
+              </div>
+              <button type="button" class="secondary" id="fftCheck">FFT 과정 / IFFT 검증</button>
+            </div>
+            <fieldset id="piezoBox">
+              <legend>PIEZO</legend>
+              <div class="stack">
+                <label>표시 단위
+                  <select id="piezoUnit">
+                    <option value="Count">ADC (Count)</option>
+                    <option value="mV" selected>전압 (mV)</option>
+                    <option value="g RMS">가속도 (g RMS)</option>
+                    <option value="mm/s RMS">속도 (mm/s RMS)</option>
+                  </select>
+                </label>
+                <div class="pair">
+                  <label>Vmax (V)<input id="piezoVmax" value="3.89" /></label>
+                  <label>Amax<input id="piezoAmax" value="4096" /></label>
+                </div>
+                <div class="pair">
+                  <label>감도 (mV/g)<input id="piezoSens" value="100" /></label>
+                  <label>FFT 창
+                    <select id="piezoWindow">
+                      <option selected>Blackman</option>
+                      <option>Hann</option>
+                      <option>Hamming</option>
+                      <option>Rectangular</option>
+                    </select>
+                  </label>
+                </div>
+                <label>Window N
+                  <select id="piezoN">
+                    <option>전체</option>
+                    <option>1024</option>
+                    <option>2048</option>
+                    <option>4096</option>
+                    <option>8192</option>
+                  </select>
+                </label>
+                <div id="piezoFilters"></div>
+              </div>
+            </fieldset>
+            <fieldset id="adxlBox" hidden>
+              <legend>MEMS</legend>
+              <div class="stack">
+                <div class="checks">
+                  <label class="check"
+                    ><input id="axisX" type="checkbox" checked /><span
+                      >X</span
+                    ></label
+                  >
+                  <label class="check"
+                    ><input id="axisY" type="checkbox" checked /><span
+                      >Y</span
+                    ></label
+                  >
+                  <label class="check"
+                    ><input id="axisZ" type="checkbox" checked /><span
+                      >Z</span
+                    ></label
+                  >
+                  <label class="check"
+                    ><input id="gnOn" type="checkbox" checked /><span
+                      >gN</span
+                    ></label
+                  >
+                  <label class="check"
+                    ><input id="srssOn" type="checkbox" checked /><span
+                      >SRSS</span
+                    ></label
+                  >
+                </div>
+                <div class="pair">
+                  <label>한계값 (mm/s RMS)<input id="srssLimit" value="4.5" /></label>
+                  <button type="button" class="secondary" id="applySrssLimit">한계값 적용</button>
+                </div>
+                <label
+                  >RAW 단위
+                  <select id="adxlRaw">
+                    <option value="자동 (g/mg/µg)">
+                      자동 가속도 (g/mg/µg)
+                    </option>
+                    <option value="Count">ADC (Count)</option>
+                    <option value="g">가속도 (g)</option>
+                    <option value="mg">가속도 (mg)</option>
+                    <option value="µg">가속도 (µg)</option>
+                  </select>
+                </label>
+                <label
+                  >FFT 단위
+                  <select id="adxlFft">
+                    <option value="자동 (g RMS)">자동 가속도 (g RMS)</option>
+                    <option value="Count Peak">ADC (Count Peak)</option>
+                    <option value="g Peak">가속도 (g Peak)</option>
+                    <option value="g RMS">가속도 (g RMS)</option>
+                    <option value="mm/s RMS">속도 (mm/s RMS)</option>
+                  </select>
+                </label>
+                <p id="adxlFftHint" class="hint"></p>
+                <div class="pair">
+                  <label>1 LSB = (g)<input id="adxlG" value="0.00390625" /></label>
+                  <button type="button" class="secondary" id="saveG">LSB 저장</button>
+                </div>
+                <div class="pair">
+                  <label>FFT Window
+                    <select id="adxlWindow">
+                      <option>Rectangular</option>
+                      <option>Hann</option>
+                      <option>Hamming</option>
+                      <option selected>Blackman</option>
+                      <option>Blackman-Harris</option>
+                      <option>Flat Top</option>
+                      <option>Bartlett</option>
+                      <option>Kaiser</option>
+                    </select>
+                  </label>
+                  <label>Window N
+                    <select id="adxlN">
+                      <option>전체</option>
+                      <option>1024</option>
+                      <option>2048</option>
+                      <option>4096</option>
+                      <option>8192</option>
+                    </select>
+                  </label>
+                </div>
+                <label>Kaiser β<input id="adxlBeta" value="8.6" /></label>
+                <div id="adxlFilters"></div>
+                <div class="pair">
+                  <label class="check"><input id="freqOn" type="checkbox" checked /><span>주파수 보정 ON</span></label>
+                  <label>f 나눗수<input id="freqDiv" value="1.014" /></label>
+                </div>
+                <label class="check"><input id="sensOn" type="checkbox" checked /><span>Sensitivity 보정 ON</span></label>
+                <div class="pair">
+                  <label>저주파 경계 Hz<input id="lowHz" value="60" /></label>
+                  <label>고주파 경계 Hz<input id="highHz" value="360" /></label>
+                </div>
+                <div class="pair">
+                  <label>저주파 S<input id="lowS" value="0.99" /></label>
+                  <label>중간 상수<input id="midA" value="1.07" /></label>
+                </div>
+                <div class="pair">
+                  <label>중간 기울기<input id="midB" value="0.0005" /></label>
+                  <label>고주파 S<input id="highS" value="0.89" /></label>
+                </div>
+                <button type="button" class="secondary" id="saveCorrection">
+                  보정 적용/저장
+                </button>
+              </div>
+            </fieldset>
+            <div id="ultraBox" hidden>
+              <p class="hint">
+                초음파 H는 320점 스펙트럼만 표시합니다. RAW/FFT 설정은 쓰지
+                않습니다.
+              </p>
+            </div>
+          </div>
+        </div>
+        <div id="transmitTab" class="tab-page">
+          <div class="stack">
+            <div class="pair">
+              <label>IP<input id="host" value="127.0.0.1" /></label>
+              <label>Port<input id="port" value="1883" /></label>
+            </div>
+            <div class="pair">
+              <label>QoS<input id="qos" value="1" /></label>
+              <label>Device ID<input id="device" value="S01" /></label>
+            </div>
+            <label>MAC<input id="mac" value="TEST00000001" /></label>
+            <label class="check"
+              ><input id="rewrite" type="checkbox" /><span
+                >MAC 덮어쓰기</span
+              ></label
+            >
+            <label class="check"
+              ><input id="seq" type="checkbox" checked /><span
+                >진동 seq 자동</span
+              ></label
+            >
+            <label class="check"
+              ><input id="jitterOn" type="checkbox" /><span>Jitter</span></label
+            >
+            <label class="check"
+              ><input id="lossOn" type="checkbox" /><span
+                >패킷 손실</span
+              ></label
+            >
+            <label>ADXL XYZ gap(ms)<input id="xyzGap" value="5" /></label>
+            <label>초음파 tick 증가<input id="tickStep" value="0" /></label>
+            <button type="button" class="secondary" id="testBroker">
+              연결 테스트
+            </button>
+            <button type="button" class="go" id="start">
+              선택 위치부터 전송 시작
+            </button>
+            <button type="button" class="stop" id="stop">중지</button>
+            <p id="stats" class="hint">Publish 0 / PUBACK 0 / Drop 0</p>
+            <div id="sensors"></div>
+            <div class="between">
+              <h2>송신 로그</h2>
+              <button type="button" class="secondary" id="clearLog">로그 지우기</button>
+            </div>
+            <p class="hint">최근 200줄만 남습니다.</p>
+            <pre id="log"></pre>
+          </div>
+        </div>
+      </aside>
