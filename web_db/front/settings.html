@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>설정</title>
+  <script>
+  (function () {
+    var theme = localStorage.getItem("sensor-theme") || "white";
+    document.documentElement.setAttribute("data-theme", theme);
+  })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v=16">
+  <link rel="stylesheet" href="/static/theme.css?v=6">
+  <style>
+    .settings-table { width: 100%; border-collapse: collapse; }
+    .settings-table th, .settings-table td {
+      text-align: left;
+      padding: 8px 6px;
+      border-bottom: 1px solid #d5dee8;
+      vertical-align: middle;
+    }
+    .settings-table input.w-name { width: 220px; }
+    .settings-table input.w-limit { width: 110px; }
+    .settings-mac { font-weight: 800; word-break: break-all; }
+    .settings-meta { color: #5d6e80; font-size: 12px; white-space: nowrap; }
+    .add-row { margin-bottom: 14px; }
+    html[data-theme="gray"] .settings-table th,
+    html[data-theme="gray"] .settings-table td { border-color: #aeb8c0; }
+    html[data-theme="gray"] .settings-meta { color: #2c3338; }
+    html[data-theme="dark"] .settings-table th,
+    html[data-theme="dark"] .settings-table td { border-color: #333; color: #e6e6e6; }
+    html[data-theme="dark"] .settings-meta { color: #9aa8b5; }
+  </style>
+</head>
+<body>
+  <header>
+    <strong class="brand">설정</strong>
+    <nav>
+      <a href="/">센서 수신 모니터</a>
+      <a href="/generator">데이터 분석 CSV</a>
+      <a href="/studio">센서 데이터 분석</a>
+      <a href="/dashboard">통계</a>
+      <a class="active" href="/settings">설정</a>
+    </nav>
+  </header>
+  <main>
+    <section class="card">
+      <h2>장치 이름 / SRSS 한계</h2>
+      <p class="hint">표시 이름은 통계와 분석 MAC 목록에 붙습니다. SRSS 한계(mm/s RMS)는 통계 막대의 기준선이고, 그래프의 SRSS 한계선과 같은 값입니다. 비어 있으면 4.5입니다.</p>
+      <div class="row add-row">
+        <label>MAC<input id="newMac" placeholder="장치 MAC"></label>
+        <label>이름<input id="newName" placeholder="표시 이름"></label>
+        <label>SRSS 한계<input id="newLimit" class="w-num" value="4.5"></label>
+        <button type="button" id="addDevice">추가</button>
+      </div>
+      <p class="hint" id="settingsNote"></p>
+      <table class="settings-table">
+        <thead>
+          <tr>
+            <th>MAC</th>
+            <th>이름</th>
+            <th>SRSS 한계</th>
+            <th>패킷</th>
+            <th>마지막 수신</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="deviceRows"></tbody>
+      </table>
+    </section>
+  </main>
+  <script src="/static/api.js?v=1"></script>
+  <script src="/static/settings.js?v=2"></script>
+  <script src="/static/theme.js?v=2"></script>
+</body>
+</html>

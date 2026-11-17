@@ -58,3 +58,21 @@ def adxl_set_stats(found):
         "srss_mms": float(np.sqrt(np.sum(velocity_powers))),
         "g_per_lsb": g_per_lsb,
     }
+
+
+def summarize_mac(set_stats):
+    """완성 세트들의 RMS 평균, PEAK 최댓값, SRSS 평균을 MAC 한 줄로 모은다."""
+    if not set_stats:
+        raise ValueError("완성 세트가 없습니다")
+    rates = {item["sample_rate"] for item in set_stats}
+    counts = {item["sample_count"] for item in set_stats}
+    return {
+        "sample_rate": next(iter(rates)) if len(rates) == 1 else None,
+        "sample_count": next(iter(counts)) if len(counts) == 1 else None,
+        "rms": float(np.mean([item["rms"] for item in set_stats])),
+        "peak": float(max(item["peak"] for item in set_stats)),
+        "srss": float(np.mean([item["srss"] for item in set_stats])),
+        "srss_mms": float(np.mean([item["srss_mms"] for item in set_stats])),
+        "g_per_lsb": set_stats[-1]["g_per_lsb"],
+        "set_count": len(set_stats),
+    }

@@ -5,6 +5,7 @@
 const GraphView = (() => {
   const font = '"Malgun Gothic", "Segoe UI", sans-serif';
 
+  /** 축 제목 스타일. */
   function title(text) {
     return {
       display: true,
@@ -15,6 +16,7 @@ const GraphView = (() => {
     };
   }
 
+  /** 서버 x축 이름을 화면 문구로 바꾼다. */
   function xText(label) {
     const text = String(label || "");
     if (text.includes("ms")) return "시간 (ms)";
@@ -25,11 +27,13 @@ const GraphView = (() => {
     return text || "X";
   }
 
+  /** 서버 y축 이름을 그대로 쓰거나 기본 문구를 쓴다. */
   function yText(label, fallback) {
     const text = String(label || "").trim();
     return text || fallback || "값";
   }
 
+  /** 선형 축 옵션을 만든다. */
   function scale(text) {
     return {
       type: "linear",
@@ -65,6 +69,7 @@ const GraphView = (() => {
     },
   };
 
+  /** 빈 꺾은선 차트를 만들고 확대와 메뉴를 붙인다. */
   function chart(id) {
     const instance = new Chart(document.getElementById(id), {
       type: "line",
@@ -104,11 +109,13 @@ const GraphView = (() => {
     return instance;
   }
 
+  /** x, y 축 제목을 바꾼다. */
   function axes(plot, xLabel, yLabel) {
     plot.options.scales.x.title = title(xText(xLabel));
     plot.options.scales.y.title = title(yText(yLabel));
   }
 
+  /** 커서 위치 기준으로 보이는 구간을 확대하거나 줄인다. */
   function span(current, cursor, factor) {
     if (!current || !Number.isFinite(cursor) || !Number.isFinite(current.min) || !Number.isFinite(current.max)) return null;
     let min = current.min;
@@ -125,6 +132,7 @@ const GraphView = (() => {
     return { min, max };
   }
 
+  /** 고른 축만 휠 배율로 눈금을 바꾼다. */
   function applyZoom(plot, axes, cursors, factor) {
     let active = axes;
     if (plot.$lockX) active = active.replace("x", "");
@@ -145,10 +153,12 @@ const GraphView = (() => {
     plot.update("none");
   }
 
+  /** 차트 우클릭 메뉴를 닫는다. */
   function closeMenu() {
     document.querySelectorAll(".graph-menu").forEach((node) => node.remove());
   }
 
+  /** 차트 우클릭 메뉴를 연다. */
   function openMenu(plot, x, y) {
     closeMenu();
     const menu = document.createElement("div");
@@ -177,6 +187,7 @@ const GraphView = (() => {
     if (box.bottom > window.innerHeight) menu.style.top = `${Math.max(8, y - box.height)}px`;
   }
 
+  /** 휠 확대, 드래그 이동, 우클릭 메뉴를 차트에 붙인다. */
   function bind(plot) {
     const canvas = plot.canvas;
     const held = new Set();
@@ -273,6 +284,7 @@ const GraphView = (() => {
     if (event.key === "Escape") closeMenu();
   });
 
+  /** 축 고정 여부를 돌려준다. */
   function hold(plot, axis) {
     const scale = plot.scales[axis];
     if (!scale || !Number.isFinite(scale.min) || !Number.isFinite(scale.max)) return;
@@ -280,6 +292,7 @@ const GraphView = (() => {
     plot.options.scales[axis].max = scale.max;
   }
 
+  /** 축 고정 상태를 저장한다. */
   function setLock(plot, axis, locked) {
     if (axis === "x") plot.$lockX = locked;
     else plot.$lockY = locked;
@@ -287,6 +300,7 @@ const GraphView = (() => {
     plot.update("none");
   }
 
+  /** 입력한 최소·최대로 축을 고정한다. */
   function applyRange(plot, axis, min, max) {
     const low = Number(min);
     const high = Number(max);
@@ -302,6 +316,7 @@ const GraphView = (() => {
     plot.update("none");
   }
 
+  /** 축 고정을 풀고 자동 눈금으로 되돌린다. */
   function release(plot, axis) {
     delete plot.options.scales[axis].min;
     delete plot.options.scales[axis].max;
@@ -310,6 +325,7 @@ const GraphView = (() => {
     plot.update();
   }
 
+  /** 그래프 아래 축 고정 버튼을 RAW와 FFT 차트에 연결한다. */
   function bindAxisBar(charts) {
     const targetBox = document.querySelector("#axisTarget");
     const lockX = document.querySelector("#lockX");
@@ -348,6 +364,7 @@ const GraphView = (() => {
     sync();
   }
 
+  /** FFT 검증용 작은 꺾은선을 캔버스에 그린다. */
   function paintLine(canvas, xs, ys, color) {
     if (!canvas) return;
     const width = Math.max(200, Math.floor(canvas.clientWidth || 320));
@@ -395,6 +412,7 @@ const GraphView = (() => {
     ctx.stroke();
   }
 
+  /** FFT 검증 결과와 미리보기 그림을 결과 칸에 채운다. */
   function showFftCheck(box, data) {
     if (!box) return;
     box.hidden = false;

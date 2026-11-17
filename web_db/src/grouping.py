@@ -86,3 +86,23 @@ def group_adxl(rows):
         if all(axis in axes for axis in ("X", "Y", "Z")):
             items.append({"X": axes["X"], "Y": axes["Y"], "Z": axes["Z"]})
     return items
+
+
+def complete_sets(rows):
+    """id 순 패킷을 완성된 X/Y/Z 세트 목록으로 나눈다. 각 세트는 축별 행이다."""
+    sets = []
+    current = {}
+    last_axis = None
+    last_low = None
+    for row in rows:
+        axis = row["axis"]
+        low = seq_low(row["seq"])
+        if current and not continues_set(last_axis, last_low, axis, low):
+            sets.append(current)
+            current = {}
+        if axis in ("X", "Y", "Z"):
+            current[axis] = row
+            last_axis, last_low = axis, low
+    if current:
+        sets.append(current)
+    return [item for item in sets if all(axis in item for axis in ("X", "Y", "Z"))]

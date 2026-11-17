@@ -1,4 +1,4 @@
-"""화면 HTML. /, /generator, /studio, /dashboard."""
+"""화면 HTML. /, /generator, /studio, /dashboard, /settings."""
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, RedirectResponse
@@ -30,6 +30,12 @@ def studio_page():
 def dashboard_page():
     """MAC별 최신 SRSS, RMS, PEAK."""
     return FileResponse(FRONT / "dashboard.html")
+
+
+@router.get("/settings")
+def settings_page():
+    """장치 표시 이름과 통계 SRSS 한계."""
+    return FileResponse(FRONT / "settings.html")
 
 
 @router.get("/monitor")

@@ -25,6 +25,7 @@
     side.appendChild(pick);
   }
 
+  /** 차트 눈금 색을 현재 테마에 맞춘다. */
   function paint(chart) {
     if (!chart || !chart.options) return;
     var dark = theme !== "white";
@@ -43,6 +44,7 @@
     if (title) title.color = dark ? "#d7e8c8" : "#17324d";
   }
 
+  /** 차트가 다시 그려질 때마다 테마 색을 입힌다. */
   function watch(chart) {
     if (!chart || chart.__themePaint) return;
     var update = chart.update.bind(chart);

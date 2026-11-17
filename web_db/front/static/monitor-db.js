@@ -3,6 +3,7 @@ const nameMac = document.querySelector("#nameMac");
 const deviceName = document.querySelector("#deviceName");
 const savedConfig = document.querySelector("#savedConfig");
 
+/** 화면에 있는 MAC과 직접 입력 MAC을 이름 선택 목록으로 모은다. */
 function listedMacs() {
   const values = [...document.querySelectorAll("#macs input")].map((input) => input.value).filter(Boolean);
   const manual = document.querySelector("#manualMac").value.trim();
@@ -10,6 +11,7 @@ function listedMacs() {
   return values;
 }
 
+/** 이름 대상 MAC 선택 상자를 수신 목록과 맞춘다. */
 function refreshNameMacs() {
   const current = nameMac.value;
   const values = listedMacs();
@@ -27,6 +29,7 @@ function refreshNameMacs() {
   if (values.includes(current)) nameMac.value = current;
 }
 
+/** 고른 MAC의 표시 이름과 저장된 설정 JSON을 읽어 칸에 넣는다. */
 async function loadProfile() {
   if (!nameMac.value) {
     deviceName.value = "";
@@ -82,6 +85,7 @@ document.querySelector("#saveDeviceName").onclick = async () => {
   savedConfig.textContent = `${data.mac} 이름을 '${data.display_name}'로 저장했습니다.`;
 };
 
+/** 설정 적용 뒤에 이름 목록과 저장된 JSON을 다시 읽는다. */
 const monitorCommand = command;
 command = async function saveCommand(action) {
   await monitorCommand(action);

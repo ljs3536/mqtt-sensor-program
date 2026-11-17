@@ -149,3 +149,12 @@ def db_device_name(body: DeviceName):
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.delete("/api/db/device-name")
+def db_clear_device_name(mac: str):
+    """표시 이름을 지운다. 패킷이 없는 MAC은 목록에서 제거한다."""
+    try:
+        return store.clear_display_name(mac)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+

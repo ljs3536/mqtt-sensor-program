@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from web_db.src import core as gen
 from web_db.src.db_util import _iso
-from web_db.src.stats_calc import adxl_set_stats
+from web_db.src.grouping import complete_sets
+from web_db.src.stats_calc import adxl_set_stats, summarize_mac
 
 
 class QueryMixin:
@@ -24,77 +24,60 @@ class QueryMixin:
                 ORDER BY last_at DESC
                 """
             ).fetchall()
-        return [dict(row) for row in rows]
+        items = [dict(row) for row in rows]
+        for item in items:
+            item["limit"] = self.get_srss_limit(item["mac"])
+        return items
 
     def stats(self, mac):
-        """한 MAC의 저장된 통계 평균과 최대값을 돌려준다."""
+        """한 MAC의 measurement 한 줄을 돌려준다. 없으면 측정 수 0이다."""
         with self.lock:
             row = self._conn.execute(
                 """
-                SELECT COUNT(*) AS measurements,
-                       AVG(srss) AS srss_avg,
-                       SUM(srss IS NOT NULL) AS srss_count,
-                       AVG(rms) AS rms_avg,
-                       MAX(peak) AS peak_max,
-                       MAX(unit) AS unit
+                SELECT set_count, rms, peak, srss, srss_mms, unit, first_at, last_at
                 FROM measurement
-                WHERE mac=?
+                WHERE mac=? AND sensor_type='ADXL' AND set_count IS NOT NULL
+                ORDER BY id DESC LIMIT 1
                 """,
                 (mac,),
             ).fetchone()
-        data = dict(row) if row else {}
-        data["mac"] = mac
-        data["measurements"] = int(data.get("measurements") or 0)
-        return data
+        if row is None:
+            return {"mac": mac, "measurements": 0, "srss_avg": None, "rms_avg": None, "peak_max": None, "unit": ""}
+        return {
+            "mac": mac,
+            "measurements": int(row["set_count"] or 0),
+            "srss_avg": row["srss"],
+            "srss_mms": row["srss_mms"],
+            "rms_avg": row["rms"],
+            "peak_max": row["peak"],
+            "unit": row["unit"] or "",
+            "first_at": row["first_at"],
+            "last_at": row["last_at"],
+        }
 
     def dashboard(self):
-        """MAC별 최신 SRSS/RMS/PEAK. 화면은 저장된 숫자만 읽는다."""
+        """MAC별 measurement 한 줄. 화면은 저장된 숫자만 읽는다."""
         with self.lock:
             rows = self._conn.execute(
                 """
                 SELECT d.mac, d.display_name,
                        m.srss AS srss, m.srss_mms AS srss_mms, m.rms AS rms, m.peak AS peak,
-                       m.received_at AS received_at,
-                       a.srss_avg AS srss_avg, a.rms_avg AS rms_avg, a.peak_max AS peak_max,
-                       a.n AS measurements
+                       m.set_count AS set_count, m.first_at AS first_at, m.last_at AS last_at,
+                       m.computed_at AS computed_at
                 FROM device d
                 LEFT JOIN measurement m ON m.id = (
                     SELECT id FROM measurement
-                    WHERE mac=d.mac AND sensor_type='ADXL' AND srss IS NOT NULL
+                    WHERE mac=d.mac AND sensor_type='ADXL' AND set_count IS NOT NULL
                     ORDER BY id DESC LIMIT 1
                 )
-                LEFT JOIN (
-                    SELECT mac, AVG(srss_mms) AS srss_avg, AVG(rms) AS rms_avg,
-                           MAX(peak) AS peak_max, COUNT(*) AS n
-                    FROM measurement
-                    WHERE sensor_type='ADXL' AND srss IS NOT NULL
-                    GROUP BY mac
-                ) a ON a.mac=d.mac
                 ORDER BY d.created_at, d.mac
                 """
             ).fetchall()
             items = []
             for row in rows:
                 item = dict(row)
-                item["limit"] = gen.srss_limit_get(item["mac"])
-                item["measurements"] = int(item["measurements"] or 0)
-                history = self._conn.execute(
-                    """
-                    SELECT srss_mms, rms, peak, received_at FROM measurement
-                    WHERE mac=? AND sensor_type='ADXL' AND srss IS NOT NULL
-                    ORDER BY id DESC LIMIT 40
-                    """,
-                    (item["mac"],),
-                ).fetchall()
-                item["series"] = [
-                    {
-                        "t": point["received_at"],
-                        "srss_mms": point["srss_mms"],
-                        "rms": point["rms"],
-                        "peak": point["peak"],
-                    }
-                    for point in reversed(history)
-                ]
+                item["limit"] = self._read_srss_limit(item["mac"])
+                item["set_count"] = int(item["set_count"] or 0)
                 items.append(item)
         return {"updated_at": self.stats_updated_at(), "items": items}
 
@@ -112,52 +95,74 @@ class QueryMixin:
         return None if fallback is None else fallback["updated_at"]
 
     def update_statistics(self):
-        """새 XYZ 세트만 SRSS, RMS, PEAK로 만든다. 이미 있는 측정은 다시 계산하지 않는다."""
+        """MAC마다 packet의 완성 XYZ를 읽어 measurement 한 줄로 바꾼다."""
         with self.lock:
-            pending = self._conn.execute(
-                """
-                SELECT set_key, mac, MAX(received_at) AS received_at
-                FROM packet
-                WHERE sensor_type='ADXL'
-                GROUP BY set_key
-                HAVING SUM(axis='X')>0 AND SUM(axis='Y')>0 AND SUM(axis='Z')>0
-                   AND set_key NOT IN (SELECT set_key FROM measurement)
-                """
-            ).fetchall()
-        added = 0
-        for item in pending:
-            with self.lock:
-                found_rows = self._conn.execute(
-                    """
-                    SELECT id, axis, decoded_samples, sample_rate, sample_count
-                    FROM packet WHERE set_key=? ORDER BY id
-                    """,
-                    (item["set_key"],),
+            macs = [
+                row["mac"]
+                for row in self._conn.execute(
+                    "SELECT DISTINCT mac FROM packet WHERE sensor_type='ADXL'"
                 ).fetchall()
-            found = {row["axis"]: row for row in found_rows}
-            if any(axis not in found for axis in ("X", "Y", "Z")):
-                continue
-            try:
-                stats = adxl_set_stats(found)
-            except (ValueError, TypeError, OverflowError):
-                continue
+            ]
+        written = 0
+        for mac in macs:
+            with self.lock:
+                rows = [
+                    dict(row)
+                    for row in self._conn.execute(
+                        """
+                        SELECT id, axis, seq, decoded_samples, sample_rate, sample_count, received_at
+                        FROM packet
+                        WHERE mac=? AND sensor_type='ADXL'
+                        ORDER BY id
+                        """,
+                        (mac,),
+                    ).fetchall()
+                ]
+            collected = []
+            times = []
+            for found in complete_sets(rows):
+                try:
+                    collected.append(adxl_set_stats(found))
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                times.append(max(found[axis]["received_at"] for axis in ("X", "Y", "Z")))
+            now = _iso()
             with self.lock:
                 self._conn.execute(
-                    """
-                    INSERT OR IGNORE INTO measurement(
-                        mac, received_at, sensor_type, sample_rate, sample_count, rms, peak, srss, srss_mms,
-                        unit, g_per_lsb, set_key, packet_x_id, packet_y_id, packet_z_id
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        item["mac"], item["received_at"], "ADXL", stats["sample_rate"],
-                        stats["sample_count"], stats["rms"], stats["peak"], stats["srss"],
-                        stats["srss_mms"], "g RMS", stats["g_per_lsb"], item["set_key"],
-                        found["X"]["id"], found["Y"]["id"], found["Z"]["id"],
-                    ),
+                    "DELETE FROM measurement WHERE mac=? AND sensor_type='ADXL'",
+                    (mac,),
                 )
+                if collected:
+                    summary = summarize_mac(collected)
+                    self._conn.execute(
+                        """
+                        INSERT INTO measurement(
+                            mac, received_at, sensor_type, sample_rate, sample_count,
+                            rms, peak, srss, srss_mms, unit, g_per_lsb, set_key,
+                            set_count, first_at, last_at, computed_at
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                        """,
+                        (
+                            mac,
+                            max(times),
+                            "ADXL",
+                            summary["sample_rate"],
+                            summary["sample_count"],
+                            summary["rms"],
+                            summary["peak"],
+                            summary["srss"],
+                            summary["srss_mms"],
+                            "g RMS",
+                            summary["g_per_lsb"],
+                            f"ADXL|{mac}|all",
+                            summary["set_count"],
+                            min(times),
+                            max(times),
+                            now,
+                        ),
+                    )
+                    written += 1
                 self._conn.commit()
-            added += 1
         now = _iso()
         with self.lock:
             self._conn.execute(
@@ -168,7 +173,7 @@ class QueryMixin:
                 (now,),
             )
             self._conn.commit()
-        return {"added": added, "updated_at": now}
+        return {"macs": written, "updated_at": now}
 
     def rebuild_daily(self):
         """measurement를 날짜별 평균으로 daily_stat에 다시 쓴다."""

@@ -4,6 +4,7 @@ const settings = document.querySelector("#settings");
 const openDrawer = document.querySelector("#openDrawer");
 const sensorPick = document.querySelector("#sensor");
 
+/** 고른 센서만 설정 칸과 송신 줄에 보여 준다. */
 function showPanels() {
   const sensor = sensorPick.value;
   piezoBox.hidden = sensor !== "PIEZO";
@@ -26,6 +27,7 @@ function showPanels() {
   });
 }
 
+/** 서랍의 설정 탭과 송신 탭을 바꾼다. */
 function showDrawerTab(name) {
   document.querySelectorAll("#drawerTabs button, .studio-settings .tabs button").forEach((button) => {
     if (!button.dataset.tab) return;
@@ -35,6 +37,7 @@ function showDrawerTab(name) {
   transmitTab.classList.toggle("active", name === "transmit");
 }
 
+/** 서랍을 열거나 닫고 차트 크기를 다시 맞춘다. */
 function setDrawerOpen(open) {
   settings.classList.toggle("hidden-drawer", !open);
   openDrawer.classList.toggle("active", open || workspace.classList.contains("pinned"));
@@ -96,6 +99,7 @@ if (stageInput) {
 }
 
 const originalDraw = draw;
+/** 미리보기 위에 패킷 번호도 같이 보여 준다. */
 draw = function studioDraw(preview) {
   originalDraw(preview);
   const count = preview.count || "-";

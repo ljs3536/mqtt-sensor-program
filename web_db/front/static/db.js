@@ -1,4 +1,4 @@
-// 센서 데이터 분석의 DB 열기. CSV 파일 선택은 generator.js 그대로 둔다.
+// 센서 데이터 분석의 조회. CSV 파일 선택은 generator.js 그대로 둔다.
 const dbMac = document.querySelector("#dbMac");
 const dbStatus = document.querySelector("#dbStatus");
 const dbMode = document.querySelector("#dbMode");
@@ -8,18 +8,24 @@ const dbTo = document.querySelector("#dbTo");
 const dbFromWrap = document.querySelector("#dbFromWrap");
 const dbToWrap = document.querySelector("#dbToWrap");
 
+/** 지금 고른 분석 센서 이름을 돌려준다. */
 function dbSensor() {
   return document.querySelector("#sensor").value;
 }
 
+/** measurement 한 줄을 상태 문장으로 만든다. */
 function describeStats(stats) {
   if (!stats || !stats.measurements) return "측정 통계 없음";
-  const srss = stats.srss_avg == null ? "-" : Number(stats.srss_avg).toPrecision(6);
-  const rms = stats.rms_avg == null ? "-" : Number(stats.rms_avg).toPrecision(6);
-  const peak = stats.peak_max == null ? "-" : Number(stats.peak_max).toPrecision(6);
+  const srss =
+    stats.srss_avg == null ? "-" : Number(stats.srss_avg).toPrecision(6);
+  const rms =
+    stats.rms_avg == null ? "-" : Number(stats.rms_avg).toPrecision(6);
+  const peak =
+    stats.peak_max == null ? "-" : Number(stats.peak_max).toPrecision(6);
   return `측정 ${stats.measurements} | SRSS 평균 ${srss} | RMS 평균 ${rms} | PEAK 최대 ${peak} ${stats.unit || ""}`.trim();
 }
 
+/** 저장된 MAC 목록을 선택 상자에 채운다. */
 async function loadDbMacs() {
   const response = await fetch("/api/db/devices");
   const data = await response.json();
@@ -37,12 +43,16 @@ async function loadDbMacs() {
     option.textContent = `${item.mac}${name} (${item.packets})`;
     dbMac.appendChild(option);
   });
-  if ([...dbMac.options].some((option) => option.value === current)) dbMac.value = current;
+  if ([...dbMac.options].some((option) => option.value === current))
+    dbMac.value = current;
 }
 
+/** 고른 MAC의 통계 한 줄을 상태 칸에 보여 준다. */
 async function showDbStats() {
   if (!dbMac.value) return;
-  const response = await fetch(`/api/db/stats?mac=${encodeURIComponent(dbMac.value)}`);
+  const response = await fetch(
+    `/api/db/stats?mac=${encodeURIComponent(dbMac.value)}`,
+  );
   const data = await response.json();
   if (!response.ok) {
     dbStatus.textContent = data.detail || "통계 조회 실패";
@@ -52,9 +62,11 @@ async function showDbStats() {
 }
 
 document.querySelector("#dbReload").onclick = () => {
-  loadDbMacs().then(showDbStats).catch((error) => {
-    dbStatus.textContent = error.message;
-  });
+  loadDbMacs()
+    .then(showDbStats)
+    .catch((error) => {
+      dbStatus.textContent = error.message;
+    });
 };
 
 dbMac.onchange = () => {
@@ -89,7 +101,7 @@ document.querySelector("#dbLoad").onclick = async () => {
   });
   const data = await response.json();
   if (!response.ok) {
-    alert(data.detail || "DB 열기 실패");
+    alert(data.detail || "DB조회 실패");
     return;
   }
   document.querySelector("#sensor").value = sensor;
@@ -102,7 +114,9 @@ dbMode.addEventListener("change", () => {
   const range = dbMode.value === "range";
   dbFromWrap.hidden = !range;
   dbToWrap.hidden = !range;
-  dbStatus.textContent = range ? "시작~끝 시각의 세트를 엽니다. 최대 200세트입니다." : "최근 개수만큼 세트를 엽니다.";
+  dbStatus.textContent = range
+    ? "시작~끝 시각의 세트를 엽니다. 최대 200세트입니다."
+    : "최근 개수만큼 세트를 엽니다.";
 });
 
 loadDbMacs().catch((error) => {

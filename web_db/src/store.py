@@ -10,13 +10,13 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 import threading
 from pathlib import Path
 
 from web_db.src.db_util import _float, _int, _iso, _samples_text
 from web_db.src.grouping import assign_set, continues_set, seq_low
-from web_db.src.stats_calc import adxl_set_stats
 from web_db.src.store_query import QueryMixin
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,7 +143,12 @@ class Store(QueryMixin):
             self._add_column("device", name, ddl)
         self._add_column("packet", "set_no", "INTEGER")
         self._add_column("measurement", "srss_mms", "REAL")
+        self._add_column("measurement", "set_count", "INTEGER")
+        self._add_column("measurement", "first_at", "TEXT")
+        self._add_column("measurement", "last_at", "TEXT")
+        self._add_column("measurement", "computed_at", "TEXT")
         self._conn.commit()
+        self._import_srss_limits()
         self._regroup_adxl()
 
     def _add_column(self, table, name, ddl):
@@ -153,7 +158,7 @@ class Store(QueryMixin):
             self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
 
     def _regroup_adxl(self):
-        """저장된 ADXL을 CSV와 같은 seq 규칙으로 다시 묶고 measurement를 다시 만든다."""
+        """저장된 ADXL 패킷의 set_no만 seq 규칙으로 다시 맞춘다. 통계 줄은 만들지 않는다."""
         rows = self._conn.execute(
             """
             SELECT id, mac, axis, seq FROM packet
@@ -178,39 +183,6 @@ class Store(QueryMixin):
             self._conn.execute(
                 "UPDATE packet SET set_key=?, set_no=? WHERE id=?",
                 (key, set_no, row["id"]),
-            )
-        self._conn.execute("DELETE FROM measurement WHERE sensor_type='ADXL'")
-        keys = self._conn.execute(
-            "SELECT DISTINCT set_key, mac FROM packet WHERE sensor_type='ADXL'"
-        ).fetchall()
-        for item in keys:
-            found_rows = self._conn.execute(
-                """
-                SELECT id, axis, decoded_samples, sample_rate, sample_count, received_at
-                FROM packet WHERE set_key=? ORDER BY id
-                """,
-                (item["set_key"],),
-            ).fetchall()
-            found = {row["axis"]: row for row in found_rows}
-            if any(axis not in found for axis in ("X", "Y", "Z")):
-                continue
-            try:
-                stats = adxl_set_stats(found)
-            except (ValueError, TypeError, OverflowError):
-                continue
-            self._conn.execute(
-                """
-                INSERT INTO measurement(
-                    mac, received_at, sensor_type, sample_rate, sample_count, rms, peak, srss, srss_mms,
-                    unit, g_per_lsb, set_key, packet_x_id, packet_y_id, packet_z_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    item["mac"], found["Z"]["received_at"], "ADXL", stats["sample_rate"],
-                    stats["sample_count"], stats["rms"], stats["peak"], stats["srss"], stats["srss_mms"],
-                    "g RMS", stats["g_per_lsb"], item["set_key"],
-                    found["X"]["id"], found["Y"]["id"], found["Z"]["id"],
-                ),
             )
         self._conn.execute(
             """
@@ -244,6 +216,120 @@ class Store(QueryMixin):
             )
             self._conn.commit()
         return {"mac": mac, "display_name": label}
+
+    def clear_display_name(self, mac):
+        """표시 이름을 지운다. 수신 패킷이 없는 MAC은 목록에서도 뺀다."""
+        mac = str(mac or "").strip()
+        if not mac:
+            raise ValueError("MAC이 필요합니다")
+        with self.lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) AS n FROM packet WHERE mac=?",
+                (mac,),
+            ).fetchone()
+            packets = int(row["n"] or 0)
+            if packets:
+                self._conn.execute(
+                    "UPDATE device SET display_name='', updated_at=? WHERE mac=?",
+                    (_iso(), mac),
+                )
+                self._conn.commit()
+                return {"mac": mac, "display_name": "", "removed": False}
+            self._conn.execute("DELETE FROM sensor_config WHERE mac=?", (mac,))
+            self._conn.execute("DELETE FROM device WHERE mac=?", (mac,))
+            self._conn.commit()
+        self.delete_srss_limit(mac)
+        return {"mac": mac, "display_name": "", "removed": True}
+
+    def limit_key(self, mac):
+        """SRSS 한계 키. 대문자이며 콜론과 하이픈은 뺀다."""
+        return str(mac or "").strip().upper().replace(":", "").replace("-", "")
+
+    def _limit_number(self, value):
+        """0보다 큰 유한한 한계. 아니면 기본 4.5."""
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return 4.5
+        if not math.isfinite(number) or number <= 0:
+            return 4.5
+        return number
+
+    def _read_srss_limit(self, mac):
+        """lock을 가진 상태에서 srss_limit 한 줄을 읽는다. 없으면 4.5."""
+        key = self.limit_key(mac)
+        if not key:
+            return 4.5
+        row = self._conn.execute(
+            "SELECT limit_mm_s FROM srss_limit WHERE mac=?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return 4.5
+        return self._limit_number(row["limit_mm_s"])
+
+    def get_srss_limit(self, mac):
+        """장치 SRSS 한계(mm/s RMS). 테이블에 없으면 4.5."""
+        with self.lock:
+            return self._read_srss_limit(mac)
+
+    def save_srss_limit(self, mac, value):
+        """장치 SRSS 한계를 srss_limit 테이블에 저장한다."""
+        key = self.limit_key(mac)
+        number = float(value)
+        if not key or not math.isfinite(number) or number <= 0:
+            raise ValueError("장치 ID와 0보다 큰 유한한 한계값이 필요합니다")
+        now = _iso()
+        with self.lock:
+            self._conn.execute(
+                """
+                INSERT INTO srss_limit(mac, limit_mm_s, updated_at) VALUES (?,?,?)
+                ON CONFLICT(mac) DO UPDATE SET
+                    limit_mm_s=excluded.limit_mm_s,
+                    updated_at=excluded.updated_at
+                """,
+                (key, number, now),
+            )
+            self._conn.commit()
+        return number
+
+    def delete_srss_limit(self, mac):
+        """장치 SRSS 한계 줄을 지운다. 없으면 그대로 둔다."""
+        key = self.limit_key(mac)
+        if not key:
+            return
+        with self.lock:
+            self._conn.execute("DELETE FROM srss_limit WHERE mac=?", (key,))
+            self._conn.commit()
+
+    def _import_srss_limits(self):
+        """예전에 홈 JSON에 있던 한계를 테이블에 한 번 옮긴다. 이미 있는 키는 유지한다."""
+        path = Path.home() / ".sensor-program" / "srss_limits.json"
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(data, dict):
+            return
+        now = _iso()
+        for raw, value in data.items():
+            key = self.limit_key(raw)
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if not key or not math.isfinite(number) or number <= 0:
+                continue
+            self._conn.execute(
+                """
+                INSERT OR IGNORE INTO srss_limit(mac, limit_mm_s, updated_at)
+                VALUES (?,?,?)
+                """,
+                (key, number, now),
+            )
+        self._conn.commit()
 
     def save_sensor_config(self, mac, payload, action):
         """설정 적용으로 보낸 JSON을 그 MAC의 sensor_config에 남긴다."""

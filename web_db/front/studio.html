@@ -5,10 +5,10 @@
     <meta charset="utf-8" />
     <title>센서 데이터 분석 DB</title>
     <script>
-    (function () {
-      var theme = localStorage.getItem("sensor-theme") || "white";
-      document.documentElement.setAttribute("data-theme", theme);
-    })();
+      (function () {
+        var theme = localStorage.getItem("sensor-theme") || "white";
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
     </script>
     <link rel="stylesheet" href="/static/style.css?v=15" />
     <link rel="stylesheet" href="/static/theme.css?v=6" />
@@ -21,6 +21,7 @@
         <a href="/generator">데이터 분석 CSV</a>
         <a class="active" href="/studio">센서 데이터 분석</a>
         <a href="/dashboard">통계</a>
+        <a href="/settings">설정</a>
       </nav>
     </header>
     <main class="studio" id="workspace">
@@ -87,8 +88,13 @@
           <div id="analysis">
             <div class="stack">
               <div class="pair">
-                <label class="check"><input id="fftAvg" type="checkbox" /><span>FFT 평균 적용</span></label>
-                <label>평균 개수
+                <label class="check"
+                  ><input id="fftAvg" type="checkbox" /><span
+                    >FFT 평균 적용</span
+                  ></label
+                >
+                <label
+                  >평균 개수
                   <select id="fftAvgCount">
                     <option>2</option>
                     <option>4</option>
@@ -102,15 +108,26 @@
                 </label>
               </div>
               <div class="pair">
-                <label class="check"><input id="fftLogX" type="checkbox" /><span>FFT X 로그</span></label>
-                <label class="check"><input id="fftLogY" type="checkbox" /><span>FFT Y 로그</span></label>
+                <label class="check"
+                  ><input id="fftLogX" type="checkbox" /><span
+                    >FFT X 로그</span
+                  ></label
+                >
+                <label class="check"
+                  ><input id="fftLogY" type="checkbox" /><span
+                    >FFT Y 로그</span
+                  ></label
+                >
               </div>
-              <button type="button" class="secondary" id="fftCheck">FFT 과정 / IFFT 검증</button>
+              <button type="button" class="secondary" id="fftCheck">
+                FFT 과정 / IFFT 검증
+              </button>
             </div>
             <fieldset id="piezoBox">
               <legend>PIEZO</legend>
               <div class="stack">
-                <label>표시 단위
+                <label
+                  >표시 단위
                   <select id="piezoUnit">
                     <option value="Count">ADC (Count)</option>
                     <option value="mV" selected>전압 (mV)</option>
@@ -124,7 +141,8 @@
                 </div>
                 <div class="pair">
                   <label>감도 (mV/g)<input id="piezoSens" value="100" /></label>
-                  <label>FFT 창
+                  <label
+                    >FFT 창
                     <select id="piezoWindow">
                       <option selected>Blackman</option>
                       <option>Hann</option>
@@ -133,7 +151,8 @@
                     </select>
                   </label>
                 </div>
-                <label>Window N
+                <label
+                  >Window N
                   <select id="piezoN">
                     <option>전체</option>
                     <option>1024</option>
@@ -176,8 +195,12 @@
                   >
                 </div>
                 <div class="pair">
-                  <label>한계값 (mm/s RMS)<input id="srssLimit" value="4.5" /></label>
-                  <button type="button" class="secondary" id="applySrssLimit">한계값 적용</button>
+                  <label
+                    >한계값 (mm/s RMS)<input id="srssLimit" value="4.5"
+                  /></label>
+                  <button type="button" class="secondary" id="applySrssLimit">
+                    한계값 적용
+                  </button>
                 </div>
                 <label
                   >RAW 단위
@@ -203,11 +226,16 @@
                 </label>
                 <p id="adxlFftHint" class="hint"></p>
                 <div class="pair">
-                  <label>1 LSB = (g)<input id="adxlG" value="0.00390625" /></label>
-                  <button type="button" class="secondary" id="saveG">LSB 저장</button>
+                  <label
+                    >1 LSB = (g)<input id="adxlG" value="0.00390625"
+                  /></label>
+                  <button type="button" class="secondary" id="saveG">
+                    LSB 저장
+                  </button>
                 </div>
                 <div class="pair">
-                  <label>FFT Window
+                  <label
+                    >FFT Window
                     <select id="adxlWindow">
                       <option>Rectangular</option>
                       <option>Hann</option>
@@ -219,7 +247,8 @@
                       <option>Kaiser</option>
                     </select>
                   </label>
-                  <label>Window N
+                  <label
+                    >Window N
                     <select id="adxlN">
                       <option>전체</option>
                       <option>1024</option>
@@ -232,10 +261,18 @@
                 <label>Kaiser β<input id="adxlBeta" value="8.6" /></label>
                 <div id="adxlFilters"></div>
                 <div class="pair">
-                  <label class="check"><input id="freqOn" type="checkbox" checked /><span>주파수 보정 ON</span></label>
+                  <label class="check"
+                    ><input id="freqOn" type="checkbox" checked /><span
+                      >주파수 보정 ON</span
+                    ></label
+                  >
                   <label>f 나눗수<input id="freqDiv" value="1.014" /></label>
                 </div>
-                <label class="check"><input id="sensOn" type="checkbox" checked /><span>Sensitivity 보정 ON</span></label>
+                <label class="check"
+                  ><input id="sensOn" type="checkbox" checked /><span
+                    >Sensitivity 보정 ON</span
+                  ></label
+                >
                 <div class="pair">
                   <label>저주파 경계 Hz<input id="lowHz" value="60" /></label>
                   <label>고주파 경계 Hz<input id="highHz" value="360" /></label>
@@ -303,7 +340,9 @@
             <div id="sensors"></div>
             <div class="between">
               <h2>송신 로그</h2>
-              <button type="button" class="secondary" id="clearLog">로그 지우기</button>
+              <button type="button" class="secondary" id="clearLog">
+                로그 지우기
+              </button>
             </div>
             <p class="hint">최근 200줄만 남습니다.</p>
             <pre id="log"></pre>
@@ -342,20 +381,28 @@
           </select>
         </div>
         <div class="stage-bar" id="dbBar">
-          <label>MAC
-            <select id="dbMac"><option value="">저장된 MAC 없음</option></select>
+          <label
+            >MAC
+            <select id="dbMac">
+              <option value="">저장된 MAC 없음</option>
+            </select>
           </label>
           <button type="button" class="secondary" id="dbReload">목록</button>
-          <label>조회
+          <label
+            >조회
             <select id="dbMode">
               <option value="recent" selected>최근</option>
               <option value="range">기간</option>
             </select>
           </label>
           <label>개수<input id="dbLimit" value="50" /></label>
-          <label id="dbFromWrap" hidden>시작<input id="dbFrom" type="datetime-local" /></label>
-          <label id="dbToWrap" hidden>끝<input id="dbTo" type="datetime-local" /></label>
-          <button type="button" id="dbLoad">DB 열기</button>
+          <label id="dbFromWrap" hidden
+            >시작<input id="dbFrom" type="datetime-local"
+          /></label>
+          <label id="dbToWrap" hidden
+            >끝<input id="dbTo" type="datetime-local"
+          /></label>
+          <button type="button" id="dbLoad">조회</button>
           <span id="dbStatus" class="stats">최근 50세트까지 엽니다.</span>
         </div>
         <div class="packet-bar">
@@ -385,7 +432,9 @@
           <label>Y max<input id="yMax" class="w-num" /></label>
           <button type="button" id="applyAxis">축 적용/고정</button>
           <button type="button" class="secondary" id="autoAxis">축 자동</button>
-          <button type="button" class="secondary" id="resetZoom">그래프 전체 보기</button>
+          <button type="button" class="secondary" id="resetZoom">
+            그래프 전체 보기
+          </button>
         </div>
         <div id="packetInfo" class="packet-info"></div>
         <details class="formula-fold">
@@ -430,10 +479,13 @@
     <script src="/static/chart.umd.min.js"></script>
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
-    <script src="/static/graph.js?v=8"></script>
-    <script src="/static/generator.js?v=18"></script>
-    <script src="/static/studio.js?v=5"></script>
-    <script src="/static/db.js?v=2"></script>
+    <script src="/static/api.js?v=1"></script>
+    <script src="/static/graph.js?v=9"></script>
+    <script src="/static/generator-draw.js?v=1"></script>
+    <script src="/static/generator-api.js?v=1"></script>
+    <script src="/static/generator.js?v=19"></script>
+    <script src="/static/studio.js?v=6"></script>
+    <script src="/static/db.js?v=3"></script>
     <script src="/static/theme.js?v=2"></script>
   </body>
 </html>
