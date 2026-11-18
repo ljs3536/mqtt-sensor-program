@@ -258,26 +258,122 @@ pre.short { height: 72px; }
   align-items: center;
   justify-content: center;
 }
-.monitor-head {
+/* ---------- 센서 수신 모니터 상단 ---------- */
+/* 연결 줄: 왼쪽 입력, 오른쪽 CSV 저장과 연결 상태 */
+.mon-conn { padding-bottom: 8px; }
+.conn-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 10px 18px;
+}
+.conn-state { display: flex; align-items: center; gap: 14px; }
+.csv-toggle { min-height: 34px; }
+.conn-notes { display: flex; flex-wrap: wrap; gap: 0 18px; margin-top: 6px; }
+.conn-notes .hint { margin: 0; }
+/* 연결 상태: 점 + 글자. 연결 중이면 점이 천천히 깜빡여 수신 중임을 알린다. */
+#linkStatus { height: 34px; padding: 0 14px; font-size: 12px; gap: 8px; border: 1px solid transparent; }
+#linkStatus::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+#linkStatus.on { border-color: #a9dcb9; }
+#linkStatus.on::before { animation: link-pulse 1.6s ease-in-out infinite; }
+@keyframes link-pulse { 50% { opacity: 0.25; } }
+
+/* 수신 MAC과 센서 명령 두 카드 */
+.mon-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.9fr);
-  gap: 18px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1.4fr) minmax(380px, 1fr);
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.mon-grid > .card { margin: 0; }
+.mon-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #e1e8ef;
 }
-.monitor-save {
-  padding-left: 16px;
-  border-left: 1px solid #d5dee8;
-}
-.monitor-save-row { align-items: end; }
-.monitor-save-row #linkStatus { margin-left: auto; height: 34px; }
-.sensor-split {
+.mon-title h2 { margin: 0; }
+.card h2 small { margin-left: 6px; font-size: 11px; font-weight: 500; color: #7b8b9c; }
+.mon-title-tools { display: flex; align-items: center; gap: 6px; }
+.mon-title-tools button { height: 30px; padding: 0 10px; }
+.mon-title-tools .stats { margin-right: 4px; font-size: 12px; color: #5d6e80; }
+
+/* MAC 칩: 같은 폭의 칸으로 줄을 맞춘다. 시각과 개수는 오른쪽 끝에 붙인다. */
+.mon-macs .macs {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(260px, 0.85fr);
-  gap: 14px;
-  align-items: start;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 6px;
+  align-content: start;
+  min-height: 0;
+  max-height: 320px;
+  margin: 0 0 8px;
+  overflow: auto;
 }
-.sensor-side pre.short { height: 96px; margin-top: 4px; }
+.mon-macs .mac-chip { min-width: 0; }
+.mon-macs .mac-chip .mac-time { margin-left: auto; }
+.mon-macs .mac-chip input { flex: none; }
+.mon-macs .macs:empty::before {
+  content: "아직 수신된 MAC이 없습니다. 연결하면 데이터가 들어온 MAC이 여기에 나타납니다.";
+  grid-column: 1 / -1;
+  padding: 18px 12px;
+  border: 1px dashed #c5d0dc;
+  border-radius: 8px;
+  color: #7b8b9c;
+  text-align: center;
+}
+.mon-macs #commandInfo { margin: 0; }
+
+/* 센서 명령 */
+.cmd-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 10px;
+}
+.cmd-grid input, .cmd-grid select, .cmd-target input, .cmd-name-row input, .cmd-name-row select { width: 100%; }
+.field-note { font-size: 11px; color: #7b8b9c; font-weight: 400; }
+/* Window 보정계수 문구. 숫자가 바뀌어도 칸 폭이 흔들리지 않게 고정폭 숫자를 쓴다. */
+.window-factor { color: #365a78; font-variant-numeric: tabular-nums; white-space: nowrap; }
+p.window-factor { margin: 0; }
+.cmd-target { margin-top: 8px; }
+.cmd-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1.25fr;
+  gap: 6px;
+  margin-top: 10px;
+}
+.cmd-actions button { width: 100%; }
+.cmd-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e1e8ef; }
+.mon-cmd h3 { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: #5d6e80; }
+.cmd-json pre { height: auto; max-height: 120px; margin: 0; }
+/* 아직 보낸 명령이 없으면 검은 상자 대신 안내 문장을 보여 준다. */
+.cmd-json pre:empty { display: none; }
+.cmd-json:has(pre:empty) h3::after { content: " · 명령을 보내면 여기에 표시됩니다"; font-weight: 400; color: #8b99a7; }
+.cmd-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: end;
+}
+.mon-cmd #savedConfig { margin: 6px 0 0; }
+@media (max-width: 1180px) {
+  .mon-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 640px) {
+  .cmd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .cmd-actions { grid-template-columns: 1fr 1fr; }
+  .cmd-name-row { grid-template-columns: 1fr; }
+}
 .graph-head {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(220px, 0.7fr);
@@ -327,8 +423,7 @@ pre.short { height: 72px; }
 .stats { align-self: center; color: #243646; font-size: 13px; }
 .between { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 980px) {
-  .grid, .split, .monitor-head, .sensor-split, .graph-head { grid-template-columns: 1fr; }
-  .monitor-save { padding-left: 0; border-left: 0; }
+  .grid, .split, .graph-head { grid-template-columns: 1fr; }
   .sensor-line { grid-template-columns: 1fr 1fr; }
 }
 .fft-check {
@@ -572,6 +667,8 @@ body.layout-pin [data-filter] > label:not(.check) {
   max-width: calc(50% - 4px);
   margin-top: 4px;
 }
+/* 계산식(filters.js)은 값 칸 아래 맨 끝 줄에 둔다. */
+body.layout-pin [data-filter] > .filter-note { order: 4; flex: 0 0 100%; margin-top: 4px; font-size: 11px; }
 body.layout-pin [data-filter] input.freq,
 body.layout-pin [data-filter] input.extra {
   width: 100% !important;
@@ -587,3 +684,84 @@ body.layout-pin #sensors .sensor-line .pair input {
   padding-left: 6px;
   padding-right: 6px;
 }
+
+/* ---------- PSD(Welch) · 속도 RMS 시간 이력 (발생기 v070 기능) ---------- */
+/* 서랍 안 PSD 칸: 다른 설정과 구분되게 옅은 테두리 상자로 묶는다. */
+.psd-box {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed #b8c8d8;
+  border-radius: 8px;
+  background: #f6f9fc;
+}
+.psd-box .field-note { margin: 0; line-height: 1.4; }
+/* 그래프 위 PSD 결과 칸. PSD가 켜져 있을 때만 보인다. */
+.psd-result {
+  border: 1px solid #c5d0dc;
+  border-left: 4px solid #365a78;
+  border-radius: 8px;
+  background: #f7f9fb;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+.psd-result[hidden] { display: none; }
+.psd-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.psd-title { font-size: 12px; color: #17324d; margin-right: 4px; }
+/* 판정 배지: data-state = ok(정상) / over(초과) / none(비교 안 함) */
+.psd-judge {
+  display: inline-flex; align-items: center; height: 24px; padding: 0 10px;
+  border-radius: 999px; font-size: 12px; font-weight: 700;
+  background: #eef1f4; color: #667586;
+}
+.psd-judge[data-state="ok"] { background: #e4f6ea; color: #15803d; }
+.psd-judge[data-state="over"] { background: #fde8e8; color: #b91c1c; }
+.psd-steps-fold { margin-top: 6px; }
+.psd-steps-fold summary { cursor: pointer; font-size: 12px; color: #365a78; }
+.psd-steps-fold pre { margin: 6px 0 0; height: auto; max-height: 200px; white-space: pre-wrap; font-size: 12px; }
+
+/* 시간 이력 창: 화면 전체를 덮는 반투명 배경 + 가운데 카드 */
+.history-modal {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(15, 23, 32, 0.45);
+  padding: 16px;
+}
+.history-modal[hidden] { display: none; }
+.history-card {
+  width: min(1200px, 100%); max-height: calc(100vh - 32px);
+  display: flex; flex-direction: column; gap: 8px;
+  overflow: auto;
+  background: #ffffff; color: #1c2833;
+  border-radius: 10px; border: 1px solid #c5d0dc;
+  box-shadow: 0 18px 48px rgba(15, 23, 32, 0.28);
+  padding: 12px 16px 16px;
+}
+.history-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.history-head h2 { margin: 0; font-size: 16px; }
+.history-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 8px 10px; }
+.history-bar label { display: grid; gap: 2px; font-size: 12px; }
+.history-bar .hint { align-self: center; }
+.history-help { margin: 0; }
+.history-plot { position: relative; height: 340px; min-height: 240px; border: 1px solid #d5dee8; border-radius: 6px; background: #fff; }
+.history-table-wrap { max-height: 240px; overflow: auto; border: 1px solid #d5dee8; border-radius: 6px; }
+#historyTable { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+#historyTable th, #historyTable td { padding: 4px 8px; border-bottom: 1px solid #e3e9ef; text-align: right; white-space: nowrap; }
+#historyTable th { position: sticky; top: 0; background: #eef4f8; color: #17324d; }
+#historyTable td:nth-child(3), #historyTable th:nth-child(3) { text-align: left; }
+#historyTable tbody tr { cursor: pointer; }
+#historyTable tbody tr:hover { background: #eef6ff; }
+#historyTable tbody tr.over td { color: #b91c1c; font-weight: 700; }
+.history-skip summary { cursor: pointer; font-size: 12px; color: #5c6d7e; }
+.history-skip ul { margin: 6px 0 0; padding-left: 18px; font-size: 12px; max-height: 140px; overflow: auto; }
+
+/* 필터 줄 아래 계산식(filters.js). 줄 전체 폭을 쓰고, LPF 자동 Fs/2일 때 값 칸은 잠근다. */
+.filter-row { flex-wrap: wrap; }
+.filter-row .filter-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: #365a78;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.filter-row input.freq.locked { background: #eef1f4; color: #7b8b9c; }

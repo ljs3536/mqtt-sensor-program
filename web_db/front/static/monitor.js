@@ -67,13 +67,10 @@ document.querySelector("#applySrssLimit").onclick = async () => {
   srssLimit.value = data.value;
   pushView();
 };
-document.querySelector("#start").onclick = () => {
-  if (document.querySelector("#sensorType")) {
-    sensorType.value = sensor.value === "PIEZO" ? "3" : "4";
-    syncSensorType(false);
-  }
-  command("start");
-};
+// START는 센서 타입 칸에서 고른 값 그대로 보낸다(수신기 V057과 같음).
+// 예전에는 누르는 순간 PIEZO 3, MEMS 4(collection)로 바꿨지만, 이제는 사용자가 고른 0~4를 존중한다.
+// collection으로 시작하려면 센서 타입에서 3 또는 4를 고른 뒤 START를 누른다.
+document.querySelector("#start").onclick = () => command("start");
 document.querySelector("#stop").onclick = () => {
   if (document.querySelector("#sensorType")) {
     sensorType.value = "0";

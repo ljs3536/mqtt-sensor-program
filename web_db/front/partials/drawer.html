@@ -85,6 +85,43 @@
                 <label class="check"><input id="fftLogX" type="checkbox" /><span>FFT X 로그</span></label>
                 <label class="check"><input id="fftLogY" type="checkbox" /><span>FFT Y 로그</span></label>
               </div>
+              <!--
+                PSD(Welch, 발생기 v070). 켜면 FFT 그래프 자리에 PSD 밀도(단위²/Hz)를 그린다.
+                PSD가 켜져 있으면 FFT 평균은 하지 않고, 위 'FFT 평균 적용'·평균 개수는 PSD에 넣을
+                패킷 범위로만 쓴다(꺼져 있으면 선택 패킷 하나). 계산은 서버 graph_psd.py.
+              -->
+              <div class="psd-box">
+                <label class="check"><input id="psdOn" type="checkbox" /><span>PSD (Welch)</span></label>
+                <div class="pair">
+                  <label>PSD 구간 N
+                    <select id="psdSegment">
+                      <option selected>전체</option>
+                      <option>8192</option>
+                      <option>4096</option>
+                      <option>2048</option>
+                      <option>1024</option>
+                      <option>512</option>
+                      <option>256</option>
+                      <option>128</option>
+                    </select>
+                  </label>
+                  <label>Overlap (%)
+                    <select id="psdOverlap">
+                      <option>0</option>
+                      <option>25</option>
+                      <option selected>50</option>
+                      <option>75</option>
+                    </select>
+                  </label>
+                </div>
+                <label>PSD 평균 목표 구간<input id="psdTarget" value="30" inputmode="numeric" /></label>
+                <p class="field-note">
+                  예: N=8192, 구간=512, Overlap=50% → 패킷당 31구간 중 목표 30구간 사용.
+                  PSD일 때 'FFT 평균 적용'과 평균 개수는 PSD에 넣을 패킷 범위입니다.
+                </p>
+                <!-- ADXL X/Y/Z 세트마다 PSD로 속도 RMS를 구해 수신 시각 순서로 그린다(velocity-history.js). -->
+                <button type="button" class="secondary" id="velocityHistory">X/Y/Z 속도 RMS 시간 이력</button>
+              </div>
               <button type="button" class="secondary" id="fftCheck">FFT 과정 / IFFT 검증</button>
             </div>
             <fieldset id="piezoBox">
@@ -113,6 +150,15 @@
                     </select>
                   </label>
                 </div>
+                <!-- Window 보정: FFT 진폭을 무엇으로 나눌지. 옆 글자는 실제 곱해진 보정계수(서버 계산). -->
+                <label>Window 보정
+                  <select id="piezoWindowCorrection">
+                      <option>보정 없음</option>
+                      <option selected>진폭 보정</option>
+                      <option>에너지 보정</option>
+                  </select>
+                  <span id="piezoWindowFactor" class="field-note window-factor">보정계수: 데이터 대기</span>
+                </label>
                 <label>Window N
                   <select id="piezoN">
                     <option>전체</option>
@@ -209,7 +255,17 @@
                     </select>
                   </label>
                 </div>
-                <label>Kaiser β<input id="adxlBeta" value="8.6" /></label>
+                <div class="pair">
+                  <label>Kaiser β<input id="adxlBeta" value="8.6" /></label>
+                  <label>Window 보정
+                    <select id="adxlWindowCorrection">
+                      <option>보정 없음</option>
+                      <option selected>진폭 보정</option>
+                      <option>에너지 보정</option>
+                    </select>
+                  </label>
+                </div>
+                <p id="adxlWindowFactor" class="field-note window-factor">보정계수: 데이터 대기</p>
                 <div id="adxlFilters"></div>
                 <div class="pair">
                   <label class="check"><input id="freqOn" type="checkbox" checked /><span>주파수 보정 ON</span></label>

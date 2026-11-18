@@ -18,7 +18,8 @@ def spectral_filter(x, fs, *, hpf=False, hp_cutoff=10.0, hp_order=4,
         p=np.zeros_like(bins); mask=bins>0
         p[mask]=1/np.sqrt(1+(hp_cutoff/bins[mask])**(2*hp_order))
         resp*=p
-    if lpf:
+    # lp_cutoff=None은 '자동 Fs/2'다. 차단 주파수가 Nyquist라서 실제로는 걸 필터가 없다(v070과 같음).
+    if lpf and lp_cutoff is not None:
         if not 0 < lp_cutoff < fs/2: raise ValueError('LPF 컷오프는 Fs/2보다 작아야 합니다')
         resp*=1/np.sqrt(1+(bins/lp_cutoff)**(2*lp_order))
     if notch:
@@ -46,8 +47,78 @@ def fft_window(n, name='Blackman', beta=8.6):
         return .21557895-.41663158*np.cos(a)+.277263158*np.cos(2*a)-.083578947*np.cos(3*a)+.006947368*np.cos(4*a)
     return np.hanning(n)
 
-def fft_peak(x,fs,window='Blackman',window_size=None,beta=8.6):
-    """평균을 뺀 뒤 창을 곱한 단측 peak. DC와 짝수 N Nyquist는 2배하지 않는다."""
+# ---------- Window 보정 (수신기 V057, 발생기 v070) ----------
+# FFT 진폭을 어떤 기준으로 나눌지 고른다. fft_peak는 원래 Σw로 나눈다(=진폭 보정).
+#   보정 없음  : N으로 나눈다. 창 때문에 줄어든 진폭을 되돌리지 않는다.
+#   진폭 보정  : Σw로 나눈다(coherent gain). 정현파 peak 크기가 맞는다. 기본값.
+#   에너지 보정: √(N·Σw²)로 나눈다. 잡음처럼 넓게 퍼진 신호의 RMS가 맞는다.
+# SRSS(srss_axis_power)는 원래 에너지 기준이라, '보정 없음'일 때만 srss_window_ratio로 되돌린다.
+WINDOW_CORRECTIONS = ('보정 없음', '진폭 보정', '에너지 보정')
+DEFAULT_WINDOW_CORRECTION = '진폭 보정'
+
+
+def window_correction_mode(value):
+    """화면에서 온 값을 세 모드 중 하나로. 모르는 값이면 기본(진폭 보정)."""
+    text = str(value or '').strip()
+    return text if text in WINDOW_CORRECTIONS else DEFAULT_WINDOW_CORRECTION
+
+
+def window_correction_ratio(w, mode):
+    """진폭 보정(Σw로 나눈) FFT 값에 곱할 배율. 진폭 보정이면 1.
+
+    보정 없음: Σw/N, 에너지 보정: Σw/√(N·Σw²). 창 길이가 2 미만이면 1.
+    """
+    w = np.asarray(w, dtype=float)
+    if len(w) < 2:
+        return 1.0
+    gain = float(np.sum(w))
+    mode = window_correction_mode(mode)
+    if mode == '보정 없음':
+        return gain / len(w)
+    if mode == '에너지 보정':
+        return gain / np.sqrt(len(w) * float(np.sum(w * w)))
+    return 1.0
+
+
+def window_correction_label(w, mode):
+    """화면에 보일 보정계수 문구. '보정 없음' FFT(N으로 나눈 값) 대비 실제 곱해진 배수다.
+
+    예: Blackman N=8192 진폭 보정 → 'C=N/Σw = ×2.3810 (N=8192)'
+    """
+    w = np.asarray(w, dtype=float)
+    n = len(w)
+    if n < 2:
+        return '보정계수: 데이터 대기'
+    mode = window_correction_mode(mode)
+    if mode == '보정 없음':
+        formula, factor = 'C=1', 1.0
+    elif mode == '에너지 보정':
+        formula, factor = 'C=√(N/Σw²)', 1.0 / np.sqrt(np.mean(w * w))
+    else:
+        formula, factor = 'C=N/Σw', 1.0 / np.mean(w)
+    if not (np.isfinite(factor) and factor > 0):
+        return '보정계수: 유효하지 않은 Window'
+    return f'{formula} = ×{factor:.4f} (N={n})'
+
+
+def srss_window_ratio(w, mode):
+    """SRSS에 곱할 배율. SRSS는 원래 에너지 보정 값이므로 '보정 없음'일 때만 √mean(w²)."""
+    if window_correction_mode(mode) == '보정 없음':
+        return float(np.sqrt(np.mean(np.square(np.asarray(w, dtype=float)))))
+    return 1.0
+
+
+def srss_mode_text(mode):
+    """그래프 제목 끝에 붙일 SRSS 기준. 보정 없음이 아니면 모두 에너지 보정이다."""
+    return '보정 없음' if window_correction_mode(mode) == '보정 없음' else '에너지 보정'
+
+
+def fft_peak(x,fs,window='Blackman',window_size=None,beta=8.6,correction=DEFAULT_WINDOW_CORRECTION):
+    """평균을 뺀 뒤 창을 곱한 단측 peak. DC와 짝수 N Nyquist는 2배하지 않는다.
+
+    correction은 Window 보정 모드다. 기본 '진폭 보정'은 예전과 같은 값(Σw로 나눔)이라,
+    인자를 넘기지 않는 통계 계산(stats_calc)과 SRSS는 결과가 바뀌지 않는다.
+    """
     x=np.asarray(x,dtype=np.float64)
     n=len(x) if window_size is None else min(len(x),max(2,int(window_size)))
     if n<2: return np.array([]),np.array([])
@@ -57,10 +128,46 @@ def fft_peak(x,fs,window='Blackman',window_size=None,beta=8.6):
     win=fft_window(n,window,beta)
     scale=win.sum()
     if scale<=0: raise ValueError('FFT 창 함수 합계가 0입니다.')
-    mag=2*np.abs(np.fft.rfft(x*win))/scale
+    mag=2*np.abs(np.fft.rfft(x*win))/scale*window_correction_ratio(win,correction)
     mag[0]/=2
     if n%2==0: mag[-1]/=2
     return np.fft.rfftfreq(n,d=1/fs),mag
+
+
+def welch_packet_psd(samples, fs, window='Blackman', segment=None, overlap=50, beta=8.6, max_segments=None):
+    """한 패킷의 Welch PSD(단측 밀도). 발생기 v070의 welch_packet_psd와 같은 계산이다.
+
+    - 단위: 입력 단위²/Hz. Count를 넣으면 Count²/Hz, g를 넣으면 g²/Hz.
+    - segment: 구간 길이 N. None이면 패킷 전체가 한 구간이다. 패킷보다 길면 오류.
+    - overlap: 구간 겹침 %(0 이상 100 미만). 이동 간격 = N − int(N×overlap/100).
+    - max_segments: 이 패킷에서 쓸 구간 수 상한(None이면 들어가는 만큼 전부).
+    - 구간마다 평균을 빼고 창 w를 곱한 뒤 P = |rFFT|² / (Fs × Σw²).
+      0 Hz와 짝수 N의 Nyquist를 뺀 칸은 단측이라 ×2.
+    - 끝에 남는 짧은 구간은 0을 채우지 않고 버린다(전체 길이 구간만 사용).
+    - 창 에너지(Σw²)로 나누므로 Window 보정 모드와 무관하다. 적분 √(ΣP×Δf)가 그 신호의 RMS다.
+
+    돌려주는 값: (주파수 Hz 배열, 구간 평균 PSD 배열, 실제 사용한 구간 수).
+    """
+    x=np.asarray(samples,dtype=float)
+    n=len(x) if segment is None else int(segment)
+    if not np.isfinite(fs) or fs<=0 or n<2 or n>len(x):
+        raise ValueError('PSD 구간 N은 2 이상, 패킷 샘플 수 이하여야 합니다.')
+    if not np.isfinite(overlap) or not 0<=overlap<100:
+        raise ValueError('Overlap은 0 이상 100 미만이어야 합니다.')
+    w=fft_window(n,window,beta); power=float(np.dot(w,w))
+    if power<=0 or not np.isfinite(power): raise ValueError('PSD Window 에너지 오류')
+    step=max(1,n-int(n*overlap/100)); total=np.zeros(n//2+1); count=0
+    for start in range(0,len(x)-n+1,step):
+        if max_segments is not None and count >= max_segments: break
+        z=x[start:start+n]; z=z-np.mean(z)
+        p=np.abs(np.fft.rfft(z*w))**2/(fs*power)
+        if n%2==0: p[1:-1]*=2
+        else: p[1:]*=2
+        total+=p; count+=1
+    if count==0:
+        # max_segments=0처럼 한 구간도 못 쓴 경우. v070은 0으로 나눠 nan이 되지만 여기서는 오류로 알린다.
+        raise ValueError('PSD 구간을 하나도 쓰지 못했습니다.')
+    return np.fft.rfftfreq(n,1/fs),total/count,count
 
 
 def srss_axis_power(peak, n, window):

@@ -52,7 +52,8 @@ def _filter_block(hpf_hz, lpf_hz):
     """HPF, LPF, Notch의 기본 칸을 만든다."""
     return {
         "HPF": {"raw": False, "fft": False, "freq": hpf_hz, "extra": 4},
-        "LPF": {"raw": False, "fft": False, "freq": lpf_hz, "extra": 4},
+        # auto: '자동 Fs/2'(수신기 V057·발생기 v070 기본값). 켜져 있으면 LPF를 걸지 않는다.
+        "LPF": {"raw": False, "fft": False, "freq": lpf_hz, "extra": 4, "auto": True},
         "Notch": {"raw": False, "fft": False, "freq": 975, "extra": 20},
     }
 
@@ -65,12 +66,17 @@ def default_options():
         "fft_log_y": False,
         "fft_avg": False,
         "fft_avg_count": "16",
+        # PSD(Welch) 모드. 켜면 FFT 칸이 PSD로 바뀌고 FFT 평균은 하지 않는다(graph_psd.py).
+        # segment: 구간 N(전체/8192…128), overlap: %, target: 축마다 평균할 목표 구간 수.
+        "psd": {"on": False, "segment": "전체", "overlap": 50, "target": 30},
         "piezo": {
             "unit": "mV",
             "vmax": 3.89,
             "amax": 4096,
             "sensitivity": 100,
             "window": "Blackman",
+            # Window 보정: 보정 없음 / 진폭 보정 / 에너지 보정. signal.WINDOW_CORRECTIONS 참고.
+            "window_correction": gen.DEFAULT_WINDOW_CORRECTION,
             "window_n": "전체",
             "filters": _filter_block(10, 3000),
         },
@@ -80,6 +86,7 @@ def default_options():
             "fft_unit": "자동 (g RMS)",
             "g_per_lsb": gen.read_mems_g_per_lsb(),
             "window": "Blackman",
+            "window_correction": gen.DEFAULT_WINDOW_CORRECTION,
             "window_n": "전체",
             "beta": 8.6,
             "filters": _filter_block(10, 1000),
@@ -108,7 +115,8 @@ def _filter_kwargs(filters, kind):
         hp_cutoff=_num(hpf.get("freq"), 10),
         hp_order=max(1, int(_num(hpf.get("extra"), 4))),
         lpf=_flag(lpf.get(field)),
-        lp_cutoff=_num(lpf.get("freq"), 3000),
+        # 자동 Fs/2면 None → spectral_filter가 LPF를 건너뛴다(차단 주파수 = Nyquist = 전 대역 통과).
+        lp_cutoff=None if _flag(lpf.get("auto")) else _num(lpf.get("freq"), 3000),
         lp_order=max(1, int(_num(lpf.get("extra"), 4))),
         notch=_flag(notch.get(field)),
         notch_center=_num(notch.get("freq"), 975),

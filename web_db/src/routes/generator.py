@@ -104,6 +104,19 @@ async def generator_preview_post(body: dict):
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.post("/api/generator/velocity-history")
+async def generator_velocity_history(body: dict):
+    """ADXL X/Y/Z 속도 RMS 시간 이력(발생기 v070). /generator CSV와 /studio DB 세트 모두.
+
+    본문: {"start": 시작 세트(1부터, 생략=현재 세트), "count": 세트 수(생략=끝까지), "options": 그래프 옵션}
+    응답: graph_psd.velocity_history 결과(rows, skipped, limit, settings …).
+    """
+    try:
+        return replay.velocity_history(body.get("start"), body.get("count"), body.get("options"))
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @router.post("/api/generator/test")
 async def generator_test(body: dict):
     """파형 송신 전에 브로커 연결만 시험한다."""

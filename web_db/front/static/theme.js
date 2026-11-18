@@ -57,6 +57,8 @@
     chart.update("none");
   }
 
+  // 나중에 만드는 차트(속도 RMS 시간 이력 등)도 같은 테마 색을 쓰도록 밖에 내놓는다.
+  window.SensorTheme = { watch: watch, dark: theme !== "white" };
   if (typeof rawChart !== "undefined") watch(rawChart);
   if (typeof fftChart !== "undefined") watch(fftChart);
 })();

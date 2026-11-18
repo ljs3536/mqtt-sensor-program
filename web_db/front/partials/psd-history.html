@@ -1,0 +1,53 @@
+<!--
+  PSD 결과 칸과 X/Y/Z 속도 RMS 시간 이력 창. /generator와 /studio가 같이 쓴다(발생기 v070 기능).
+  routes/pages.py가 페이지의 include 표시 주석 자리에 이 파일을 넣는다.
+  - psdResult: PSD 모드일 때만 보인다. generator-draw.js의 showPsd가 채운다.
+  - historyModal: 서랍의 'X/Y/Z 속도 RMS 시간 이력' 버튼으로 연다. velocity-history.js가 다룬다.
+-->
+<section id="psdResult" class="psd-result" hidden>
+  <div class="psd-summary">
+    <strong class="psd-title">PSD RMS 요약 / 장치별 한계값 판정</strong>
+    <span id="psdSrss" class="info-chip">XYZ 합성 SRSS: 분석 대기</span>
+    <span id="psdLimit" class="info-chip">한계값: -</span>
+    <span id="psdJudge" class="psd-judge">판정: 분석 대기</span>
+  </div>
+  <details class="psd-steps-fold">
+    <summary>PSD 연산 단계 · 현재 설정과 결과값</summary>
+    <pre id="psdSteps"></pre>
+  </details>
+</section>
+<div id="historyModal" class="history-modal" hidden>
+  <div class="history-card" role="dialog" aria-modal="true" aria-labelledby="historyTitle">
+    <div class="history-head">
+      <h2 id="historyTitle">ADXL X/Y/Z 속도 RMS 시간 이력 (수신 시각)</h2>
+      <button type="button" class="secondary" id="historyClose">닫기</button>
+    </div>
+    <div class="history-bar">
+      <label>시작 세트<input id="historyStart" class="w-num" value="1" inputmode="numeric" /></label>
+      <label>세트 수<input id="historyCount" class="w-num" placeholder="끝까지" inputmode="numeric" /></label>
+      <button type="button" id="historyRun">다시 계산</button>
+      <button type="button" class="secondary" id="historyReset">그래프 전체 보기</button>
+      <span id="historyNote" class="hint"></span>
+    </div>
+    <p class="field-note history-help">
+      세트마다 PSD를 따로 구해(세트끼리 평균하지 않음) vRMS = √(Σ Pv×Δf), SRSS = √(X²+Y²+Z²).
+      PSD 구간 N·Overlap·목표 구간과 MEMS 창·필터·보정은 서랍 값을 씁니다. 표의 줄을 누르면 그 세트로 이동합니다.
+    </p>
+    <div class="history-plot"><canvas id="historyChart"></canvas></div>
+    <div class="history-table-wrap">
+      <table id="historyTable">
+        <thead>
+          <tr>
+            <th>세트</th><th>packet_no</th><th>X received_at</th>
+            <th>X (mm/s)</th><th>Y (mm/s)</th><th>Z (mm/s)</th><th>SRSS (mm/s)</th><th>판정</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <details id="historySkipFold" class="history-skip">
+      <summary>제외 세트 <span id="historySkipCount">0</span>건</summary>
+      <ul id="historySkipped"></ul>
+    </details>
+  </div>
+</div>

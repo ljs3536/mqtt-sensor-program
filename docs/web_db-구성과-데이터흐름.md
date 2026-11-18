@@ -22,12 +22,13 @@
 | `web_db/src/grouping.py` | ADXL seq로 X/Y/Z를 한 세트에 묶음 |
 | `web_db/src/stats_calc.py` | 완성된 XYZ 한 세트의 RMS, PEAK, SRSS |
 | `web_db/src/decode.py` | 패킷 분류와 sensorData HEX 디코드 |
-| `web_db/src/signal.py` | 필터, FFT, SRSS 전력 |
+| `web_db/src/signal.py` | 필터, FFT(Window 보정), Welch PSD, SRSS 전력 |
 | `web_db/src/mems.py` | g/LSB, 주파수·감도 보정 JSON |
-| `web_db/src/graph_curves.py` | 화면용 RAW, FFT, SRSS 곡선 |
+| `web_db/src/graph_curves.py` | 화면용 RAW, FFT, SRSS 곡선. PSD 모드면 FFT 칸을 `graph_psd` 결과로 바꾼다 |
+| `web_db/src/graph_psd.py` | PSD(Welch) 곡선·합성 SRSS·판정, ADXL 속도 RMS 시간 이력 (발생기 v070) |
 | `web_db/src/view_pack.py` | 계산이 끝난 곡선을 브라우저에 보내기 전에 점 수를 줄임 |
 | `web_db/front` | HTML. `/static`은 이 폴더의 `static` |
-| `web_db/front/partials` | 여러 페이지가 같이 쓰는 HTML 조각. 지금은 분석 화면 설정 서랍 `drawer.html` 하나 |
+| `web_db/front/partials` | 여러 페이지가 같이 쓰는 HTML 조각. 분석 화면 설정 서랍 `drawer.html`, PSD 결과 칸과 시간 이력 창 `psd-history.html` |
 | `web_db/sensor.sqlite` | 패킷, 이름, 설정 JSON, 통계. 없으면 서버가 켜질 때 만든다 |
 
 화면은 다섯 개다. 브라우저 스크립트는 `web_db/front/static`에 있고, 계산은 하지 않는다. 서버 JSON을 받아 칸을 채우거나, 칸의 값을 JSON으로 보낸다.
@@ -37,10 +38,10 @@
 | `/` | `front/index.html` | 수신, 명령, CSV와 SQLite 저장 |
 | `/generator` | `front/generator.html` + `partials/drawer.html` | 외부 CSV 분석과 MQTT 재전송 |
 | `/studio` | `front/studio.html` + `partials/drawer.html` | DB 패킷 분석과 MQTT 재전송 |
-
-`/generator`와 `/studio`의 설정 서랍(필터, 단위, FFT, SRSS, MEMS 보정, 전송, 로그)은 내용이 같아서 `partials/drawer.html` 한 파일에 둔다. 두 페이지 HTML에는 그 자리에 `<!-- @include partials/drawer.html -->` 주석만 있고, `routes/pages.py`의 `_with_includes`가 요청마다 파일을 읽어 그 자리에 넣은 뒤 한 장의 HTML로 보낸다. 브라우저가 따로 불러오는 방식이 아니라서, 스크립트가 처음 실행될 때 서랍의 입력 칸이 이미 있다. 서랍을 고칠 때는 이 파일 하나만 고치면 되고, 서버를 다시 켜지 않아도 새로고침하면 반영된다. 화면별 차이(전송 체크와 Topic 숨김 등)는 `studio.js`가 불러온 뒤에 처리한다.
 | `/dashboard` | `front/dashboard.html` | 저장된 SRSS, RMS, PEAK만 조회 |
 | `/settings` | `front/settings.html` | MAC 표시 이름과 SRSS 한계 |
+
+`/generator`와 `/studio`의 설정 서랍(필터, 단위, FFT, SRSS, MEMS 보정, 전송, 로그)은 내용이 같아서 `partials/drawer.html` 한 파일에 둔다. 두 페이지 HTML에는 그 자리에 `<!-- @include partials/drawer.html -->`, `<!-- @include partials/psd-history.html -->` 주석만 있고, `routes/pages.py`의 `_with_includes`가 요청마다 파일을 읽어 그 자리에 넣은 뒤 한 장의 HTML로 보낸다. 브라우저가 따로 불러오는 방식이 아니라서, 스크립트가 처음 실행될 때 서랍의 입력 칸이 이미 있다. 서랍을 고칠 때는 이 파일 하나만 고치면 되고, 서버를 다시 켜지 않아도 새로고침하면 반영된다. 화면별 차이(전송 체크와 Topic 숨김 등)는 `studio.js`가 불러온 뒤에 처리한다.
 
 ## 화면 스크립트
 
@@ -49,13 +50,15 @@
 | 파일 | 역할 |
 | --- | --- |
 | `api.js` | `readJson`, `postJson`. 응답 본문을 읽고 JSON POST를 보낸다 |
+| `filters.js` | HPF/LPF/Notch 칸(수신 모니터·분석 화면 공용). 줄마다 실제 계산식 문구, LPF `자동 Fs/2` |
 | `graph.js` | RAW/FFT 차트, 확대, 축 고정, FFT 검증 그림. 서버를 호출하지 않는다 |
-| `theme.js` | White / Gray / Dark. 차트가 다시 그려질 때 눈금 색을 맞춘다 |
+| `theme.js` | White / Gray / Dark. 차트가 다시 그려질 때 눈금 색을 맞춘다. 나중에 만드는 차트는 `SensorTheme.watch`로 붙인다 |
 | `monitor-draw.js` | 수신 화면의 그래프 옵션과 곡선 그리기 |
 | `monitor-api.js` | `/api/monitor/state`, 명령, `/api/monitor/view` |
 | `monitor.js` | 수신 화면 버튼을 위 함수에 연결. MQTT가 연결된 동안만 1초마다 상태를 다시 읽는다 |
 | `monitor-db.js` | 표시 이름과 설정 JSON. 설정 적용 뒤에 그 MAC 프로필을 다시 읽는다 |
-| `generator-draw.js` | 분석 화면의 그래프 옵션과 미리보기 그리기. 초음파 스펙트럼은 RAW 칸에만 둔다 |
+| `generator-draw.js` | 분석 화면의 그래프 옵션과 미리보기 그리기. 초음파 스펙트럼은 RAW 칸에만 둔다. PSD 결과 칸(`showPsd`) |
+| `velocity-history.js` | X/Y/Z 속도 RMS 시간 이력 창. `/api/generator/velocity-history` 결과를 차트·표·제외 목록으로 그린다 |
 | `generator-api.js` | 파일 업로드, 미리보기, 송신 시작·중지, 송신 상태 |
 | `generator.js` | 분석 화면 버튼을 위 함수에 연결. 전송 중일 때만 1초마다 송신 숫자와 로그를 갱신한다. 그 밖에는 버튼 동작 뒤에 한 번 읽는다 |
 | `studio.js` | DB 분석 서랍과 센서 탭. 계산 API는 `generator-*.js`를 그대로 쓴다 |
@@ -111,7 +114,8 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 | `POST /api/monitor/command` | `start`, `stop`, `apply`, `query`를 `S/{MAC}`에 보낸다 |
 | `POST /api/monitor/fft-check`, `/logs/clear` | 수신 RAW의 FFT 왕복 검사, 로그 비우기 |
 | `POST /api/generator/upload`, `/upload-adxl-csv` | 파일을 임시 파일로 읽어 재전송 목록에 올리고 바로 지운다 |
-| `POST /api/generator/preview`, `/fft-check` | 재전송 목록의 패킷 하나를 옵션대로 그린다, FFT 왕복 검사 |
+| `POST /api/generator/preview`, `/fft-check` | 재전송 목록의 패킷 하나를 옵션대로 그린다(옵션 `psd.on`이면 FFT 칸이 PSD), FFT 왕복 검사 |
+| `POST /api/generator/velocity-history` | 올려 둔 ADXL 세트(CSV 또는 DB)로 X/Y/Z 속도 RMS 시간 이력. 본문 `start`, `count`, `options` |
 | `POST /api/generator/test`, `/start`, `/stop`, `/logs/clear`, `GET /status` | 브로커 시험, 반복 송신 시작·중지, 송신 수와 로그 |
 | `GET /api/analysis/defaults`, `GET·POST /srss-limit`, `POST /mems-scale`, `/mems-correction` | 그래프 기본값, SRSS 한계, 1 LSB, MEMS 보정 저장 |
 | `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON. 분석 화면 MAC 선택 상자는 `MAC · 이름`만 보이고 패킷 수는 보이지 않는다. 패킷 수는 설정 화면이 이름 삭제 때 목록에서 뺄지 정하는 데 쓴다 |
@@ -125,10 +129,28 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 2. 측정 JSON이 오면 `decode.py`가 PIEZO, ADXL 축, 초음파를 가른다.
 3. HEX를 샘플 배열로 푼다. PIEZO는 7D escape를 풀고, ADXL은 풀지 않은 signed int16이다.
 4. 같은 패킷을 두 곳에 넣는다.
-   - CSV가 켜져 있으면 `save_csv.py`가 연결 폴더에 한 줄씩 쓴다.
+   - CSV가 켜져 있으면 `save_csv.py`가 연결 폴더에 한 줄씩 쓴다. ADXL의 `packet_no`는 X/Y/Z가 같이 쓰는 세트 번호다
+     (아래 "CSV packet_no" 참고). PIEZO·초음파는 파일마다 1부터 센 행 번호다.
    - `store.save_packet`이 `packet` 테이블에 같은 원본을 넣는다. 여기서 FFT나 SRSS는 계산하지 않는다.
 5. ADXL은 seq 상위 4비트가 축, 하위 4비트가 증가 번호다. `10`, `21`, `32`처럼 이어지면 같은 `set_no`다.
 6. 메모리의 최신 파형만 수신 화면 그래프로 그린다. 이 계산은 통계 테이블과 별개다.
+
+### CSV packet_no (ADXL 세트 번호)
+
+센서의 seq는 MAC 하나에 카운터 하나다. 다만 X/Y/Z가 같은 값을 나눠 갖는 것이 아니라, 축 패킷을 하나 보낼 때마다 하위 4비트가 1씩 오른다(X `1A` → Y `2B` → Z `3C` → 다음 X `1D`). 그래서 Z가 빠져도 다음 X의 seq가 이어지지 않으므로 새 세트로 바로 알 수 있다. DB의 `set_no`(`grouping.continues_set`)는 이 규칙으로 묶어서 축이 빠져도 어긋나지 않는다.
+
+문제는 CSV의 `packet_no`다. 이것은 센서 seq가 아니라 CSV를 쓰는 쪽이 붙이는 행 번호다.
+
+- 수신기 V057은 축 파일마다 따로 세지만, X/Y/Z가 다 모인 세트만 쓰므로 세 파일의 번호가 늘 같다.
+- 예전 웹(`save_csv.py`)은 축 패킷을 도착 즉시 쓰면서 축 파일마다 따로 셌다. Z가 한 번 빠지면 그 뒤로 Z 파일 번호가 하나씩 밀려, 같은 번호의 X/Y/Z가 서로 다른 측정이 된다.
+- 발생기 v070은 `packet_no`가 같은 행을 한 세트로 묶는다. 시각 검사(X ≤ Y ≤ Z, 30초 안)만 하므로 측정 주기가 짧으면 밀린 번호를 걸러내지 못한다.
+
+그래서 웹은 두 곳을 고쳤다.
+
+1. 저장(`save_csv.py`): ADXL `packet_no`를 `continues_set`으로 정한 세트 번호로 쓴다. 축이 빠진 세트는 그 번호의 행이 한두 파일에만 있고, 다음 세트 번호는 세 축이 다시 같이 쓴다. 축 패킷은 지금처럼 도착 즉시 쓴다.
+2. 읽기(`load_file.load_adxl_csv_xyz`): 세 파일 모든 행에 숫자 `packet_no`가 있으면 `(MAC, packet_no)`로 묶는다(v070 방식). 축 누락·중복, 디코드 실패, 수신 순서·30초 이탈 세트는 제외한다. 여기에 v070에 없는 seq 검사를 더했다. 같은 번호의 X/Y/Z seq 하위 4비트가 a, a+1, a+2가 아닌 묶음이 하나라도 있으면 그 파일의 `packet_no`는 세트 번호가 아니라고 보고 seq 방식으로 다시 묶는다. 예전 웹 CSV가 이 경우다.
+
+어느 방식으로 묶었는지는 송신 로그 첫 줄 `[ADXL 묶음: …]`에 나온다. `packet_no` 방식은 완전한 세트만 남고, seq 방식은 축이 빠진 세트도 남는다(예전과 같음).
 
 설정 적용으로 retain 전송한 JSON은 `sensor_config`에 남긴다. `CONFIG ?` 조회는 저장하지 않는다. 표시 이름은 `device.display_name`이다.
 
@@ -143,7 +165,7 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 | 버튼 | SENSORTYPE | retain | 내용 |
 | --- | --- | --- | --- |
 | 설정 적용 | 고른 값(1 PIEZO normal, 2 MEMS normal, 3·4 collection) | O | 주기, Fs+N, PIEZO는 `PIEZO_GAIN`, MEMS는 `MEMS_G_RANGE`(2/4/8/16 → 0/1/2/3) |
-| START | PIEZO 3, MEMS 4 (`monitor.js`가 누르는 순간 센서 타입 칸을 collection으로 바꾼다) | O | 설정 적용과 같은 항목 |
+| START | 센서 타입 칸에서 고른 값 그대로 (수신기 V057과 같음. collection으로 시작하려면 3 또는 4를 고른다) | O | 설정 적용과 같은 항목 |
 | STOP | 0 | O | `COMMPATH`, `SENSORTYPE`만 |
 | 현재 설정 조회 | 없음 | X | `{"CONFIG":"?"}`. MAC 1개만 |
 
@@ -161,13 +183,70 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 - ADXL X/Y/Z는 한 세트로 묶어 눈금을 맞추고, SRSS는 세 축 스펙트럼으로 만든 가로선이다.
 - 계산이 끝난 뒤에만 `view_pack.py`가 브라우저로 보낼 점을 줄인다.
 
+### Window 보정 (수신기 V057, 발생기 v070)
+
+PIEZO와 MEMS 그래프 옵션에 `Window 보정`이 있다. 세 화면(수신 모니터, CSV 분석, DB 분석)이 같은 서버 계산(`signal.fft_peak`의 `correction`)을 쓴다. 기본은 `진폭 보정`이고, 이 값은 예전 FFT와 똑같다.
+
+| 모드 | FFT 진폭 분모 | 쓰임 | 보정계수 표시 |
+| --- | --- | --- | --- |
+| 보정 없음 | N | 창 때문에 줄어든 진폭을 되돌리지 않은 값 | `C=1` |
+| 진폭 보정 | Σw | 정현파 peak 크기가 맞는다 | `C=N/Σw` (Blackman 약 ×2.38) |
+| 에너지 보정 | √(N·Σw²) | 넓게 퍼진 신호의 RMS가 맞는다 | `C=√(N/Σw²)` (Blackman 약 ×1.81) |
+
+- 표시 FFT, FFT 평균, gN에 같은 모드를 적용한다.
+- SRSS는 원래 에너지 보정 값이라 `진폭 보정`, `에너지 보정`에서는 같다. `보정 없음`일 때만 `√mean(w²)`를 곱한다(`srss_window_ratio`). SRSS 문구 끝에 `SRSS 에너지 보정` 또는 `SRSS 보정 없음`이 붙는다.
+- 보정계수 문구(`window_factor`)는 서버가 만들어 선택 상자 옆에 보여 준다. 축마다 N이 같으면 한 번만 보인다.
+- 통계(`stats_calc`)는 인자를 넘기지 않으므로 늘 기본(진폭 보정 FFT, 에너지 보정 SRSS)이다. 화면 선택은 통계 값에 영향이 없다.
+- 계산식은 데스크톱 v070의 `window_correction_ratio`, `window_correction_label`, `srss_window_ratio`와 같다. 세 모드와 창 네 종류로 결과가 같은 것을 확인했다.
+
+### PSD (Welch, 발생기 v070)
+
+서랍의 `PSD (Welch)`를 켜면 FFT 그래프 자리에 PSD 밀도를 그린다. RAW와 송신 원본은 그대로다. 계산은 `graph_psd.packet_psd`이고, 데스크톱 v070의 `_plot_packet_psd`와 같은 값이 나오는 것을 확인했다(ADXL 3가지, PIEZO 3가지 설정에서 곡선·합성 SRSS·상태 문구가 모두 같음).
+
+| 칸 | 뜻 |
+| --- | --- |
+| PSD 구간 N | Welch 한 구간 길이. `전체`면 패킷 전체가 한 구간 |
+| Overlap (%) | 구간 겹침. 이동 = N − int(N × overlap / 100) |
+| PSD 평균 목표 구간 | 축마다 평균할 구간 수. 채우면 더 읽지 않는다 |
+
+- 패킷 범위: PSD일 때 FFT 평균은 하지 않는다. `FFT 평균 적용`과 평균 개수는 PSD에 넣을 패킷 범위로만 쓰고, 꺼져 있으면 선택 패킷 하나다.
+- 축마다 ① 평균 제거와 FFT용 필터 → ② Welch(Count²/Hz) → ③ 단위 배율의 제곱(PIEZO K 또는 K/감도, ADXL g/LSB) → ④ ADXL 감도 S(f)와 주파수 보정. 주파수축을 f/나눗수로 줄이면 밀도에 나눗수를 곱한다 → ⑤ mm/s면 × (9806.65/2πf)² → ⑥ RMS = √(ΣP·Δf).
+- 단위: Count, mV, g(g RMS·g Peak·자동), mm/s 중 하나의 제곱/Hz. PSD는 창 에너지로 나누므로 Window 보정 모드와 무관하다.
+- ADXL은 gN 자리에 X+Y+Z 합성 PSD를 그리고, 합성 SRSS = √(Σ(Px+Py+Pz)·Δf)를 그래프 위 `PSD 결과` 칸에 숫자로 보여 준다. 밀도 단위가 아니라서 가로선으로 그리지 않는다. mm/s일 때만 장치 SRSS 한계와 비교해 정상·초과를 표시한다.
+- `PSD 연산 단계` 칸에 ①~⑥을 현재 값으로 보여 준다. 정보 칩의 FFT peak는 빼고 축별 PSD RMS를 넣는다.
+- 값이 잘못되면(구간 N > 샘플 수, 목표 0 등) RAW는 그대로 그리고 PSD 칸에 오류 문구를 띄운다.
+
+### X/Y/Z 속도 RMS 시간 이력 (발생기 v070)
+
+서랍의 `X/Y/Z 속도 RMS 시간 이력` 버튼이 창을 연다. `graph_psd.velocity_history`가 v070 `calculate_adxl_velocity_history`와 같은 계산을 한다(8세트, 설정 6가지에서 값이 같음).
+
+- 세트마다 PSD를 따로 구한다. 세트끼리 평균하지 않는다. 세트 안에서는 축마다 목표 구간 수까지 Welch 평균.
+- 단위는 화면 FFT 단위와 상관없이 mm/s(감도 보정 포함). SRSS = √(X²+Y²+Z²). 한계는 첫 세트 장치의 SRSS 한계.
+- 가로축은 X 축 패킷의 원래 수신 시각이다. CSV는 `received_at`, DB는 `packet.received_at`. 재전송 시각이 아니다.
+- 시작 세트(기본 = 지금 보는 패킷)와 세트 수(빈칸 = 끝까지)를 바꿔 다시 계산할 수 있다. 표의 줄을 누르면 메인 그래프가 그 세트로 이동한다.
+- 축이 빠진 세트, 수신 시각이 없는 세트, PSD 구간이 부족한 세트는 `제외 세트`에 사유와 함께 남는다.
+- CSV와 DB 패킷 모두 `_received_at`, `_packet_no` 메타 키를 단다(DB는 `set_no`). `_`로 시작하는 키는 송신 때 빠진다.
+
+### 필터 칸 (HPF / LPF / Notch)
+
+수신 모니터와 분석 화면이 `filters.js` 하나를 쓴다. 줄마다 RAW·FFT 체크와 값 아래에 실제 계산식이 보인다(수신기 V057·발생기 v070과 같은 문구).
+
+| 필터 | 식 |
+| --- | --- |
+| HPF | \|H(f)\| = 1/√(1+(fc/f)^(2n)), f>0 |
+| LPF | \|H(f)\| = 1/√(1+(f/fc)^(2n)) |
+| Notch | H(f) = 1 − exp(−(f−f0)²/(2σ²)), σ = 폭/(2√(2ln2)) |
+
+LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같음). 켜져 있으면 차단 주파수가 Nyquist라서 LPF를 실제로 걸지 않는다(`lp_cutoff=None`). 직접 차단 주파수를 쓰려면 체크를 끈다. 계산식 줄의 필터 목록에는 `LPF(자동 Fs/2→우회)`로 나온다.
+
 ## 파일·DB 재전송
 
 `/generator`와 `/studio`는 같은 `ReplayService` 하나를 쓴다. 데이터가 어디서 왔는지만 다르다.
 
 1. 열기
    - `/generator`: 파일을 올리면 임시 파일에 쓰고 `load_file`이 패킷 목록을 만든 뒤 임시 파일은 지운다.
-     ADXL X/Y/Z CSV 세 개는 세트로 묶는다. 깨진 HEX는 앞부분만 복구해 미리보기에만 쓴다.
+     ADXL X/Y/Z CSV 세 개는 세트로 묶는다(`packet_no` 세트 번호 우선, 안 되면 seq. 위 "CSV packet_no").
+     깨진 HEX는 앞부분만 복구해 미리보기에만 쓴다.
    - `/studio`: `POST /api/db/load`가 `packets_for`로 MAC의 최근 N개(최대 200) 또는 기간을 고른다.
      ADXL은 세 축이 다 있는 `set_key`만 고르고 `group_adxl`이 X/Y/Z 세트로 묶는다.
 2. 두 경우 모두 결과는 `replay.templates[센서]`에 들어간다. 센서마다 목록 하나다. 그래서 `/studio`에서 DB를 열면

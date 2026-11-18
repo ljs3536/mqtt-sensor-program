@@ -39,7 +39,7 @@ ADXL X/Y/Z는 축마다 한 줄이다. 같은 측정은 `set_no`가 같다. seq 
 - 브로커에 연결하고 `V/#`, `D/#`와 설정 토픽 `S/#`를 구독한다.
 - 들어온 파형을 RAW, FFT로 바로 본다. 이 그래프용 계산은 저장 통계와 별개다.
 - CSV와 `packet` 테이블에 원본을 남긴다.
-- 센서 설정을 `S/{MAC}`에 retain으로 보낸다. 센서 타입 0~4, 주기, Fs+N, G Range, PIEZO 게인이 JSON에 들어간다. START는 PIEZO 3, MEMS 4다. STOP은 0이다.
+- 센서 설정을 `S/{MAC}`에 retain으로 보낸다. 센서 타입 0~4, 주기, Fs+N, G Range, PIEZO 게인이 JSON에 들어간다. 설정 적용과 START는 센서 타입 칸에서 고른 값 그대로 보낸다(수신기 V057과 같음). STOP은 0이다.
 - retain으로 보낸 JSON은 `sensor_config`에 그 MAC 기준으로 남긴다. 현재 설정 조회(`CONFIG ?`)는 저장하지 않는다.
 - MAC에 표시 이름을 붙여 `device`에 저장한다. 목록에 없는 MAC도 직접 입력하면 설정 적용과 이름 저장을 할 수 있다. 패킷이 아직 없어도 이름과 설정 JSON은 남는다.
 - 이름과 SRSS 한계를 장치 전체로 고치는 화면은 설정 `/settings`다.

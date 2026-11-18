@@ -6,6 +6,7 @@ import numpy as np
 
 from web_db.src import core as gen
 from web_db.src import core as mon
+from web_db.src import graph_psd
 from web_db.src.graph_options import (
     ADXL_FFT_UNITS,
     ADXL_RAW_UNITS,
@@ -77,6 +78,21 @@ def _packet_mac(packet):
     return gen.srss_limit_key(packet.get("device") or "")
 
 
+def _window_correction(options, sensor):
+    """그 센서 옵션의 Window 보정 모드. 'PIEZO'는 piezo, 나머지는 adxl 블록에서 읽는다."""
+    block = options["piezo"] if sensor == "PIEZO" else options["adxl"]
+    return gen.window_correction_mode(block.get("window_correction"))
+
+
+def _factor_text(labels):
+    """축마다 만든 보정계수 문구를 같은 것은 한 번만 남겨 ' / '로 잇는다."""
+    unique = []
+    for label in labels:
+        if label and label not in unique:
+            unique.append(label)
+    return " / ".join(unique) if unique else "보정계수: 데이터 대기"
+
+
 def _average(sensor, packets, index, options):
     """선택한 개수만큼 FFT를 평균한다."""
     if not _flag(options.get("fft_avg")):
@@ -111,7 +127,10 @@ def _average(sensor, packets, index, options):
                 if sensor == "PIEZO":
                     source = gen.spectral_filter(raw - np.mean(raw), fs, **_filter_kwargs(piezo["filters"], "FFT"))
                     window = piezo["window"] if piezo["window"] in PIEZO_WINDOWS else "Blackman"
-                    freq, amp = gen.fft_peak(source, fs, window, _window_n(piezo.get("window_n")))
+                    freq, amp = gen.fft_peak(
+                        source, fs, window, _window_n(piezo.get("window_n")),
+                        correction=_window_correction(options, "PIEZO"),
+                    )
                     converted_f, converted_amp = freq, amp
                 else:
                     source = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT"))
@@ -119,7 +138,8 @@ def _average(sensor, packets, index, options):
                     if count is not None and count > raw.size:
                         raise ValueError("FFT Window N이 패킷 샘플 수보다 큼")
                     freq, amp = gen.fft_peak(
-                        source, fs, _window_name(adxl.get("window")), count, _num(adxl.get("beta"), 8.6)
+                        source, fs, _window_name(adxl.get("window")), count, _num(adxl.get("beta"), 8.6),
+                        correction=_window_correction(options, "ADXL"),
                     )
                     converted_f, converted_amp = _adxl_converted(freq, amp, options)
                 if reference_f is None:
@@ -175,8 +195,11 @@ def _piezo_curves(packet, averaged, options):
     count = _window_n(piezo.get("window_n"))
     if count is not None and count > raw.size:
         raise ValueError(f"Window N={count} > 실제 샘플 {raw.size}")
-    # Count Peak[k] = 2 × |rFFT((Count−평균)×창)[k]| / Σ창. 0 Hz·나이퀴스트는 2를 곱하지 않는다.
-    freq, peak = gen.fft_peak(fft_src, fs, window, count)
+    # Count Peak[k] = 2 × |rFFT((Count−평균)×창)[k]| / D. 0 Hz·나이퀴스트는 2를 곱하지 않는다.
+    # D는 Window 보정 모드에 따라 N(보정 없음), Σw(진폭 보정), √(N·Σw²)(에너지 보정)이다.
+    correction_mode = _window_correction(options, "PIEZO")
+    freq, peak = gen.fft_peak(fft_src, fs, window, count, correction=correction_mode)
+    factor = gen.window_correction_label(gen.fft_window(count or raw.size, window), correction_mode)
     if averaged and "PIEZO" in averaged:
         freq, peak, _used = averaged["PIEZO"]
     unit = piezo.get("unit") if piezo.get("unit") in PIEZO_UNITS else "mV"
@@ -219,8 +242,11 @@ def _piezo_curves(packet, averaged, options):
         "series": {"PIEZO": {"t": time_ms, "y": wave}},
         "fft": {"PIEZO": {"f": freq / 1000.0, "y": spectrum}},
         "info": f"PIEZO N={raw.size} Fs={fs:g} Vmax={vmax:g} Amax={amax:g} 감도={sens:g} mV/g{peak_note}",
-        "formula": detail + " | 미리보기 전용, MQTT 원본 유지",
+        "formula": detail + f" | FFT Window 보정={correction_mode} | 미리보기 전용, MQTT 원본 유지",
         "rotation": "",
+        # 화면의 'Window 보정' 선택 상자 옆에 그대로 보여 줄 문구.
+        "window_correction": correction_mode,
+        "window_factor": factor,
     }
 
 
@@ -254,6 +280,7 @@ def _srss_from_packets(packets, index, options):
     beta = _num(adxl.get("beta"), 8.6)
     count = _window_n(adxl.get("window_n"))
     correction = _correction(options)
+    srss_mode = _window_correction(options, "ADXL")
     g_per_lsb = _num(adxl.get("g_per_lsb"), gen.read_mems_g_per_lsb())
     packets = list(packets or [])
     if not packets:
@@ -307,7 +334,13 @@ def _srss_from_packets(packets, index, options):
                     positive = corrected_f > 0
                     velocity[positive] = corrected_peak[positive] * 9806.65 / (2.0 * np.pi * corrected_f[positive])
                     corrected_peak = velocity
-                powers.append(gen.srss_axis_power(corrected_peak, nn, gen.fft_window(nn, window, beta)))
+                # fft_peak는 진폭 보정 기준으로 부른다(위). SRSS는 원래 에너지 보정 값이고,
+                # Window 보정이 '보정 없음'일 때만 √mean(w²)²를 곱해 창 손실을 되돌리지 않은 값으로 바꾼다.
+                axis_window = gen.fft_window(nn, window, beta)
+                powers.append(
+                    gen.srss_axis_power(corrected_peak, nn, axis_window)
+                    * gen.srss_window_ratio(axis_window, srss_mode) ** 2
+                )
             if reference is not None and signature != reference:
                 continue
             reference = signature
@@ -343,6 +376,8 @@ def _adxl_srss(packet, options, packets, index, fft_mode, fft_scale, fft_label, 
     text = "SRSS = {:.6g} {}".format(level, unit)
     if averaging:
         text += " | 평균 {}/{}회".format(len(levels), searched)
+    # 수신기 V057·발생기 v070처럼 SRSS가 어떤 창 기준인지 제목에 붙인다.
+    text += " | SRSS " + gen.srss_mode_text(_window_correction(options, "ADXL"))
     line_f, line_y = _line_samples(np.asarray(line_freq, dtype=np.float64) / 1000.0, level)
     return {"ok": True, "text": text, "unit": unit, "level": float(level), "f": line_f, "y": line_y}
 
@@ -361,6 +396,8 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
     window = _window_name(adxl.get("window"))
     beta = _num(adxl.get("beta"), 8.6)
     count = _window_n(adxl.get("window_n"))
+    correction_mode = _window_correction(options, "ADXL")
+    factor_labels = []
     enabled = adxl.get("axes") or {}
     raws = []
     ffts = []
@@ -377,7 +414,9 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
         wave = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "RAW"))
         fft_src = gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT"))
         # amp는 Count Peak. 평균 제거는 fft_peak 안에서만 한다. RAW 파형에는 중력이 남는다.
-        freq, amp = gen.fft_peak(fft_src, fs, window, count, beta)
+        # Window 보정 모드는 표시 FFT와 평균 FFT, gN에 같게 적용한다. SRSS는 _srss_from_packets가 따로 맞춘다.
+        freq, amp = gen.fft_peak(fft_src, fs, window, count, beta, correction=correction_mode)
+        factor_labels.append(gen.window_correction_label(gen.fft_window(count or raw.size, window, beta), correction_mode))
         if averaged and axis in averaged:
             freq, amp = averaged[axis][0], averaged[axis][1]
         spectra[axis] = (freq, amp)
@@ -438,10 +477,13 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
                 marks.append("RAW")
             if _flag(spec.get("fft")):
                 marks.append("FFT")
-            active.append(f"{name} {'+'.join(marks)}")
+            label = name
+            if name == "LPF" and _flag(spec.get("auto")):
+                label = "LPF(자동 Fs/2→우회)"   # 켜져 있어도 실제 감쇠는 없다
+            active.append(f"{label} {'+'.join(marks)}")
     formula = (
         f"RAW {raw_label} | FFT {fft_label} | 1 LSB={g_per_lsb:.8g} g | Window={window} "
-        f"N={count or '전체'} | 필터={', '.join(active) if active else 'OFF'} | "
+        f"N={count or '전체'} | FFT Window 보정={correction_mode} | 필터={', '.join(active) if active else 'OFF'} | "
         f"주파수 보정={correction['frequency_enabled']} 감도 보정={correction['sensitivity_enabled']} | "
         "AC g RMS=std(Count/LSB) | "
         + ("속도 RMS[mm/s]=보정 g RMS×9806.65/(2πf), f>0. RAW는 가속도 유지 | " if fft_mode == "mm/s RMS" else "")
@@ -470,6 +512,7 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
                     freq, amp = gen.fft_peak(
                         gen.spectral_filter(raw, fs, **_filter_kwargs(adxl["filters"], "FFT")),
                         fs, _window_name(adxl.get("window")), count_n, _num(adxl.get("beta"), 8.6),
+                        correction=correction_mode,
                     )
                     converted_f, converted_a = _adxl_converted(freq, amp, options)
                     if base is None:
@@ -515,6 +558,8 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
         "info": " | ".join(summaries + peaks) if summaries else "표시할 축 없음",
         "formula": formula,
         "rotation": rotation,
+        "window_correction": correction_mode,
+        "window_factor": _factor_text(factor_labels),
     }
 
 
@@ -565,10 +610,18 @@ def _ultrasonic(packet):
 
 
 def generator_curves(sensor, packet, packets, index, options):
-    """파일 한 패킷의 RAW/FFT. 초음파는 스펙트럼만 있고 FFT 서브플롯이 없다."""
+    """파일 한 패킷의 RAW/FFT. 초음파는 스펙트럼만 있고 FFT 서브플롯이 없다.
+
+    PSD 모드(options.psd.on, PIEZO·ADXL만): RAW는 그대로 두고 FFT 칸만 graph_psd.packet_psd의
+    Welch PSD로 바꾼다. 발생기 v070처럼 이때는 FFT 평균(Linear Averaging)을 하지 않고,
+    'FFT 평균 적용'과 평균 개수는 PSD에 넣을 패킷 범위로만 쓴다. SRSS 가로선도 그리지 않는다
+    (PSD 합성 SRSS는 밀도 단위가 아니라서 결과 칸에 숫자로 보여 준다).
+    PSD 계산이 실패해도 RAW는 보여 주고, FFT 칸은 비운 채 psd.error에 이유를 담는다.
+    """
     options = resolve_options(options)
+    psd_mode = sensor in ("PIEZO", "ADXL") and _flag((options.get("psd") or {}).get("on"))
     averaged, status = ({}, "")
-    if sensor in ("PIEZO", "ADXL"):
+    if sensor in ("PIEZO", "ADXL") and not psd_mode:
         averaged, status = _average(sensor, packets, index, options)
     if sensor == "초음파":
         curves = _ultrasonic(packet)
@@ -579,6 +632,27 @@ def generator_curves(sensor, packet, packets, index, options):
     else:
         raise ValueError("알 수 없는 센서")
     curves["avg_status"] = status
+    if psd_mode:
+        device = str(options.get("device") or _packet_mac(packet) or "")
+        try:
+            psd = graph_psd.packet_psd(sensor, packets, index, options, device=device)
+            curves.update({k: psd[k] for k in ("fft", "fft_label", "fft_x_label", "gn", "srss", "srss_limit", "avg_status", "psd")})
+            # 정보 칩: 그래프에 없는 FFT peak 문구("… Hz / … bin", "peak …")는 빼고 PSD 축별 RMS를 넣는다.
+            kept = [part for part in str(curves.get("info") or "").split(" | ")
+                    if part and " Hz / " not in part and not part.startswith("peak ")]
+            kept += [f"{axis} PSD RMS={value:.6g} {psd['psd']['unit']}" for axis, value in psd["psd"]["axis_rms"].items()]
+            curves["info"] = " | ".join(kept)
+            # 계산식 칸: 원래 FFT 설정 줄 다음에 PSD 식을 한 줄 더 붙인다.
+            curves["formula"] = " | ".join(filter(None, (curves.get("formula", ""), psd["psd_formula"])))
+        except (ValueError, TypeError, OverflowError, ZeroDivisionError) as exc:
+            curves.update({
+                # 빈 곡선도 f/y 칸은 있어야 view_pack이 압축할 수 있다.
+                "fft": {}, "gn": {"ok": False, "f": [], "y": []},
+                "srss": {"ok": False, "f": [], "y": [], "text": "PSD 오류: " + str(exc)},
+                "srss_limit": {"ok": False, "f": [], "y": []}, "avg_status": "PSD 오류: " + str(exc),
+                "psd": {"on": True, "error": str(exc), "srss": "XYZ 합성 SRSS: 계산 오류",
+                        "limit": "한계값: -", "judgement": "판정: PSD 오류", "state": "none", "steps": ""},
+            })
     curves["fft_log_x"] = _flag(options.get("fft_log_x")) and sensor != "초음파"
     curves["fft_log_y"] = _flag(options.get("fft_log_y")) and sensor != "초음파"
     return curves
@@ -616,6 +690,7 @@ def monitor_adxl_set(axis_samples, options):
             "fft_unit": curves["fft_label"],
             "formula": curves["formula"],
             "info": curves["info"],
+            "window_factor": curves.get("window_factor") or "",
             "fft_log_x": _flag(options.get("fft_log_x")),
             "fft_log_y": _flag(options.get("fft_log_y")),
         }
@@ -674,6 +749,7 @@ def monitor_curves(samples, fs, sensor_kind, options, axis="X"):
         "fft_unit": curves["fft_label"],
         "formula": curves["formula"],
         "info": curves["info"],
+        "window_factor": curves.get("window_factor") or "",
         "fft_log_x": _flag(options.get("fft_log_x")),
         "fft_log_y": _flag(options.get("fft_log_y")),
     }

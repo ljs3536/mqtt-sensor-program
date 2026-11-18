@@ -10,8 +10,8 @@
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=19" />
-    <link rel="stylesheet" href="/static/theme.css?v=9" />
+    <link rel="stylesheet" href="/static/style.css?v=23" />
+    <link rel="stylesheet" href="/static/theme.css?v=11" />
   </head>
   <body>
     <header>
@@ -25,146 +25,103 @@
       </nav>
     </header>
     <main>
-      <section class="card">
-        <div class="monitor-head">
-          <div>
-            <h2>MQTT 설정 / 센서 설정 · 동작</h2>
-            <div class="row">
-              <label>Broker<input id="host" value="127.0.0.1" /></label>
-              <label>Port<input id="port" class="w-port" value="1883" /></label>
-              <label
-                >구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#"
-              /></label>
-              <button type="button" id="connect">연결</button>
-              <button type="button" class="secondary" id="disconnect">
-                연결 해제
-              </button>
-            </div>
-            <p class="hint">
-              기본 구독 Topic = V/#,D/# (콤마로 복수 지정) | MQTT Retained 설정
-              Topic = S/{선택한 센서 MAC}
-            </p>
+      <!--
+        연결 줄: 브로커 연결과 수신 상태. 이 페이지의 목적(데이터가 잘 들어오는지)이 바로 보이게
+        상태 표시를 오른쪽에 크게 둔다. 그래프 장치와 전체 보기는 그래프 카드로 옮겼다.
+      -->
+      <section class="card mon-conn">
+        <div class="conn-bar">
+          <div class="row conn-fields">
+            <label>Broker<input id="host" value="127.0.0.1" /></label>
+            <label>Port<input id="port" class="w-port" value="1883" /></label>
+            <label>구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#" /></label>
+            <button type="button" id="connect">연결</button>
+            <button type="button" class="secondary" id="disconnect">연결 해제</button>
           </div>
-          <div class="monitor-save">
-            <h2>그래프 / 저장</h2>
-            <div class="row monitor-save-row">
-              <label class="check"
-                ><input id="csvEnabled" type="checkbox" checked /><span
-                  >CSV 저장</span
-                ></label
-              >
-              <label
-                >그래프 장치<select id="device">
-                  <option value="">최근 수신</option>
-                </select></label
-              >
-              <button type="button" class="secondary" id="resetZoom">
-                그래프 전체 보기
-              </button>
-              <span id="linkStatus" class="pill off">DISCONNECTED</span>
-            </div>
-            <p id="csvInfo" class="hint">
-              CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다.
-            </p>
+          <div class="conn-state">
+            <label class="check csv-toggle"><input id="csvEnabled" type="checkbox" checked /><span>CSV 저장</span></label>
+            <span id="linkStatus" class="pill off">DISCONNECTED</span>
           </div>
         </div>
-        <div class="split">
-          <div class="card" style="margin: 0">
-            <h2>설정 대상 센서 MAC (dvicMacAddr)</h2>
-            <div class="row">
-              <button type="button" class="secondary" id="selectAll">
-                전체 선택
-              </button>
-              <button type="button" class="secondary" id="clearMacs">
-                선택 해제
-              </button>
-              <span id="macCount" class="stats">0개 선택</span>
-            </div>
-            <div id="macs" class="macs"></div>
-            <p id="commandInfo" class="hint">
-              MQTT: 선택한 각 MAC의 S/{MAC} retained 설정을 갱신
-            </p>
-          </div>
-          <div class="card" style="margin: 0">
-            <h2>센서 설정 / 동작</h2>
-            <div class="sensor-split">
-            <div>
-            <div class="row">
-              <label
-                >종류
-                <select id="sensor">
-                  <option>ADXL</option>
-                  <option>PIEZO</option>
-                </select>
-              </label>
-              <label
-                >주기(s)<input id="period" class="w-num" value="1"
-              /></label>
-              <label
-                >Fs + N
-                <select id="profile"></select>
-              </label>
-            </div>
-            <div class="row" style="margin-top: 8px">
-              <label
-                >센서 타입
-                <select id="sensorType">
-                  <option value="0">0</option>
-                  <option value="1">1</option>
-                  <option value="2" selected>2</option>
-                  <option value="3">3</option>
-                  <option value="4">4</option>
-                </select>
-              </label>
-              <span id="sensorTypeDesc" class="stats">2: MEMS normal</span>
-              <label
-                >G Range
-                <select id="gRange">
-                  <option>2</option>
-                  <option>4</option>
-                  <option>8</option>
-                  <option selected>16</option>
-                </select>
-              </label>
-              <label
-                >게인<input id="piezoGain" class="w-num" value="30" disabled
-              /></label>
-            </div>
-            <div class="row" style="margin-top: 8px">
-              <label
-                >MAC 직접 입력<input
-                  id="manualMac"
-                  placeholder="감지 전 MAC"
-                  style="width: 150px"
-              /></label>
-              <button type="button" class="go" id="start">START</button>
-              <button type="button" class="stop" id="stop">STOP</button>
-              <button type="button" id="apply">설정 적용</button>
-              <button type="button" class="secondary" id="query">
-                현재 설정 조회
-              </button>
-            </div>
-            </div>
-            <div class="sensor-side">
-              <div class="row">
-                <label>이름 대상 MAC<select id="nameMac"></select></label>
-                <label
-                  >표시 이름<input id="deviceName" placeholder="A펌프1"
-                /></label>
-                <button type="button" class="secondary" id="saveDeviceName">
-                  이름 저장
-                </button>
-              </div>
-              <p id="savedConfig" class="hint">
-                설정 적용 시 전송 JSON이 이 MAC의 DB에 저장됩니다.
-              </p>
-              <h2>전송 JSON</h2>
-              <pre id="preview" class="short"></pre>
-            </div>
-            </div>
-          </div>
+        <div class="conn-notes">
+          <p class="hint">구독 Topic은 콤마로 여러 개 지정 · 설정 Topic S/# 는 자동으로 함께 구독</p>
+          <p id="csvInfo" class="hint">CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다.</p>
         </div>
       </section>
+
+      <div class="mon-grid">
+        <!-- 수신 MAC: 들어온 MAC을 칩으로 보여 준다. 체크한 MAC이 센서 명령의 대상이다. -->
+        <section class="card mon-macs">
+          <div class="mon-title">
+            <h2>수신 MAC <small>dvicMacAddr</small></h2>
+            <div class="mon-title-tools">
+              <span id="macCount" class="stats">0개 선택</span>
+              <button type="button" class="secondary" id="selectAll">전체 선택</button>
+              <button type="button" class="secondary" id="clearMacs">선택 해제</button>
+            </div>
+          </div>
+          <div id="macs" class="macs"></div>
+          <p id="commandInfo" class="hint">MQTT: 선택한 각 MAC의 S/{MAC} retained 설정을 갱신</p>
+        </section>
+
+        <!-- 센서 명령: 측정 설정 → 대상 → 동작 → 보낸 JSON → 표시 이름 순서 -->
+        <section class="card mon-cmd">
+          <div class="mon-title">
+            <h2>센서 명령 <small>S/{MAC} retain</small></h2>
+          </div>
+          <div class="cmd-grid">
+            <label>종류
+              <select id="sensor">
+                <option>ADXL</option>
+                <option>PIEZO</option>
+              </select>
+            </label>
+            <label>주기(s)<input id="period" value="1" /></label>
+            <label>Fs + N<select id="profile"></select></label>
+            <label>센서 타입
+              <select id="sensorType">
+                <option value="0">0</option>
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+              <span id="sensorTypeDesc" class="field-note">2: MEMS normal</span>
+            </label>
+            <label>G Range
+              <select id="gRange">
+                <option>2</option>
+                <option>4</option>
+                <option>8</option>
+                <option selected>16</option>
+              </select>
+            </label>
+            <label>게인<input id="piezoGain" value="30" disabled /></label>
+          </div>
+          <label class="cmd-target">MAC 직접 입력
+            <input id="manualMac" placeholder="목록에 아직 없는 센서 MAC (감지 전)" />
+          </label>
+          <div class="cmd-actions">
+            <button type="button" class="go" id="start">START</button>
+            <button type="button" class="stop" id="stop">STOP</button>
+            <button type="button" id="apply">설정 적용</button>
+            <button type="button" class="secondary" id="query">현재 설정 조회</button>
+          </div>
+          <div class="cmd-section cmd-json">
+            <h3>전송 JSON</h3>
+            <pre id="preview" class="short"></pre>
+          </div>
+          <div class="cmd-section">
+            <h3>표시 이름</h3>
+            <div class="cmd-name-row">
+              <label>대상 MAC<select id="nameMac"></select></label>
+              <label>이름<input id="deviceName" placeholder="A펌프1" /></label>
+              <button type="button" class="secondary" id="saveDeviceName">이름 저장</button>
+            </div>
+            <p id="savedConfig" class="hint">설정 적용 시 전송 JSON이 이 MAC의 DB에 저장됩니다.</p>
+          </div>
+        </section>
+      </div>
 
       <details class="card" id="analysis">
         <summary>그래프 설정</summary>
@@ -216,6 +173,16 @@
                   <option>Hamming</option>
                   <option>Rectangular</option>
                 </select>
+              </label>
+              <!-- Window 보정: 수신기 V057과 같은 세 모드. 옆 글자는 서버가 계산한 실제 보정계수. -->
+              <label
+                >Window 보정
+                <select id="piezoWindowCorrection">
+                  <option>보정 없음</option>
+                  <option selected>진폭 보정</option>
+                  <option>에너지 보정</option>
+                </select>
+                <span id="piezoWindowFactor" class="field-note window-factor">보정계수: 데이터 대기</span>
               </label>
               <label
                 >Window N
@@ -287,6 +254,15 @@
               <label
                 >Kaiser β<input id="adxlBeta" class="w-num" value="8.6"
               /></label>
+              <label
+                >Window 보정
+                <select id="adxlWindowCorrection">
+                  <option>보정 없음</option>
+                  <option selected>진폭 보정</option>
+                  <option>에너지 보정</option>
+                </select>
+                <span id="adxlWindowFactor" class="field-note window-factor">보정계수: 데이터 대기</span>
+              </label>
               <label class="check"
                 ><input id="gnOn" type="checkbox" checked /><span
                   >gN</span
@@ -354,6 +330,14 @@
             </p>
             <div class="row">
               <label
+                >그래프 장치<select id="device">
+                  <option value="">최근 수신</option>
+                </select></label
+              >
+              <button type="button" class="secondary" id="resetZoom">
+                그래프 전체 보기
+              </button>
+              <label
                 >축 대상
                 <select id="axisTarget">
                   <option value="raw">RAW</option>
@@ -406,10 +390,11 @@
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
     <script src="/static/api.js?v=1"></script>
     <script src="/static/graph.js?v=9"></script>
-    <script src="/static/monitor-draw.js?v=2"></script>
+    <script src="/static/filters.js?v=1"></script>
+    <script src="/static/monitor-draw.js?v=4"></script>
     <script src="/static/monitor-api.js?v=3"></script>
-    <script src="/static/monitor.js?v=16"></script>
+    <script src="/static/monitor.js?v=17"></script>
     <script src="/static/monitor-db.js?v=3"></script>
-    <script src="/static/theme.js?v=2"></script>
+    <script src="/static/theme.js?v=3"></script>
   </body>
 </html>

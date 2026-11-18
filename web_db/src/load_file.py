@@ -200,6 +200,8 @@ def _adxl_csv_events(paths, *, recover_partial=True):
                         'batteryRmin': str(row.get('batteryRmin') or '0').strip(),
                         'seq': seq, 'samplerate': str(row.get('samplerate') or '3200').strip(),
                         'numofsample': str(valid_n), 'sensorData': repaired,
+                        # '_'로 시작하는 키는 화면·시간 이력용 메타다. 송신 때 replay가 뺀다.
+                        '_received_at': when, '_packet_no': str(row.get('packet_no') or '').strip(),
                     }
                     if partial:
                         obj['_partial_recovered'] = True
@@ -213,10 +215,85 @@ def _adxl_csv_events(paths, *, recover_partial=True):
                 except (ValueError, TypeError) as exc:
                     warnings.append(f'{axis} {row_num}행 seq={seq}: 복구 불가({exc}) → 해당 축 제외')
                 events.append({'axis': axis, 'low': seq_number & 15, 'seq': seq,
-                               'time': timestamp, 'row': row_num, 'obj': obj})
+                               'time': timestamp, 'row': row_num, 'obj': obj,
+                               'packet_no': str(row.get('packet_no') or '').strip(),
+                               'device': str(row.get('dvicMacAddr') or '').strip()})
                 count += 1
             counts[axis] = count
     return events, warnings, counts, recovered_counts
+
+
+def _seq_follows(tri):
+    """X, Y, Z 세 행의 seq 하위 4비트가 a, a+1, a+2(16에서 0으로 돎)인지 본다.
+
+    센서는 축 패킷을 보낼 때마다 seq 하위 4비트를 1씩 올린다(X=1A → Y=2B → Z=3C → 다음 X=1D).
+    그래서 진짜 한 세트면 X→Y, Y→Z가 1씩 차이 난다.
+    """
+    x, y, z = (e['low'] for e in tri)
+    return y == (x + 1) & 15 and z == (x + 2) & 15
+
+
+def _group_by_packet_no(events, warnings):
+    """packet_no(세트 번호)로 X/Y/Z를 묶는다. 발생기 v070의 방식에 seq 검사를 더했다.
+
+    쓰는 경우: 세 파일 모든 행의 packet_no가 숫자일 때만. 하나라도 비면 None(=seq 방식).
+    묶는 키: (MAC, packet_no). 한 키에 X, Y, Z가 정확히 하나씩 있어야 한다.
+
+    제외 규칙(v070과 같음)
+    - 축이 빠졌거나 같은 축이 두 번 → "축 누락/중복"
+    - 세 축 중 디코드 못 한 축이 있음 → "유효하지 않은 X/Y/Z"
+    - received_at이 X ≤ Y ≤ Z 순서가 아니거나 X~Z가 30초 넘게 벌어짐 → "수신 순서/30초"
+
+    v070에 없는 안전장치: seq 연속 검사
+    - packet_no가 세트 번호가 아닐 수 있다. 예전 웹 CSV(이 수정 전 save_csv.py)는 packet_no를
+      축 파일마다 따로 셌다. 그러면 축 하나가 빠진 뒤로는 같은 번호의 X/Y/Z가 서로 다른
+      측정인데, 시각 차이가 몇 초뿐이라 v070의 30초 검사로는 걸러지지 않는다.
+    - 그래서 세 축의 seq 하위 4비트가 a, a+1, a+2로 이어지는지 본다. 이어지지 않는 묶음이
+      하나라도 있으면 이 파일의 packet_no는 믿을 수 없다고 보고 None을 돌려준다.
+      그러면 load_adxl_csv_xyz가 seq 방식으로 다시 묶는다(그쪽은 packet_no를 보지 않는다).
+
+    돌려주는 값: (세트 목록, 제외 세트 수) 또는 None.
+    """
+    if not events or not all(e['packet_no'].isdecimal() for e in events):
+        return None
+    keyed = {}
+    for e in events:
+        key = (e['device'].upper(), int(e['packet_no']))
+        keyed.setdefault(key, {}).setdefault(e['axis'], []).append(e)
+    groups = []
+    notes = []
+    removed = 0
+    broken = 0
+    for key, by_axis in keyed.items():
+        if any(len(by_axis.get(a, [])) != 1 for a in ('X', 'Y', 'Z')):
+            removed += 1
+            have = ''.join(a for a in ('X', 'Y', 'Z') if by_axis.get(a))
+            notes.append(f'packet_no={key[1]}: 축 누락/중복(있는 축 {have or "없음"}) → 제외')
+            continue
+        tri = [by_axis[a][0] for a in ('X', 'Y', 'Z')]
+        if not _seq_follows(tri):
+            broken += 1
+            continue
+        if any(x['obj'] is None for x in tri):
+            removed += 1
+            notes.append(f'packet_no={key[1]}: 유효하지 않은 X/Y/Z 데이터 → 제외')
+            continue
+        stamps = [x['time'] for x in tri]
+        if all(s is not None for s in stamps) and (stamps != sorted(stamps) or stamps[-1] - stamps[0] > 30):
+            removed += 1
+            notes.append(f'packet_no={key[1]}: 수신 순서/30초 범위 이탈 → 제외')
+            continue
+        # 정렬 기준: X 수신 시각. 시각이 없으면 packet_no 순서.
+        order = stamps[0] if stamps[0] is not None else float(key[1])
+        groups.append((order, key[1], {a: by_axis[a][0]['obj'] for a in ('X', 'Y', 'Z')}))
+    if broken:
+        warnings.append(
+            f'packet_no가 같은데 seq가 이어지지 않는 묶음 {broken}건 → packet_no를 세트 번호로 볼 수 없어 seq 기준으로 묶음'
+        )
+        return None
+    warnings.extend(notes)
+    groups.sort(key=lambda item: (item[0], item[1]))
+    return [g for _, _, g in groups], removed
 
 
 def load_adxl_csv_xyz(paths: dict[str, str], return_report=False, recover_partial=True):
@@ -229,6 +306,19 @@ def load_adxl_csv_xyz(paths: dict[str, str], return_report=False, recover_partia
     events, warnings, counts, recovered_counts = _adxl_csv_events(paths, recover_partial=recover_partial)
     if not events:
         raise ValueError('ADXL CSV에서 seq를 가진 행을 찾지 못했습니다.')
+    # 1순위: packet_no 세트 번호(수신기 V057 CSV, 이번 수정 뒤의 웹 CSV).
+    #   완전한 X/Y/Z 세트만 남는다. seq 검사에 걸리면 None이 와서 아래 seq 방식으로 넘어간다.
+    by_packet = _group_by_packet_no(events, warnings)
+    if by_packet is not None:
+        useful, removed = by_packet
+        if not useful:
+            raise ValueError('packet_no 기준으로 일치하는 완전한 X/Y/Z 세트가 없습니다.')
+        report = {'rows': counts, 'set_count': len(useful), 'partial': 0, 'warnings': warnings,
+                  'axis_packets': {a: len(useful) for a in ('X', 'Y', 'Z')},
+                  'recovered': recovered_counts, 'excluded_sets': removed,
+                  'grouping': 'packet_no + MAC + seq + received_at(30초)'}
+        return (useful, report) if return_report else useful
+    # 2순위: seq 방식(packet_no가 없거나 세트 번호가 아닌 CSV). 축이 빠진 세트도 남긴다.
     # With timestamps, merge chronological per-axis CSVs. If timestamps are
     # absent, use row-order/axis ordering as a conservative fallback.
     if any(e['time'] is not None for e in events):
@@ -268,7 +358,8 @@ def load_adxl_csv_xyz(paths: dict[str, str], return_report=False, recover_partia
     report = {'rows': counts, 'set_count': len(useful),
               'partial': sum(len(x)<3 for x in useful), 'warnings': warnings,
               'axis_packets': {a:sum(a in x for x in useful) for a in ('X','Y','Z')},
-              'recovered': recovered_counts}
+              'recovered': recovered_counts, 'excluded_sets': skipped,
+              'grouping': 'seq + received_at 순서'}
     return (useful, report) if return_report else useful
 
 

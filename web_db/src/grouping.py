@@ -1,7 +1,8 @@
 """ADXL X/Y/Z를 한 측정 번호로 묶는다.
 
 CSV를 열 때와 같다. seq 상위 4비트는 축이고, 하위 4비트는 축을 보낼 때마다 1씩 증가한다.
-packet_no는 축 파일마다 따로 세므로 묶음 키가 아니다.
+DB는 packet_no를 저장하지 않고 seq만으로 묶는다(set_no). 웹 CSV의 ADXL packet_no는
+save_csv.py가 이 continues_set으로 매긴 세트 번호라서 DB의 묶음과 같은 규칙이다.
 """
 
 from __future__ import annotations
@@ -81,6 +82,12 @@ def packet_to_template(row):
     }
     if row.get("tick"):
         obj["tick"] = row["tick"]
+    # '_' 메타: 송신 때는 replay가 빼고, 속도 RMS 시간 이력이 시각·번호로 쓴다.
+    # CSV를 열 때(load_file)와 같은 이름이다. DB의 packet_no 자리는 세트 번호(set_no).
+    if row.get("received_at"):
+        obj["_received_at"] = str(row["received_at"])
+    if row.get("set_no") is not None:
+        obj["_packet_no"] = str(row["set_no"])
     return obj
 
 

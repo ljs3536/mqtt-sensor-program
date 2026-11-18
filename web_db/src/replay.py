@@ -88,7 +88,11 @@ class ReplayService:
         return len(items)
 
     def store_adxl_csv(self, paths, recover_partial=True):
-        """X/Y/Z CSV를 seq로 묶어 ADXL 전송 목록으로 둔다."""
+        """X/Y/Z CSV를 묶어 ADXL 전송 목록으로 둔다.
+
+        packet_no가 세트 번호인 CSV는 packet_no로(완전한 세트만), 아니면 seq로 묶는다.
+        어느 방식으로 묶었는지는 report['grouping']이고 로그 첫 줄에 남긴다.
+        """
         items, report = gen.load_adxl_csv_xyz(
             paths, return_report=True, recover_partial=bool(recover_partial)
         )
@@ -97,7 +101,8 @@ class ReplayService:
             self.index["ADXL"] = 0
             self.paths["ADXL"] = "XYZ CSV"
             self.log(
-                f"[ADXL seq 정렬] {len(items)}세트, 불완전 {report['partial']}세트 | "
+                f"[ADXL 묶음: {report.get('grouping', 'seq')}] {len(items)}세트, 불완전 {report['partial']}세트, "
+                f"제외 {report.get('excluded_sets', 0)}세트 | "
                 f"원본 행={report['rows']} | 유효 축={report['axis_packets']} | "
                 f"부분복구={report['recovered']} | 앞부분 복구={'ON' if recover_partial else 'OFF'}"
             )
@@ -123,6 +128,30 @@ class ReplayService:
         packed = _pack_curves(curves)
         packed.update({"sensor": sensor, "index": index + 1, "count": len(data)})
         return packed
+
+    def velocity_history(self, start=None, count=None, options=None):
+        """불러온 ADXL 세트로 X/Y/Z 속도 RMS 시간 이력을 만든다(graph_psd.velocity_history).
+
+        start: 1부터 세는 시작 세트(없으면 지금 고른 세트). count: 세트 수(없으면 끝까지).
+        options: 화면 그래프 옵션(PSD 구간·Overlap·목표 구간, MEMS 창·필터·보정·LSB).
+        템플릿 목록만 복사해 잠금을 풀고 계산한다(계산 중에도 송신·미리보기가 막히지 않게).
+        """
+        with self.lock:
+            packets = list(self.templates.get("ADXL") or [])
+            current = self.index.get("ADXL", 0)
+            if options is not None:
+                self.view_options = options
+            view = self.view_options
+        if not packets:
+            raise ValueError("ADXL X/Y/Z 데이터를 먼저 불러와 주세요.")
+        if start in (None, ""):
+            start = current + 1
+        result = analysis.velocity_history(packets, analysis.resolve_options(view), start=start, count=count)
+        self.log(
+            f"[RMS 시간 이력] {result['start']}번부터 {result['count']}세트 분석, "
+            f"성공 {len(result['rows'])}세트 / 제외 {len(result['skipped'])}세트"
+        )
+        return result
 
     def fft_check(self, sensor):
         """고른 RAW가 FFT 후 IFFT로 복원되는지 검사한다."""

@@ -48,21 +48,7 @@ sensorBox.innerHTML = sensors
   })
   .join("");
 
-/** 필터 한 줄의 체크와 값 입력을 만든다. */
-function filterMarkup(items) {
-  return items
-    .map(
-      ([name, freq, extra]) => `
-    <div class="row" data-filter="${name}">
-      <strong>${name}</strong>
-      <label class="check"><input class="raw" type="checkbox"><span>RAW</span></label>
-      <label class="check"><input class="fft" type="checkbox"><span>FFT</span></label>
-      <label>값<input class="freq" value="${freq}" style="width:80px"></label>
-      <label>차수/폭<input class="extra" value="${extra}" style="width:70px"></label>
-    </div>`,
-    )
-    .join("");
-}
+// 필터 줄 HTML·읽기·계산식 문구는 filters.js(수신 모니터와 공용).
 document.querySelector("#piezoFilters").innerHTML = filterMarkup([
   ["HPF", 10, 4],
   ["LPF", 3000, 4],
@@ -73,6 +59,7 @@ document.querySelector("#adxlFilters").innerHTML = filterMarkup([
   ["LPF", 1000, 4],
   ["Notch", 975, 20],
 ]);
+refreshFilterNotes();
 
 /** 캔버스 id로 RAW 또는 FFT 차트를 만든다. */
 function chart(id) {
@@ -109,20 +96,6 @@ function optionalValue(id, fallback) {
   return node ? node.value : fallback;
 }
 
-/** 필터 표의 체크와 주파수를 서버 옵션 객체로 읽는다. */
-function readFilters(rootId) {
-  const filters = {};
-  document.querySelectorAll(`${rootId} [data-filter]`).forEach((row) => {
-    filters[row.dataset.filter] = {
-      raw: row.querySelector(".raw").checked,
-      fft: row.querySelector(".fft").checked,
-      freq: num(row.querySelector(".freq").value, 0),
-      extra: num(row.querySelector(".extra").value, 1),
-    };
-  });
-  return filters;
-}
-
 const fftUnitHint = {
   "자동 (g RMS)": "FFT g RMS = Count Peak × (g/LSB) / √2. RAW는 가속도 단위입니다.",
   "Count Peak": "FFT Count Peak = 2|rFFT(창)| / Σ창. RAW는 가속도 단위입니다.",
@@ -146,12 +119,21 @@ function viewOptions() {
     fft_log_y: fftLogY.checked,
     fft_avg: fftAvg.checked,
     fft_avg_count: fftAvgCount.value,
+    // PSD(Welch). 칸이 없는 화면이면 꺼진 상태로 보낸다. 서버 graph_psd.psd_settings가 값을 검사한다.
+    psd: {
+      on: !!(document.getElementById("psdOn") || {}).checked,
+      segment: optionalValue("psdSegment", "전체"),
+      overlap: num(optionalValue("psdOverlap", "50"), 50),
+      target: optionalValue("psdTarget", "30").trim(),
+    },
     piezo: {
       unit: piezoUnit.value,
       vmax: num(piezoVmax.value, 3.89),
       amax: num(piezoAmax.value, 4096),
       sensitivity: num(piezoSens.value, 100),
       window: piezoWindow.value,
+      // Window 보정 모드. 칸이 없는 옛 화면이면 기본 '진폭 보정'(예전과 같은 값).
+      window_correction: optionalValue("piezoWindowCorrection", "진폭 보정"),
       window_n: piezoN.value,
       filters: readFilters("#piezoFilters"),
     },
@@ -161,6 +143,7 @@ function viewOptions() {
       fft_unit: adxlFft.value,
       g_per_lsb: num(adxlG.value, 0.00390625),
       window: adxlWindow.value,
+      window_correction: optionalValue("adxlWindowCorrection", "진폭 보정"),
       window_n: adxlN.value,
       beta: num(adxlBeta.value, 8.6),
       filters: readFilters("#adxlFilters"),
@@ -212,6 +195,36 @@ function loosen(target) {
   }
 }
 
+/**
+ * 서버가 계산한 Window 보정계수 문구를 그 센서 칸 옆에 넣는다.
+ * 예: "C=N/Σw = ×2.3812 (N=8192)". 초음파처럼 FFT가 없으면 바꾸지 않는다.
+ */
+function showWindowFactor(preview) {
+  if (!preview || !preview.window_factor) return;
+  const id = preview.sensor === "PIEZO" ? "piezoWindowFactor" : preview.sensor === "ADXL" ? "adxlWindowFactor" : "";
+  const box = id && document.getElementById(id);
+  if (box) box.textContent = preview.window_factor;
+}
+
+/**
+ * PSD 결과 칸(합성 SRSS, 한계값, 판정, 연산 단계 ①~⑥)을 채운다.
+ * preview.psd는 PSD 모드(PIEZO·ADXL)에서만 온다. 없으면 칸을 숨긴다.
+ * 판정 색: over=초과(빨강), ok=정상(초록), none=비교 안 함(회색).
+ */
+function showPsd(preview) {
+  const box = document.getElementById("psdResult");
+  if (!box) return;
+  const psd = preview && preview.psd;
+  box.hidden = !psd;
+  if (!psd) return;
+  document.getElementById("psdSrss").textContent = psd.srss || "";
+  document.getElementById("psdLimit").textContent = psd.limit || "";
+  const judge = document.getElementById("psdJudge");
+  judge.textContent = psd.judgement || "";
+  judge.dataset.state = psd.state || "none";
+  document.getElementById("psdSteps").textContent = psd.error ? "PSD 오류: " + psd.error : psd.steps || "";
+}
+
 /** 서버 미리보기를 RAW와 FFT 차트에 그린다. 초음파 스펙트럼은 RAW 칸에만 둔다. */
 function draw(preview) {
   const infoBox = document.querySelector("#packetInfo") || document.querySelector("#position");
@@ -236,6 +249,8 @@ function draw(preview) {
       .filter(Boolean)
       .join("\n");
   }
+  showWindowFactor(preview);
+  showPsd(preview);
   const logX = !!preview.fft_log_x;
   const logY = !!preview.fft_log_y;
   if (preview.kind === "spectrum") {
@@ -264,7 +279,8 @@ function draw(preview) {
     );
     if (preview.gn && preview.gn.ok && gnOn.checked) {
       fftChart.data.datasets.push({
-        label: "gN",
+        // PSD 모드에서는 gN 자리에 X+Y+Z 합성 PSD가 온다(서버가 text로 이름을 준다).
+        label: (preview.psd && preview.gn.text) || "gN",
         borderColor: "#17a2b8",
         borderWidth: 1.4,
         data: pairs(preview.gn.f || [], preview.gn.y || [], logX, logY),

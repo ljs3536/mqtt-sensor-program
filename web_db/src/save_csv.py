@@ -8,6 +8,7 @@ import threading
 from datetime import datetime
 
 from web_db.src import core as mon
+from web_db.src.grouping import continues_set, seq_low
 from web_db.src.paths import DATA_CSV
 
 
@@ -15,12 +16,21 @@ class CsvWriter:
     """수신 패킷을 data_csv/YYYYMMDD_HHMMSS 에 HEX와 decoded로 나눠 쓴다.
 
     측정 START와 무관하게, CSV 저장이 켜진 연결 세션 동안만 기록한다.
-    축 패킷은 도착 즉시 그 축 파일에 쓰고, 행마다 flush한다.
+    축 패킷은 도착 즉시 그 축 파일에 쓰고, 행마다 flush한다(세트가 다 모이길 기다리지 않는다).
 
     파일은 MAC과 종류마다 두 개다.
     - {MAC}_{종류}_sensorData_hex.csv: 받은 HEX 그대로
     - {MAC}_{종류}_decoded_samples.csv: 디코드한 샘플(초음파는 주파수 범위 포함)
-    packet_no는 파일마다 1부터 센다. 그래서 X/Y/Z 파일의 packet_no는 짝이 아니다.
+    packet_no 규칙
+    - PIEZO·초음파: 파일마다 1부터 센 행 번호.
+    - ADXL: X/Y/Z가 같이 쓰는 "세트 번호"다. 같은 측정의 세 축은 같은 packet_no를 갖는다.
+      세트 판정은 DB(grouping.continues_set)와 같다. 직전 ADXL 축 다음 순서이고 seq 하위
+      4비트가 축 차이만큼 이어지면 같은 세트, 아니면 새 번호다. 축이 빠지면 그 번호의
+      파일 한두 곳에만 행이 없고, 다음 세트 번호는 세 축이 다시 같이 쓴다.
+      (이전에는 축 파일마다 따로 세서, 축 하나만 빠져도 그 뒤 packet_no 짝이 전부 어긋났다.
+      발생기 v070은 packet_no로 X/Y/Z를 묶으므로 이 번호가 세트 번호여야 한다.)
+    - 수신기 V057은 X/Y/Z가 다 모인 세트만 쓰는 방식으로 번호를 맞춘다. 웹은 DB처럼
+      빠진 축이 있는 세트도 남기고, 대신 번호를 세트 기준으로 매긴다.
     수신 스레드가 디스크를 기다리지 않도록, 쓰기는 큐를 받는 별도 스레드 하나가 한다.
     """
     def __init__(self):
@@ -60,6 +70,25 @@ class CsvWriter:
         files = {}
         writers = {}
         counters = {}
+        # MAC별 직전 ADXL 축 상태: device → (축, seq 하위 4비트, 세트 번호). close_all에서 비운다.
+        adxl_last = {}
+
+        def packet_number(item):
+            """이 행에 쓸 packet_no. ADXL은 세트 번호, 나머지는 파일 행 번호."""
+            if str(item["kind"]).startswith("ADXL-"):
+                device = item["device"]
+                axis = str(item["axis"]).upper()
+                low = seq_low(item["seq"])
+                last = adxl_last.get(device)
+                if last is not None and continues_set(last[0], last[1], axis, low):
+                    number = last[2]          # 직전 축과 같은 측정 → 같은 번호
+                else:
+                    number = (last[2] if last else 0) + 1   # 새 측정 → 다음 번호
+                adxl_last[device] = (axis, low, number)
+                return number
+            key = (item["device"], item["kind"])
+            counters[key] = counters.get(key, 0) + 1
+            return counters[key]
 
         def writer_for(path, header):
             """파일별 csv.writer를 한 번만 열어 재사용한다.
@@ -79,7 +108,7 @@ class CsvWriter:
             return writers[key], files[key]
 
         def close_all():
-            """열린 CSV를 모두 닫고 packet_no 카운터를 0으로 돌린다. 연결 시작·해제 때 부른다."""
+            """열린 CSV를 모두 닫고 packet_no 카운터(ADXL 세트 번호 포함)를 0으로 돌린다. 연결 시작·해제 때 부른다."""
             for handle in files.values():
                 try:
                     handle.flush()
@@ -89,6 +118,7 @@ class CsvWriter:
             files.clear()
             writers.clear()
             counters.clear()
+            adxl_last.clear()
 
         common = [
             "packet_no", "received_at", "source", "dvicMacAddr", "gwMacAddr",
@@ -116,10 +146,8 @@ class CsvWriter:
                 session.mkdir(parents=True, exist_ok=True)
                 device = mon.safe_filename(item["device"])
                 kind = mon.safe_filename(item["kind"])
-                key = (item["device"], item["kind"])
-                counters[key] = counters.get(key, 0) + 1
                 base = [
-                    counters[key], item["received_at"], "MQTT", item["device"], item["gw"],
+                    packet_number(item), item["received_at"], "MQTT", item["device"], item["gw"],
                     item["kind"], item["axis"], item["seq"], item["tick"], item["battery"],
                     item["sample_rate"], item["num_samples"], item["payload_bytes"],
                 ]

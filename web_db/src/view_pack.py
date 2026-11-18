@@ -70,6 +70,9 @@ def _pack_curves(curves):
         "fft_label": curves.get("fft_label") or "",
         "info": curves.get("info") or "",
         "formula": curves.get("formula") or "",
+        # Window 보정 모드와 실제 곱해진 보정계수 문구(서랍의 선택 상자 옆에 보인다).
+        "window_correction": curves.get("window_correction") or "",
+        "window_factor": curves.get("window_factor") or "",
         "avg_status": curves.get("avg_status") or "",
         "rotation": curves.get("rotation") or "",
         "fft_log_x": bool(curves.get("fft_log_x")),
@@ -96,6 +99,22 @@ def _pack_curves(curves):
         packed_trace = _pack_trace(curves.get(key))
         if packed_trace:
             packed[key] = packed_trace
+    # PSD 모드 결과 칸(합성 SRSS, 한계값, 판정, 연산 단계). 곡선은 위 fft/gn에 들어 있다.
+    psd = curves.get("psd")
+    if psd:
+        packed["psd"] = {
+            "on": True,
+            "srss": psd.get("srss") or "",
+            "limit": psd.get("limit") or "",
+            "judgement": psd.get("judgement") or "",
+            "state": psd.get("state") or "none",
+            "steps": psd.get("steps") or "",
+            "title": psd.get("title") or "",
+            "error": psd.get("error") or "",
+            "unit": psd.get("unit") or "",
+            "level": psd.get("level"),
+            "axis_rms": {k: float(v) for k, v in (psd.get("axis_rms") or {}).items()},
+        }
     if curves["kind"] == "spectrum":
         packed["x"], packed["y"] = _pack_pair(curves.get("x"), curves.get("y"))
         return packed

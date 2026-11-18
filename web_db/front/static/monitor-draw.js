@@ -7,19 +7,10 @@ let profiles = { ADXL: [], PIEZO: [] };
 let graphDevice = "";
 let ready = false;
 
-/** 필터 한 줄의 체크와 값 입력을 만든다. */
-function filterMarkup(items) {
-  return items.map(([name, freq, extra]) => `
-    <div class="row" data-filter="${name}">
-      <strong>${name}</strong>
-      <label class="check"><input class="raw" type="checkbox"><span>RAW</span></label>
-      <label class="check"><input class="fft" type="checkbox"><span>FFT</span></label>
-      <label>값<input class="freq" value="${freq}" style="width:80px"></label>
-      <label>차수/폭<input class="extra" value="${extra}" style="width:70px"></label>
-    </div>`).join("");
-}
+// 필터 줄 HTML·읽기·계산식 문구는 filters.js(분석 화면과 공용).
 document.querySelector("#piezoFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 3000, 4], ["Notch", 975, 20]]);
 document.querySelector("#adxlFilters").innerHTML = filterMarkup([["HPF", 10, 4], ["LPF", 1000, 4], ["Notch", 975, 20]]);
+refreshFilterNotes();
 
 /** RAW 또는 FFT 차트 하나를 만들고 제목을 붙인다. */
 function chart(id, title) {
@@ -39,20 +30,6 @@ function num(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
-/** 필터 표의 체크와 주파수를 서버 옵션 객체로 읽는다. */
-function readFilters(rootId) {
-  const filters = {};
-  document.querySelectorAll(`${rootId} [data-filter]`).forEach((row) => {
-    filters[row.dataset.filter] = {
-      raw: row.querySelector(".raw").checked,
-      fft: row.querySelector(".fft").checked,
-      freq: num(row.querySelector(".freq").value, 0),
-      extra: num(row.querySelector(".extra").value, 1),
-    };
-  });
-  return filters;
-}
-
 /** 그래프 설정 칸을 서버 /api/monitor/view 본문으로 만든다. */
 function viewOptions() {
   return {
@@ -64,6 +41,8 @@ function viewOptions() {
       amax: num(piezoAmax.value, 4096),
       sensitivity: num(piezoSens.value, 100),
       window: piezoWindow.value,
+      // Window 보정 모드(보정 없음 / 진폭 보정 / 에너지 보정). 서버 기본은 진폭 보정.
+      window_correction: piezoWindowCorrection.value,
       window_n: piezoN.value,
       filters: readFilters("#piezoFilters"),
     },
@@ -73,6 +52,7 @@ function viewOptions() {
       fft_unit: adxlFft.value,
       g_per_lsb: num(adxlG.value, 0.00390625),
       window: adxlWindow.value,
+      window_correction: adxlWindowCorrection.value,
       window_n: adxlN.value,
       beta: num(adxlBeta.value, 8.6),
       filters: readFilters("#adxlFilters"),
@@ -267,6 +247,11 @@ function draw(device) {
         data: pairs(item.fft_f, item.fft_y, logX, logY),
       });
       notes.push(`${axis} ${item.unit || ""} AC RMS=${item.rms_value} N=${item.n} Window=${item.window} Fs=${item.fs}`);
+      // 서버가 계산한 Window 보정계수를 그 센서의 'Window 보정' 칸 옆에 보여 준다.
+      if (item.window_factor) {
+        const factorBox = document.getElementById(axis === "PIEZO" ? "piezoWindowFactor" : "adxlWindowFactor");
+        if (factorBox) factorBox.textContent = item.window_factor;
+      }
       if (item.formula) formulas.push(item.formula);
     }
   }
