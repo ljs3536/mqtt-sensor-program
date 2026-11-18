@@ -13,12 +13,16 @@
 | 위치 | 역할 |
 | --- | --- |
 | `web_db/src/server.py` | FastAPI 앱. 정적 파일과 라우트를 붙이고 하루 통계 스레드를 켠다 |
-| `web_db/src/routes` | 주소별 HTTP. `pages`, `monitor`, `generator`, `analysis`, `db` |
+| `web_db/src/routes` | 주소별 HTTP. `pages`, `monitor`, `generator`, `analysis`, `db`, `site` |
 | `web_db/src/monitor_service.py` | MQTT 수신, 최신 파형, CSV와 SQLite로 넘김 |
 | `web_db/src/save_csv.py` | 연결 동안 `data_csv/YYYYMMDD_HHMMSS`에 HEX·decoded CSV |
 | `web_db/src/replay.py` | 파일 또는 DB에서 연 패킷을 MQTT로 반복 송신 |
 | `web_db/src/store.py` | SQLite 연결, 스키마, 패킷·이름·설정 저장 |
 | `web_db/src/store_query.py` | MAC 목록, 통계 조회, 측정 최신화, 분석용 패킷 조회 |
+| `web_db/src/store_site.py` | 앱 설정(`app_setting`), 평면도(`floor_plan`, 이미지는 `site_files/`), 센서 위치(`sensor_placement`), 대문 상태용 원자료 |
+| `web_db/src/site_status.py` | 대문의 센서 연결·알람 판정. 임시 기준값 상수가 맨 위에 있다 |
+| `web_db/src/paths.py` | 코드·데이터 경로. 환경변수 `SENSOR_DATA_DIR`가 있으면 DB·평면도·CSV·MEMS JSON을 그 폴더 하나에 둔다(Docker 볼륨 `/data`). `docs/Docker-AWS-배포.md` |
+| `web_db/src/import_csv.py` | CSV 폴더를 SQLite `packet`에 다시 채우기(명령줄 전용). 아래 "CSV 폴더로 DB 채우기" |
 | `web_db/src/grouping.py` | ADXL seq로 X/Y/Z를 한 세트에 묶음 |
 | `web_db/src/stats_calc.py` | 완성된 XYZ 한 세트의 RMS, PEAK, SRSS |
 | `web_db/src/decode.py` | 패킷 분류와 sensorData HEX 디코드 |
@@ -31,11 +35,12 @@
 | `web_db/front/partials` | 여러 페이지가 같이 쓰는 HTML 조각. 분석 화면 설정 서랍 `drawer.html`, PSD 결과 칸과 시간 이력 창 `psd-history.html` |
 | `web_db/sensor.sqlite` | 패킷, 이름, 설정 JSON, 통계. 없으면 서버가 켜질 때 만든다 |
 
-화면은 다섯 개다. 브라우저 스크립트는 `web_db/front/static`에 있고, 계산은 하지 않는다. 서버 JSON을 받아 칸을 채우거나, 칸의 값을 JSON으로 보낸다.
+화면은 여섯 개다. 브라우저 스크립트는 `web_db/front/static`에 있고, 계산은 하지 않는다. 서버 JSON을 받아 칸을 채우거나, 칸의 값을 JSON으로 보낸다.
 
 | 주소 | 파일 | 하는 일 |
 | --- | --- | --- |
-| `/` | `front/index.html` | 수신, 명령, CSV와 SQLite 저장 |
+| `/` | `front/site.html` | 대문: 센서 현황(평면도 위 센서 연결·수신·알람) |
+| `/receiver` | `front/index.html` | 수신, 명령, CSV와 SQLite 저장 |
 | `/generator` | `front/generator.html` + `partials/drawer.html` | 외부 CSV 분석과 MQTT 재전송 |
 | `/studio` | `front/studio.html` + `partials/drawer.html` | DB 패킷 분석과 MQTT 재전송 |
 | `/dashboard` | `front/dashboard.html` | 저장된 SRSS, RMS, PEAK만 조회 |
@@ -63,7 +68,8 @@
 | `generator.js` | 분석 화면 버튼을 위 함수에 연결. 전송 중일 때만 1초마다 송신 숫자와 로그를 갱신한다. 그 밖에는 버튼 동작 뒤에 한 번 읽는다 |
 | `studio.js` | DB 분석 서랍과 센서 탭. 계산 API는 `generator-*.js`를 그대로 쓴다 |
 | `db.js` | `/api/db/devices`, `/api/db/stats`, `/api/db/load`. 연 패킷은 `draw`로 넘긴다 |
-| `settings.js` | 장치 이름과 SRSS 한계 저장. `/api/db/device-name`, `/api/analysis/srss-limit` |
+| `settings.js` | 수신 MQTT 자동 연결 값, 장치 이름과 SRSS 한계 저장. `/api/site/mqtt`, `/api/db/device-name`, `/api/analysis/srss-limit` |
+| `site.js` | 대문. 평면도 탭(여러 장, 탭마다 문제 수 배지), 아이콘 그리기, 정보 카드, 배치 편집(평면도 추가·교체·이름·순서·삭제, 끌어 놓기·이동·빼기·저장), 15초 상태 갱신 |
 
 수신 화면의 흐름은 `monitor.js` 버튼 → `monitor-api.js` → 서버 → `monitor-draw.js`다. 분석 화면은 `generator.js` 또는 `db.js` → `generator-api.js` → 서버 → `generator-draw.js`다. 통계와 설정 화면은 각자 `dashboard.html`, `settings.js` 안에서 같은 방식으로 서버 JSON만 읽고 쓴다.
 
@@ -79,7 +85,9 @@
 2. FastAPI 앱에 `/static`과 라우터 다섯 개(`pages`, `generator`, `monitor`, `analysis`, `db`)를 붙인다.
 3. `start_daily_stats()`가 하루 통계 스레드를 켠다. 이미 살아 있으면 새로 만들지 않는다.
 
-MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 화면에서 연결을 눌러야 한다.
+4. 설정 화면에서 '서버 시작 때 자동 연결'을 켜 두었으면 `monitor.auto_connect()`가 저장된 MQTT 값으로 백그라운드 연결을 시작한다. 브로커가 꺼져 있어도 서버는 뜨고, paho가 1~30초 간격으로 다시 붙기를 시도한다.
+
+자동 연결을 켜지 않았으면 MQTT 수신은 시작하지 않는다. 수신 화면(`/receiver`)에서 연결을 눌러야 한다. 어느 쪽이든 구독은 `_on_connect`에서 하므로, 끊겼다가 다시 붙으면 다시 구독한다.
 
 ## 스레드와 잠금
 
@@ -107,7 +115,13 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 
 | 주소 | 하는 일 |
 | --- | --- |
-| `GET /`, `/generator`, `/studio`, `/dashboard`, `/settings` | 화면 HTML |
+| `GET /`, `/receiver`, `/generator`, `/studio`, `/dashboard`, `/settings` | 화면 HTML |
+| `GET /api/site/status` | 대문: MAC별 연결(link)·알람(alarm) 판정과 개수, 수신 연결 상태. 최신화는 하지 않는다 |
+| `GET·POST /api/site/plans` | 평면도 목록(탭 순서)과 모든 센서 위치 / 평면도 추가(multipart: file, width, height, name) |
+| `GET·POST /api/site/plans/{id}/image` | 평면도 이미지 / 이미지 교체(이름·위치 유지) |
+| `PATCH·DELETE /api/site/plans/{id}` | 이름 바꾸기 `{"name"}`·탭 순서 `{"move": -1\|1}` / 평면도 한 장과 그 위치 삭제 |
+| `POST /api/site/placements` | 모든 평면도의 센서 위치를 통째로 저장 `[{plan_id, mac, x, y}]`(x·y는 0~1). 같은 MAC은 마지막 한 곳만 |
+| `GET·POST /api/site/mqtt` | 설정 화면의 수신 MQTT 값. 자동 연결이 켜져 있으면 저장하면서 다시 붙는다 |
 | `POST /api/monitor/connect`, `/disconnect` | 수신 MQTT 연결·해제. 연결 때 CSV 폴더를 연다 |
 | `GET /api/monitor/state?device=` | 연결 상태, MAC 목록, 로그, 최신 그래프. 연결된 동안 화면이 1초마다 부른다 |
 | `POST /api/monitor/view` | 수신 그래프 옵션과 창 길이를 바꾸고 다시 그린다 |
@@ -120,7 +134,7 @@ MQTT 수신은 서버가 켜져도 자동으로 시작하지 않는다. 수신 �
 | `GET /api/analysis/defaults`, `GET·POST /srss-limit`, `POST /mems-scale`, `/mems-correction` | 그래프 기본값, SRSS 한계, 1 LSB, MEMS 보정 저장 |
 | `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON. 분석 화면 MAC 선택 상자는 `MAC · 이름`만 보이고 패킷 수는 보이지 않는다. 패킷 수는 설정 화면이 이름 삭제 때 목록에서 뺄지 정하는 데 쓴다 |
 | `POST /api/db/load` | DB 패킷을 골라 재전송 목록에 올리고 첫 미리보기를 준다 |
-| `GET /api/db/dashboard`, `POST /api/db/update-stats` | 저장된 통계 읽기, 통계 최신화 |
+| `GET /api/db/dashboard` | 저장된 통계 읽기(계산은 하루 스케줄러만 한다. 최신화 API는 없앴다) |
 | `POST·DELETE /api/db/device-name` | 표시 이름 저장·삭제 |
 
 ## 수신해서 저장하기
@@ -239,6 +253,20 @@ PIEZO와 MEMS 그래프 옵션에 `Window 보정`이 있다. 세 화면(수신 �
 
 LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같음). 켜져 있으면 차단 주파수가 Nyquist라서 LPF를 실제로 걸지 않는다(`lp_cutoff=None`). 직접 차단 주파수를 쓰려면 체크를 끈다. 계산식 줄의 필터 목록에는 `LPF(자동 Fs/2→우회)`로 나온다.
 
+## CSV 폴더로 DB 채우기
+
+수신기가 남긴 CSV 폴더(예: `D:\20261106_100046`)를 실시간 수신과 같은 길로 `packet`에 넣는다. 8081 서버와 DB를 연 다른 프로그램(DB Browser 등)을 닫고 실행한다.
+
+```
+python -m web_db.src.import_csv D:\20261106_100046 --reset   # 지우고 채우기
+python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 더 넣기
+```
+
+- `*_sensorData_hex.csv`만 읽는다. HEX를 수신과 같은 디코드 함수로 다시 푼다(`_decoded_samples.csv`는 안 읽음). 디코드가 안 되는 줄은 실시간 수신처럼 건너뛴다.
+- 모든 파일의 줄을 `received_at` 순으로 넣는다. `assign_set`이 MAC의 직전 패킷과 seq를 비교해 X/Y/Z 세트를 묶으므로 받은 순서대로 넣어야 한다.
+- `--reset`: 먼저 `sensor.sqlite.bak-날짜-시각`으로 백업한다(git 제외). `packet`, `measurement`, `stat_cursor`, `stat_meta`를 지우고 device의 마지막 수신 정보를 비운다. 표시 이름, 한계값, 설정 JSON, MQTT 설정, 평면도와 배치는 남긴다.
+- 끝나면 통계 최신화를 한 번 돌린다(`--no-stats`로 끔). 대문·통계의 SRSS 알람 값이 바로 보인다.
+
 ## 파일·DB 재전송
 
 `/generator`와 `/studio`는 같은 `ReplayService` 하나를 쓴다. 데이터가 어디서 왔는지만 다르다.
@@ -261,7 +289,7 @@ LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같�
 
 ## 통계
 
-통계는 패킷이 도착할 때 만들지 않는다. 통계 화면에서 최신화 버튼을 누르고 확인하거나, 서버가 켜진 동안 날짜가 바뀌어 하루 한 번 확인할 때만 `update_statistics`가 돈다. 하루 확인 스레드는 `routes/db.start_daily_stats`가 프로세스에 하나만 켠다. 두 경로가 겹쳐도 `Store.stats_lock` 때문에 최신화는 차례로 돈다.
+통계는 패킷이 도착할 때 만들지 않는다. 서버가 켜진 동안 날짜가 바뀌면 하루 한 번(자정 뒤 10분 안) `update_statistics`가 돈다. 하루 확인 스레드는 `routes/db.start_daily_stats`가 프로세스에 하나만 켠다. 화면의 최신화 버튼은 없앴다(2026-11-18, 모두 같은 계산 시각을 보게). 명령줄 `import_csv`도 끝에 한 번 돌리며, 겹쳐도 `Store.stats_lock` 때문에 차례로 돈다.
 
 최신화 한 번은 MAC마다 다음 순서로 돈다. 패킷 수신은 그동안에도 계속된다.
 
@@ -303,7 +331,8 @@ LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같�
 | 패킷 저장 때 직전 패킷 조회 | `assign_set`이 `WHERE mac, sensor_type ORDER BY id DESC LIMIT 1`로 직전 ADXL을 찾는다. 인덱스가 `(mac, received_at)`뿐이라 그 MAC의 행을 모두 정렬한다 | 행이 쌓일수록 저장 한 번이 느려진다. 시험 DB에서 같은 MAC 1만 행 약 4 ms, 10만 행 약 46 ms, 50만 행 약 234 ms. `(mac, sensor_type, id)` 인덱스를 추가하면 0.3 ms 안팎이다. 저장이 느려지면 수신 스레드와 수신 화면 갱신도 같이 늦어진다 |
 | 통계 읽기, `/studio` 최근 N세트 | 같은 인덱스 문제로 그 MAC의 행을 정렬하거나 `set_key`로 묶는다 | 패킷이 많을수록 느려진다. 위 인덱스로 통계 읽기는 함께 빨라진다 |
 | `GET /api/db/devices` | MAC마다 `packet`의 전체 행 수를 센다 | 분석·설정 화면에서 MAC 목록을 열 때 전체 패킷 수에 비례해 느려진다 |
-| MQTT 끊김 | paho가 다시 붙어도 구독을 다시 하지 않는다. 화면은 끊김으로 표시한다 | 브로커가 재시작되거나 네트워크가 끊겼다 붙으면 수신이 멈춘다. 수신 화면에서 다시 연결해야 한다 |
+| MQTT 끊김 | 고쳤다. 구독을 `_on_connect`에서 하므로 paho가 다시 붙으면 다시 구독한다. 끊긴 동안 온 메시지(QoS 0)는 없다 | 끊긴 동안의 측정은 저장되지 않는다 |
+| retain 설정으로 생기는 장치 | 구독하면 브로커가 가진 `S/{MAC}` retain 설정을 모두 받아 `sensor_config`에 남기고, `device`에도 그 MAC이 생긴다 | 데이터를 보낸 적 없는 MAC도 대문·설정·통계 목록에 나온다(대문에서는 '기록 없음') |
 | 수신 그래프 옵션 | `MonitorService.view_options`, `window`가 서버에 하나다 | 브라우저 두 개로 수신 화면을 열면 한쪽에서 바꾼 옵션이 다른 쪽에도 적용된다 |
 | 재전송 목록 | `/generator`와 `/studio`가 `replay.templates`를 같이 쓴다 | 한 화면에서 연 데이터가 다른 화면의 같은 센서 목록을 덮는다 |
 | 보존 기간 | `packet`을 지우지 않는다. 한 줄이 약 55~90 KB(HEX와 디코드 샘플을 함께 저장)다 | 1초 주기 ADXL 한 대면 하루 수 GB가 늘어난다. 용량과 위의 조회 속도에 영향을 준다 |

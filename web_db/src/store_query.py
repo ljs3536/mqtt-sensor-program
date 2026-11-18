@@ -135,7 +135,7 @@ class QueryMixin:
     def update_statistics(self):
         """마지막 통계 이후의 완성 XYZ만 모아 measurement에 구간 한 줄을 추가한다.
 
-        스케줄러와 최신화 버튼이 겹치면 뒤에 온 쪽은 앞 최신화가 끝날 때까지 기다린다.
+        부르는 곳은 하루 스케줄러와 명령줄 import_csv다. 둘이 겹치면 뒤에 온 쪽은 앞 최신화가 끝날 때까지 기다린다.
         계산은 self.lock 밖에서 하므로, 이 잠금이 없으면 둘이 같은 through_id를 읽는다.
         """
         with self.stats_lock:

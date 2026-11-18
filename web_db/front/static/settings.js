@@ -138,3 +138,63 @@ document.querySelector("#addDevice").onclick = async () => {
 };
 
 load().catch((error) => note(error.message));
+
+// ---------- 수신 MQTT 자동 연결 (/api/site/mqtt) ----------
+const mqttFields = {
+  host: document.querySelector("#mqttHost"),
+  port: document.querySelector("#mqttPort"),
+  topic: document.querySelector("#mqttTopic"),
+  csv: document.querySelector("#mqttCsv"),
+  auto: document.querySelector("#mqttAuto"),
+};
+const mqttNote = document.querySelector("#mqttNote");
+
+/** 지금 수신 연결 상태를 알약 모양 표시에 넣는다. */
+function showReceiver(receiver) {
+  const pill = document.querySelector("#mqttState");
+  pill.className = "pill " + (receiver.connected ? "on" : "off");
+  pill.textContent = receiver.connected
+    ? `연결됨 ${receiver.host}:${receiver.port}${receiver.origin === "auto" ? " (자동)" : ""}`
+    : receiver.active ? "연결 시도 중" : "연결 안 됨";
+}
+
+/** 저장된 값과 연결 상태를 읽어 칸을 채운다. */
+async function loadMqtt() {
+  const response = await fetch("/api/site/mqtt");
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "MQTT 설정 읽기 실패");
+  const cfg = data.settings;
+  mqttFields.host.value = cfg.host;
+  mqttFields.port.value = cfg.port;
+  mqttFields.topic.value = cfg.topic;
+  mqttFields.csv.checked = !!cfg.csv;
+  mqttFields.auto.checked = !!cfg.auto;
+  showReceiver(data.receiver);
+}
+
+document.querySelector("#mqttSave").onclick = async () => {
+  const body = {
+    host: mqttFields.host.value.trim(),
+    port: Number(mqttFields.port.value),
+    topic: mqttFields.topic.value.trim(),
+    csv: mqttFields.csv.checked,
+    auto: mqttFields.auto.checked,
+  };
+  const response = await fetch("/api/site/mqtt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    mqttNote.textContent = data.detail || "저장 실패";
+    return;
+  }
+  showReceiver(data.receiver);
+  mqttNote.textContent = data.started
+    ? "저장했습니다. 이 값으로 연결을 시작했습니다(브로커가 꺼져 있으면 계속 다시 시도합니다)."
+    : "저장했습니다. 자동 연결이 꺼져 있어 지금 연결은 바꾸지 않았습니다.";
+  // 백그라운드 연결이 붙었는지 잠시 뒤 한 번 더 본다.
+  setTimeout(() => loadMqtt().catch(() => {}), 2000);
+};
+loadMqtt().catch((error) => (mqttNote.textContent = error.message));

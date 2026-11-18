@@ -3,7 +3,8 @@
 역할:
 - device: MAC 명부와 표시 이름
 - packet: CSV와 같은 수신 원본. 통계 계산은 하지 않는다
-- sensor_config: 설정 적용 때 보낸 JSON
+- sensor_config: 설정 적용 때 보낸 JSON, 브로커 retain으로 받은 S/{MAC} 설정
+- app_setting, floor_plan, sensor_placement: 앱 설정(MQTT 자동 연결)과 대문 평면도 → store_site.SiteMixin
 - measurement 조회와 최신화는 store_query.QueryMixin
 """
 
@@ -18,12 +19,15 @@ from pathlib import Path
 from web_db.src.db_util import _float, _int, _iso, _rate, _samples_text
 from web_db.src.grouping import assign_set
 from web_db.src.store_query import QueryMixin
+from web_db.src.store_site import SiteMixin
 
-ROOT = Path(__file__).resolve().parents[1]
-DB_PATH = ROOT / "sensor.sqlite"
+from web_db.src.paths import DB_FILE
+
+# 기본 DB 파일. SENSOR_DATA_DIR가 있으면 그 폴더(Docker 볼륨), 없으면 web_db/sensor.sqlite(paths.py).
+DB_PATH = DB_FILE
 
 
-class Store(QueryMixin):
+class Store(QueryMixin, SiteMixin):
     """sensor.sqlite 하나를 프로세스 전체가 같이 쓰는 저장소.
 
     연결은 하나다(check_same_thread=False). MQTT 수신 스레드, HTTP 요청 스레드,
@@ -58,6 +62,9 @@ class Store(QueryMixin):
         - measurement: 최신화 구간마다 한 줄인 통계
         - stat_cursor: MAC별 통계 읽기 위치
         - srss_limit, sensor_config, stat_meta: 한계값, 마지막 설정 JSON, 마지막 최신화 시각
+        - app_setting: 키별 JSON 설정(지금은 'mqtt' 자동 연결 값)
+        - floor_plan, sensor_placement: 대문 평면도(여러 장, 탭 순서 sort_order)와 센서 아이콘 위치(비율 0~1).
+          평면도 한 장에 센서 여러 개, 센서 하나는 평면도 한 장에만
         """
         self._conn.executescript(
             """
@@ -136,9 +143,38 @@ class Store(QueryMixin):
                 key TEXT PRIMARY KEY,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS app_setting (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS floor_plan (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '평면도',
+                file TEXT NOT NULL DEFAULT '',
+                width INTEGER NOT NULL,
+                height INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS sensor_placement (
+                plan_id INTEGER NOT NULL REFERENCES floor_plan(id) ON DELETE CASCADE,
+                mac TEXT NOT NULL,
+                x REAL NOT NULL,
+                y REAL NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (plan_id, mac)
+            );
             DROP TABLE IF EXISTS daily_stat;
             """
         )
+        # 평면도 여러 장(탭 순서). 한 장만 쓰던 때 만든 floor_plan에는 sort_order가 없어서 붙인다.
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(floor_plan)")}
+        if "sort_order" not in columns:
+            self._conn.execute("ALTER TABLE floor_plan ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        # 옛 스키마에서 남은 MAC 빈 device 줄(mac이 NULL)은 화면 목록을 어지럽히므로 지운다.
+        self._conn.execute("DELETE FROM device WHERE mac IS NULL OR TRIM(mac)=''")
         self._conn.commit()
 
     def save_display_name(self, mac, name):
@@ -248,14 +284,24 @@ class Store(QueryMixin):
             self._conn.execute("DELETE FROM srss_limit WHERE mac=?", (key,))
             self._conn.commit()
 
-    def save_sensor_config(self, mac, payload, action):
-        """설정 적용으로 보낸 JSON을 그 MAC의 sensor_config에 남긴다."""
+    def save_sensor_config(self, mac, payload, action, only_if_changed=False):
+        """설정 JSON을 그 MAC의 sensor_config에 남긴다(MAC당 마지막 하나).
+
+        - 웹이 설정 적용·START·STOP으로 보낸 JSON(action = 버튼 이름).
+        - 구독 중 S/{MAC}로 받은 설정(action = 'retain 수신'). 브로커가 구독 순간 주는 retain 값이라
+          데스크톱 수신기가 보낸 설정도 여기 남는다. 대문 연결 판정이 SENSING_PERIOD와 STOP(SENSORTYPE 0)을 읽는다.
+        only_if_changed=True면 저장된 JSON과 같을 때 쓰지 않는다(자기가 보낸 retain이 되돌아올 때 이름을 덮지 않게).
+        """
         mac = str(mac or "").strip()
         if not mac:
             return
         now = _iso()
         text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         with self.lock:
+            if only_if_changed:
+                row = self._conn.execute("SELECT payload FROM sensor_config WHERE mac=?", (mac,)).fetchone()
+                if row is not None and row["payload"] == text:
+                    return False
             self._conn.execute(
                 """
                 INSERT INTO device(mac, created_at, updated_at, last_gw, last_battery, last_sensor, last_at)
@@ -276,6 +322,7 @@ class Store(QueryMixin):
                 (mac, str(action or ""), text, now),
             )
             self._conn.commit()
+        return True
 
     def device_profile(self, mac):
         """표시 이름과 마지막으로 저장한 설정 JSON을 돌려준다."""

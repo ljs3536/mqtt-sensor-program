@@ -8,15 +8,25 @@ from pathlib import Path
 
 import numpy as np
 
-APP_DIR = Path(__file__).resolve().parents[2]
+from web_db.src.paths import ROOT, SETTINGS_DIR
+
+# 저장 위치. Docker에서는 SENSOR_DATA_DIR(볼륨)이고, 그냥 실행하면 저장소 루트다(paths.py).
+APP_DIR = SETTINGS_DIR
+
+
+def _settings_file(name):
+    """읽을 보정 파일. 데이터 폴더에 아직 없으면(Docker 첫 실행) 저장소 루트의 기본 파일을 읽는다."""
+    path = APP_DIR / name
+    return path if path.exists() else ROOT / name
+
 
 MEMS_SCALE_FILENAME = "mems_lsb_scale.json"
 MEMS_DEFAULT_G_PER_LSB = 1.0 / 256.0
 
 def read_mems_g_per_lsb():
-    """프로젝트 루트 JSON에서 1 LSB당 g를 읽는다. 없으면 1/256이다."""
+    """데이터 폴더(없으면 저장소 루트) JSON에서 1 LSB당 g를 읽는다. 없으면 1/256이다."""
     try:
-        path = APP_DIR / MEMS_SCALE_FILENAME
+        path = _settings_file(MEMS_SCALE_FILENAME)
         value = float(json.loads(path.read_text(encoding="utf-8"))["g_per_lsb"])
         if math.isfinite(value) and 0 < value <= 10:
             return value
@@ -25,7 +35,7 @@ def read_mems_g_per_lsb():
     return MEMS_DEFAULT_G_PER_LSB
 
 def save_mems_g_per_lsb(value):
-    """1 LSB당 g를 프로젝트 루트 JSON에 저장한다."""
+    """1 LSB당 g를 데이터 폴더 JSON에 저장한다(그냥 실행하면 저장소 루트)."""
     value = float(value)
     if not math.isfinite(value) or not 0 < value <= 10:
         raise ValueError("1 LSB당 g 값은 0보다 크고 10 이하여야 합니다.")
@@ -75,7 +85,7 @@ def validate_mems_correction(values):
 def load_mems_correction():
     """보정 JSON을 읽는다. 없으면 기본 보정이다."""
     try:
-        path = APP_DIR / MEMS_CORRECTION_FILENAME
+        path = _settings_file(MEMS_CORRECTION_FILENAME)
         return validate_mems_correction(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, TypeError, KeyError):
         return dict(MEMS_CORRECTION_DEFAULTS)

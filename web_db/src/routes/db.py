@@ -1,4 +1,8 @@
-"""/api/db. SQLite 조회와 통계 최신화."""
+"""/api/db. SQLite 조회와 하루 한 번 통계 스케줄러.
+
+통계 계산은 화면에서 시키지 않는다(최신화 버튼·API 없음, 2026-11-18). 스케줄러와
+명령줄 도구(import_csv)만 store.update_statistics를 부른다.
+"""
 
 import threading
 import time
@@ -98,12 +102,6 @@ def start_daily_stats():
 def db_dashboard():
     """저장된 통계만 조회한다. 계산은 하지 않는다."""
     return store.dashboard()
-
-
-@router.post("/api/db/update-stats")
-def db_update_stats():
-    """통계 화면의 최신화 버튼. 마지막 읽기 위치 뒤의 새 완성 세트만 통계로 만든다."""
-    return store.update_statistics()
 
 
 @router.get("/api/db/devices")

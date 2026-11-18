@@ -10,11 +10,14 @@ DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 �
 | --- | --- |
 | `device` | MAC 명부. 표시 이름과 마지막 수신 정보. MAC당 한 줄 |
 | `packet` | 수신 원본. 디코드된 패킷마다 한 줄씩 계속 추가한다. 통계 숫자는 없다 |
-| `sensor_config` | 그 MAC에 마지막으로 retain 전송한 설정 JSON. MAC당 한 줄 |
+| `sensor_config` | 그 MAC의 마지막 설정 JSON. 웹이 retain 전송한 것과, 구독 중 `S/{MAC}`로 받은 설정(브로커 retain 포함, 데스크톱이 보낸 것도)을 같이 남긴다. MAC당 한 줄 |
 | `srss_limit` | 설정 화면에서 저장한 MAC별 SRSS 한계(mm/s RMS). 통계 막대와 그래프 기준선이 읽는다 |
 | `measurement` | 통계 결과. 최신화 한 번에 MAC마다 구간 한 줄을 추가한다. 이전 줄은 지우지 않는다 |
 | `stat_cursor` | MAC마다 통계가 이미 본 마지막 packet id. 다음 최신화는 그 다음부터 읽는다. MAC당 한 줄 |
 | `stat_meta` | `measurement`를 마지막으로 만든 시각. 키는 `measurement` 하나다 |
+| `app_setting` | 키 하나에 JSON 하나인 앱 설정. 지금은 `mqtt`(설정 화면의 수신 Broker·Port·Topic·CSV·자동 연결) |
+| `floor_plan` | 대문 평면도 이미지 정보. 여러 장(층·구역마다 한 장, 화면은 탭). 이미지 파일은 DB 옆 `site_files/`에 둔다 |
+| `sensor_placement` | 평면도 위 센서 아이콘 위치. x·y는 이미지 폭·높이에 대한 비율(0~1). 평면도 한 장에 센서 여러 개, 센서 하나는 평면도 한 장에만 |
 
 통계의 저장소는 `measurement` 한 곳이다.
 
@@ -32,9 +35,12 @@ DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 �
 | `packet` | `id`(PK, AUTOINCREMENT), `mac`, `received_at`, `gw_mac`, `sensor_type`(PIEZO·ADXL·ULTRASONIC), `axis`(X·Y·Z, PIEZO, H), `seq`, `tick`, `battery`, `sample_rate`, `sample_count`, `payload_bytes`, `sensor_data_hex`, `decoded_samples`, `min_khz`, `interval_hz`, `freq_start_khz`, `freq_end_khz`, `set_key`, `set_no` |
 | `measurement` | 아래 measurement 절 |
 | `srss_limit` | `mac`(PK, 정규화한 키), `limit_mm_s`, `updated_at` |
-| `sensor_config` | `mac`(PK), `action`(설정 적용·START·STOP), `payload`(JSON 문자열), `updated_at` |
+| `sensor_config` | `mac`(PK), `action`(설정 적용·START·STOP·`retain 수신`), `payload`(JSON 문자열), `updated_at` |
 | `stat_cursor` | `mac`(PK), `through_id`, `updated_at` |
 | `stat_meta` | `key`(PK), `updated_at` |
+| `app_setting` | `key`(PK), `value`(JSON 문자열), `updated_at` |
+| `floor_plan` | `id`(PK, AUTOINCREMENT), `name`, `file`(site_files 안 이름 `floor_plan_{id}.{확장자}`), `width`, `height`(원본 픽셀), `sort_order`(탭 순서, 한 장만 쓰던 DB에는 시작할 때 열을 붙인다), `created_at`, `updated_at` |
+| `sensor_placement` | `plan_id`(→floor_plan, 삭제 시 함께 삭제), `mac`, `x`, `y`(0~1), `updated_at`. PK는 (`plan_id`, `mac`). MAC 하나가 한 평면도에만 있게 하는 것은 `replace_placements`가 지킨다 |
 
 인덱스는 `packet(mac, received_at)`, `packet(set_key)`, `measurement(mac, received_at)`이다.
 
@@ -52,18 +58,20 @@ PIEZO와 초음파도 같은 테이블에 쌓인다. 통계 계산의 대상은 
 
 ## measurement
 
-MAC당 통계는 두 층이다. 구간 줄은 최신화 버튼이나 스케줄러가 돌 때마다 그때까지 아직 넣지 않은 완성 세트만 모아 한 줄 추가한다. 이전 줄은 지우지 않는다. 화면의 전체 값은 이 줄들을 세트 수로 가중해 평균한 것이고, PEAK 전체는 구간 PEAK의 최댓값이다. 작은 그래프는 최근 구간 최대 40개의 RMS와 PEAK다.
+MAC당 통계는 두 층이다. 구간 줄은 하루 스케줄러(또는 명령줄 import_csv)가 돌 때마다 그때까지 아직 넣지 않은 완성 세트만 모아 한 줄 추가한다. 이전 줄은 지우지 않는다. 화면의 전체 값은 이 줄들을 세트 수로 가중해 평균한 것이고, PEAK 전체는 구간 PEAK의 최댓값이다. 작은 그래프는 최근 구간 최대 40개의 RMS와 PEAK다.
 
 갱신 시점은 둘이다.
 
-- 통계 화면에서 최신화 버튼을 누르고 확인할 때
-- 서버가 켜져 있는 동안 스케줄러가 같은 최신화를 실행할 때
+- 서버가 켜져 있는 동안 하루 스케줄러가 최신화를 실행할 때(자정 뒤 10분 안)
+- 명령줄 `python -m web_db.src.import_csv`가 CSV를 넣은 뒤 한 번 실행할 때
+
+통계 화면의 최신화 버튼과 `POST /api/db/update-stats`는 없앴다(2026-11-18). 사람마다 다른 시각에 최신화하면 보는 값의 기준 시각이 달라 혼란스럽기 때문이다.
 
 둘 다 하는 일은 같다. 그 MAC의 `packet` 가운데 읽기 위치(`stat_cursor.through_id`와 `measurement.through_id` 중 큰 값)보다 나중 것만 읽어 완성된 ADXL X/Y/Z 세트를 고르고, 그 구간을 `measurement`에 한 줄 추가한다. 축이 아직 덜 온 끝부분은 다음 최신화로 남긴다. 수신 콜백에서는 하지 않는다.
 
 스케줄러는 서버 프로세스에 스레드 하나(`daily-stats`)다. `routes/db.start_daily_stats`가 켜고, 이미 살아 있으면 새로 만들지 않는다. 10분마다 `stat_meta` 날짜를 보고, 오늘보다 이전이면 최신화한다.
 
-최신화는 한 번에 하나만 돈다. `Store.stats_lock`이 `update_statistics` 전체를 감싼다. 스케줄러와 최신화 버튼이 겹치면 뒤에 온 쪽은 앞의 최신화가 끝날 때까지 기다린 뒤, 앞이 남긴 읽기 위치 다음부터 읽는다. 그래서 같은 구간이 두 번 들어가지 않는다. 세트 계산은 DB 잠금(`Store.lock`) 밖에서 하므로, 그동안 수신 저장은 막히지 않는다.
+최신화는 한 번에 하나만 돈다. `Store.stats_lock`이 `update_statistics` 전체를 감싼다. 스케줄러와 import_csv가 겹치면 뒤에 온 쪽은 앞의 최신화가 끝날 때까지 기다린 뒤, 앞이 남긴 읽기 위치 다음부터 읽는다. 그래서 같은 구간이 두 번 들어가지 않는다. 세트 계산은 DB 잠금(`Store.lock`) 밖에서 하므로, 그동안 수신 저장은 막히지 않는다.
 
 한 줄에 넣는 값은 그 구간에 새로 들어온 완성 세트만의 결과다. 전체 평균은 줄을 다시 합쳐 만들지, 이 줄 하나가 전체를 덮어쓰지는 않는다.
 
@@ -112,4 +120,4 @@ MAC당 통계는 두 층이다. 구간 줄은 최신화 버튼이나 스케줄�
 
 ## 구현
 
-통계 최신화는 이 명세대로 한다. 수신 중에는 `packet`만 늘리고 `measurement`는 건드리지 않는다. 최신화 버튼과 스케줄러는 아직 넣지 않은 패킷만 읽어 구간 한 줄을 추가한다.
+통계 최신화는 이 명세대로 한다. 수신 중에는 `packet`만 늘리고 `measurement`는 건드리지 않는다. 하루 스케줄러는 아직 넣지 않은 패킷만 읽어 구간 한 줄을 추가한다.

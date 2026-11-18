@@ -9,8 +9,8 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=22">
-  <link rel="stylesheet" href="/static/theme.css?v=10">
+  <link rel="stylesheet" href="/static/style.css?v=23">
+  <link rel="stylesheet" href="/static/theme.css?v=11">
   <style>
     .dash-note { color: #64748b; margin: 0 0 12px; }
     .board { display: grid; gap: 14px; }
@@ -42,7 +42,8 @@
   <header>
     <strong class="brand">센서 통계</strong>
     <nav>
-      <a href="/">센서 수신 모니터</a>
+      <a href="/">센서 현황</a>
+      <a href="/receiver">센서 수신 모니터</a>
       <a href="/generator">데이터 분석 CSV</a>
       <a href="/studio">센서 데이터 분석</a>
       <a class="active" href="/dashboard">통계</a>
@@ -52,8 +53,7 @@
   <main>
     <section class="card">
       <h2>MAC별 통계</h2>
-      <p class="dash-note" id="updatedNote">막대와 숫자는 전체 평균입니다. 작은 그래프는 최신화마다 새로 들어온 구간입니다.</p>
-      <button type="button" class="secondary" id="reload">최신화</button>
+      <p class="dash-note" id="updatedNote">통계는 매일 자정 뒤 자동으로 계산됩니다.</p>
       <div class="board" id="board"></div>
     </section>
   </main>
@@ -62,9 +62,10 @@
     /*
      * 통계 화면. 서버가 이미 만든 measurement 값만 읽어 그린다. 이 화면에서는 계산하지 않는다.
      * - 페이지를 열 때 /api/db/dashboard를 한 번 읽어 그린다. 반복 조회는 하지 않는다.
-     *   measurement는 최신화(이 버튼 또는 하루 스케줄러) 때만 바뀌므로, 그 사이에는 값이 그대로다.
+     *   measurement는 하루 한 번(자정 뒤) 서버 스케줄러가 계산할 때만 바뀐다. 그 사이에는 값이 그대로다.
      *   열어 둔 동안 스케줄러가 돌았으면 페이지를 다시 열 때 반영된다.
-     * - 최신화 버튼만 확인을 받은 뒤 /api/db/update-stats로 최신화를 요청하고, 끝나면 다시 읽는다.
+     * - 화면에서 계산을 시키는 버튼은 없다. 사람마다 다른 시각에 최신화하면 보는 값의 기준 시각이
+     *   서로 달라져 혼란스럽기 때문이다(2026-11-18 결정). 모두 같은 '마지막 계산 시각'을 본다.
      */
     const board = document.querySelector("#board");
     const charts = [];
@@ -75,12 +76,10 @@
       return Number.isFinite(number) ? number.toFixed(digits) : "-";
     }
 
-    /* 마지막 최신화 시각부터 지금까지 몇 시간인지. 시각이 없거나 읽을 수 없으면 null. */
-    function hoursSince(updatedAt) {
-      if (!updatedAt) return null;
-      const stamp = new Date(updatedAt).getTime();
-      if (!Number.isFinite(stamp)) return null;
-      return Math.max(0, Math.floor((Date.now() - stamp) / 3600000));
+    /* 마지막 계산 시각 "YYYY-MM-DD HH:MM". 없으면 null. 보는 사람 모두에게 같은 글자가 보이게 서버 값을 그대로 자른다. */
+    function stampText(updatedAt) {
+      const text = String(updatedAt || "").replace("T", " ").slice(0, 16);
+      return text.length === 16 ? text : null;
     }
 
     /*
@@ -135,10 +134,11 @@
      */
     function paint(data) {
       const items = data.items || [];
-      const hours = hoursSince(data.updated_at);
-      document.querySelector("#updatedNote").textContent = hours === null
-        ? "통계 데이터가 아직 최신화되지 않았습니다. 막대는 전체 평균이고, 그래프는 구간별 변화입니다."
-        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다. 막대는 전체 평균이고, 그래프는 구간별 변화입니다.`;
+      const stamp = stampText(data.updated_at);
+      document.querySelector("#updatedNote").textContent = (stamp === null
+        ? "아직 계산된 통계가 없습니다. "
+        : `마지막 계산 ${stamp}. `) +
+        "통계는 매일 자정 뒤 자동으로 계산됩니다. 막대는 전체 평균이고, 그래프는 하루 구간별 변화입니다.";
       if (!items.length) {
         board.innerHTML = "<p>등록된 MAC이 없습니다.</p>";
         return;
@@ -158,7 +158,7 @@
         const peak = JSON.stringify(series.map((point) => point.peak));
         const name = item.display_name ? `<small>${item.display_name}</small>` : "";
         const sets = Number(item.set_count) || 0;
-        const range = sets ? `전체 ${sets}세트 · 구간 ${series.length}개` : "최신화 전";
+        const range = sets ? `전체 ${sets}세트 · 구간 ${series.length}개` : "통계 전";
         return `<div class="channel">
           <div class="mac">${item.mac}${name}<small>${range}</small></div>
           <div>
@@ -185,34 +185,8 @@
       paint(data);
     }
 
-    /*
-     * 최신화: 마지막 최신화가 몇 시간 전인지 보여 주고 확인을 받는다.
-     * 확인하면 서버가 마지막 위치 뒤의 완성 X/Y/Z 세트만 새 구간으로 넣는다.
-     * 다른 최신화(하루 스케줄러)가 도는 중이면 서버에서 끝날 때까지 기다린 뒤 이어서 한다.
-     */
-    document.querySelector("#reload").onclick = async () => {
-      const data = await fetch("/api/db/dashboard").then((response) => response.json());
-      const hours = hoursSince(data.updated_at);
-      const message = hours === null
-        ? "통계 데이터가 아직 최신화되지 않았습니다. 마지막 통계 이후의 완성 세트만 구간으로 넣습니다. 최신화 하시겠습니까?"
-        : `통계 데이터가 ${hours}시간 전에 최신화되었습니다. 그 이후에 들어온 완성 세트만 새 구간으로 넣습니다. 최신화 하시겠습니까?`;
-      if (!confirm(message)) {
-        paint(data);
-        return;
-      }
-      const updated = await fetch("/api/db/update-stats", { method: "POST" }).then((response) => response.json());
-      if (updated.detail) {
-        alert(updated.detail);
-        return;
-      }
-      const added = Number(updated.macs) || 0;
-      await load();
-      alert(added
-        ? `${added}개 MAC에 새 구간을 넣었습니다. 막대는 전체 평균이고, 작은 그래프에 점이 추가됩니다.`
-        : "마지막 통계 이후에 넣을 완성 세트가 없습니다. 새로 들어온 X/Y/Z 세트가 있어야 값이 바뀝니다.");
-    };
     load().catch((error) => alert(error.message));
   </script>
-  <script src="/static/theme.js?v=2"></script>
+  <script src="/static/theme.js?v=3"></script>
 </body>
 </html>

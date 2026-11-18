@@ -37,7 +37,13 @@ def _with_includes(name):
 
 @router.get("/")
 def home():
-    """센서 수신 모니터. CSV와 SQLite에 수신 원본을 남긴다."""
+    """대문: 센서 현황(평면도 위 센서 아이콘, 연결·수신·알람). /api/site 를 쓴다."""
+    return FileResponse(FRONT / "site.html")
+
+
+@router.get("/receiver")
+def receiver_page():
+    """센서 수신 모니터. CSV와 SQLite에 수신 원본을 남긴다(예전에는 / 주소였다)."""
     return FileResponse(FRONT / "index.html")
 
 

@@ -126,6 +126,10 @@ class MonitorService:
         self.host = "127.0.0.1"
         self.port = 1883
         self.topic = "V/#,D/#"
+        # 실제로 구독할 토픽 목록(S/# 포함). 다시 붙을 때(_on_connect) 이 목록으로 다시 구독한다.
+        self._topics = []
+        # 'auto'면 설정 화면 값으로 서버가 붙인 연결, 'manual'이면 수신 모니터의 연결 버튼.
+        self.origin = ""
 
     def log(self, text):
         """시각을 붙여 로그 한 줄을 남긴다. 200줄을 넘으면 오래된 줄부터 버린다."""
@@ -140,7 +144,8 @@ class MonitorService:
         """측정 패킷을 디코드해 최신 파형으로 두고 CSV와 SQLite에 넘긴다.
 
         _on_message가 self.lock을 잡은 채 부른다. 순서는 다음과 같다.
-        1. S/{MAC} 토픽이면 센서가 retain으로 들고 있는 설정이다. configs에만 두고 끝낸다.
+        1. S/{MAC} 토픽이면 센서 설정이다(브로커 retain 또는 누가 방금 보낸 설정). configs에 두고,
+           설정 JSON이면 sensor_config에도 남긴다(대문 연결 판정이 주기·STOP을 읽는다). 측정 처리는 하지 않는다.
         2. classify_vibration(PIEZO / ADXL-X·Y·Z)으로 먼저 보고, 아니면 초음파인지 본다.
            samplerate와 numofsample이 다 있어야 진동이다.
         3. sensorData HEX를 샘플로 푼다. 실패하면 로그만 남기고 이 패킷은 저장하지 않는다.
@@ -149,10 +154,19 @@ class MonitorService:
         """
         if str(topic).startswith("S/"):
             mac = str(topic).split("/", 1)[1]
+            # {"CONFIG":"?"}는 조회 요청이다(우리가 보낸 것이 S/#로 되돌아온 것 포함). 설정이 아니므로 버린다.
+            if str(obj.get("CONFIG", "")).strip() == "?":
+                return
             self.configs[mac] = obj
             if mac not in self.devices:
                 self.devices.append(mac)
             self.log(f"설정 수신 S/{mac}")
+            if "SENSORTYPE" in obj:
+                try:
+                    # 같은 JSON이면 쓰지 않는다. 웹이 보낸 retain이 되돌아와도 action 이름이 바뀌지 않는다.
+                    self.store.save_sensor_config(mac, obj, "retain 수신", only_if_changed=True)
+                except Exception as exc:
+                    self.log(f"설정 JSON 저장 실패 {mac}: {exc}")
             return
         device = str(obj.get("dvicMacAddr") or obj.get("deviceId") or "").strip()
         if device and device not in self.devices:
@@ -411,41 +425,92 @@ class MonitorService:
                     "(해당 프레임 제외, 그래프 처리 계속)"
                 )
 
-    def connect_mqtt(self, host, port, topic, csv_enabled=True):
+    def connect_mqtt(self, host, port, topic, csv_enabled=True, background=False, origin="manual"):
         """브로커에 붙고 토픽을 구독한다. CSV가 켜지면 저장 폴더를 연다.
 
-        이전 연결은 먼저 끊는다. 사용자가 고른 토픽에 설정 토픽 S/#를 항상 더한다.
-        구독은 이 함수에서 한 번만 한다. paho가 끊긴 뒤 스스로 다시 붙어도 구독은
-        다시 하지 않으므로, 끊김 로그가 보이면 화면에서 다시 연결해야 한다.
+        - 이전 연결은 먼저 끊는다. 사용자가 고른 토픽에 설정 토픽 S/#를 항상 더한다.
+        - 구독은 _on_connect에서 한다. 그래서 paho가 끊긴 뒤 스스로 다시 붙을 때도 다시 구독한다
+          (예전에는 처음 한 번만 구독해서, 끊겼다 붙으면 데이터가 안 들어왔다).
+        - background=False(수신 모니터 연결 버튼): 지금 바로 붙어 보고, 실패하면 예외를 화면에 돌려준다.
+        - background=True(서버 시작·설정 화면의 자동 연결): connect_async로 붙는다. 브로커가 아직
+          꺼져 있어도 예외 없이 paho가 계속 다시 시도하고, 붙는 순간 _on_connect가 구독한다.
         """
         self.disconnect()
         client = mqtt_client(f"web-monitor-{int(time.time())}")
         client.on_message = self._on_message
         client.on_disconnect = self._on_disconnect
-        client.connect(host, int(port), keepalive=30)
-        client.loop_start()
+        client.on_connect = self._on_connect
+        # 다시 붙기 시도 간격: 1초에서 시작해 최대 30초.
+        client.reconnect_delay_set(min_delay=1, max_delay=30)
         topics = [item.strip() for item in str(topic).replace(";", ",").split(",") if item.strip()]
         if "S/#" not in topics:
             topics.append("S/#")
-        client.subscribe([(item, 0) for item in topics])
+        self._topics = topics
+        self.client = client
+        self.origin = origin
+        self.host, self.port, self.topic = host, int(port), topic
+        if background:
+            client.connect_async(host, int(port), keepalive=30)
+        else:
+            try:
+                client.connect(host, int(port), keepalive=30)
+            except Exception:
+                self.client = None
+                raise
+        client.loop_start()
         self.csv.enabled = bool(csv_enabled)
         folder = self.csv.start_session() if csv_enabled else None
-        self.client = client
-        self.connected = True
+        # 수동 연결은 connect가 성공했으니 바로 연결 상태. 자동 연결은 _on_connect가 켠다.
+        self.connected = not background
         self.mode = "MQTT"
-        self.host, self.port, self.topic = host, int(port), topic
-        self.log(f"MQTT 연결 {host}:{port} 구독={', '.join(topics)}")
+        self.log(
+            f"MQTT {'자동 ' if origin == 'auto' else ''}연결 {'시도 ' if background else ''}"
+            f"{host}:{port} 구독={', '.join(topics)}"
+        )
         if folder:
             self.log(f"CSV 저장 시작 {folder}")
+
+    def _on_connect(self, client, _userdata, _flags, reason_code, *_rest):
+        """브로커가 연결을 받아 줄 때마다(처음·다시 붙을 때) 구독한다."""
+        if client is not self.client:
+            return
+        failure = getattr(reason_code, "is_failure", None)
+        if failure is None:
+            failure = int(reason_code) != 0
+        if failure:
+            self.log(f"MQTT 연결 거절 {reason_code}")
+            return
+        client.subscribe([(item, 0) for item in self._topics])
+        self.connected = True
+        self.mode = "MQTT"
+        self.log(f"MQTT 구독 {', '.join(self._topics)}")
+
+    def auto_connect(self):
+        """설정 화면에 저장한 MQTT 값(app_setting 'mqtt')의 자동 연결이 켜져 있으면 붙는다.
+
+        서버가 켜질 때(server.py)와 설정 화면에서 저장할 때 부른다. 브로커가 꺼져 있어도
+        background 연결이라 서버 시작을 막지 않는다. 돌려주는 값: 연결을 시작했으면 True.
+        """
+        cfg = self.store.get_setting("mqtt") or {}
+        if not cfg.get("auto"):
+            return False
+        self.connect_mqtt(
+            str(cfg.get("host") or "127.0.0.1"),
+            int(cfg.get("port") or 1883),
+            str(cfg.get("topic") or "V/#,D/#"),
+            csv_enabled=bool(cfg.get("csv")),
+            background=True,
+            origin="auto",
+        )
+        return True
 
     def _on_disconnect(self, client, _userdata, *args):
         """이 클라이언트의 연결이 끊기면 수신 상태를 끈다."""
         if client is not self.client:
             return
-        reason = args[0] if args else ""
+        reason = args[1] if len(args) > 1 else (args[0] if args else "")
         self.connected = False
-        self.mode = ""
-        self.log(f"MQTT 연결 끊김 {reason}")
+        self.log(f"MQTT 연결 끊김 {reason} (자동으로 다시 붙기를 시도합니다)")
 
     def disconnect(self):
         """MQTT 연결과 CSV 저장 세션을 닫는다."""
@@ -459,6 +524,7 @@ class MonitorService:
         self.csv.close_session()
         self.connected = False
         self.mode = ""
+        self.origin = ""
 
     def publish_config(self, macs, payload, label, retain=True):
         """S/{MAC} 로 설정 JSON을 보낸다. retain 명령은 끝에 CR LF를 붙인다.
@@ -502,6 +568,7 @@ class MonitorService:
             payload = {
                 "connected": self.connected,
                 "mode": self.mode,
+                "origin": self.origin,
                 "messages": self.messages,
                 "logs": list(self.logs),
                 "devices": list(self.devices),
