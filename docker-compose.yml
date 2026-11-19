@@ -1,31 +1,28 @@
-# 센서 웹 실행 파일. 접속: http://<서버 주소>:8090
-# 이미지는 미리 만들어 둔 sensor-web:latest를 쓴다(여기서 빌드하지 않는다).
+# 센서 웹. 서버에는 이 파일과 sensor-web.tar 두 개만 두면 된다.
 #
-# 이미지 만들기(소스가 있는 PC):   docker build -t sensor-web:latest .
-# 다른 PC로 옮기기:                python docker/make_bundle.py  → docker-bundle/ 폴더째 복사
-# 옮긴 PC에서:                     docker load -i sensor-web.tar  →  docker compose up -d
-# 자세한 순서: docs/Docker-AWS-배포.md "tar로 옮겨 설치하기"
+#   docker load -i sensor-web.tar
+#   docker compose up -d --force-recreate      → http://<서버 주소>:8090
+# --force-recreate: 새 tar를 load 해도 이미지 이름(sensor-web:latest)이 같으면 떠 있는 컨테이너가
+# 옛 이미지로 계속 돌 수 있다. 컨테이너를 새로 만들어 새 이미지를 확실히 쓰게 한다(데이터는 바깥 폴더라 그대로).
 #
-# 이 파일 옆 폴더(없으면 자동으로 생기지만, Linux에서는 미리 만들고 권한을 주는 것이 안전하다):
-#   ./data/       SQLite(sensor.sqlite), 평면도(site_files/), MEMS 보정 JSON
-#   ./data_csv/   수신 CSV(YYYYMMDD_HHMMSS 폴더). 설정 화면 '수신 MQTT'에서 CSV 저장을 켜야 쌓인다.
+# 이 파일이 있는 폴더 기준으로 아래 두 폴더를 쓴다(로컬·개발 서버·운영 서버 모두 같은 이름).
+#   ./data_csv_web/   수신 CSV(날짜_시각 폴더). 이미 있으면 그대로 읽고(설정 → 'CSV로 일자별 통계'), 새 CSV도 여기에 쌓는다.
+#   ./sensor_web_db/  DB(sensor.sqlite), 평면도 이미지, MEMS 보정 JSON. 처음이면 비어 있는 DB로 시작한다.
+# 컨테이너는 ./data_csv_web 주인과 같은 사용자로 돈다(이미지 안 시작 스크립트). 폴더가 없으면 Docker가 root로 만든다.
 #
-# MQTT 브로커는 여기 넣지 않았다. 센서·게이트웨이가 쓰는 브로커 주소를 설정 화면 '수신 MQTT'에 넣는다.
-# 컨테이너 안의 127.0.0.1은 컨테이너 자신이다. 같은 PC의 브로커는 host.docker.internal 로 적는다.
+# 이미지 만들기(소스 PC): python docker/make_bundle.py  → docker-bundle/ 에 sensor-web.tar 와 이 파일
+# 포트를 바꾸려면 아래 "8090"만 고친다(컨테이너 안은 8081 고정).
+# MQTT 브로커 주소는 설정 화면 '수신 MQTT'에 넣는다. 같은 서버의 브로커면 host.docker.internal.
 services:
   web:
     image: sensor-web:latest
     container_name: sensor-web
     restart: unless-stopped
     ports:
-      # 바깥(서버 PC) 포트 : 컨테이너 안 포트. 안은 항상 8081(Dockerfile)이고 바깥만 바꾼다.
-      # 기본 8090(AWS 보안 그룹에 열려 있는 포트). 바꾸려면 .env 에 WEB_PORT=원하는포트
-      - "${WEB_PORT:-8090}:8081"
+      - "8090:8081"
     volumes:
-      # 컨테이너 /data = DB·평면도·보정 JSON (SENSOR_DATA_DIR, web_db/src/paths.py)
-      - ./data:/data
-      # CSV는 /data/data_csv에 쓰인다. 그 자리만 이 파일 옆 data_csv 폴더로 따로 연결한다.
-      - ./data_csv:/data/data_csv
+      - ./sensor_web_db:/data
+      - ./data_csv_web:/data/data_csv_web
     extra_hosts:
-      # Linux에서도 host.docker.internal 이 호스트 PC를 가리키게 한다(Windows·Mac은 기본 제공).
+      # Linux에서도 host.docker.internal 이 서버 PC를 가리키게 한다(Windows·Mac은 기본 제공).
       - "host.docker.internal:host-gateway"

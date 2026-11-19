@@ -225,3 +225,91 @@ html[data-theme="dark"] .state-warn.card-alert { color: #f5c46b; }
   .site-meta { margin-left: 0; }
   .status-tile { min-width: 0; flex: 1 1 30%; }
 }
+
+/* ---------- 배터리(0~10, 3 이하 빨강) ---------- */
+.battery {
+  display: inline-block; position: relative; width: 22px; height: 11px; border: 1.5px solid var(--site-sub);
+  border-radius: 2px; vertical-align: -1px; margin-right: 4px;
+}
+.battery::after { content: ""; position: absolute; right: -4px; top: 2.5px; width: 2px; height: 4px; background: var(--site-sub); border-radius: 0 1px 1px 0; }
+.battery i { position: absolute; left: 1px; top: 1px; bottom: 1px; max-width: calc(100% - 2px); background: var(--st-ok); border-radius: 1px; }
+.battery.low { border-color: var(--st-alarm); }
+.battery.low::after { background: var(--st-alarm); }
+.battery.low i { background: var(--st-alarm); }
+.battery-num { font-size: 11px; color: var(--site-sub); font-weight: 700; }
+.battery-num.low, .battery-warn { color: var(--st-alarm); }
+.list-battery { display: inline-flex; align-items: center; white-space: nowrap; }
+.marker-battery {
+  position: absolute; top: -6px; left: calc(50% + 8px); width: 16px; height: 16px; border-radius: 50%;
+  background: var(--st-alarm); color: white; font-size: 11px; font-weight: 800; line-height: 16px; text-align: center;
+  border: 1.5px solid white;
+}
+
+/* ---------- 목록 카드 탭: 센서 / 최근 알림 ---------- */
+.list-tabs { gap: 4px; border-bottom: 1px solid var(--site-line); padding-bottom: 6px; }
+.list-tabs button {
+  height: 30px; padding: 0 10px; border-radius: 8px; background: transparent; color: var(--site-sub);
+  border: 1px solid transparent; box-shadow: none; font-size: 13px; font-weight: 700;
+}
+.list-tabs button:hover { background: var(--site-plan-bg); color: var(--site-text); }
+.list-tabs button.active { color: var(--site-text); border-color: var(--site-line); background: var(--site-card-bg); }
+.list-tabs button small { color: var(--site-sub); font-weight: 600; }
+.event-badge {
+  display: inline-block; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 2px; border-radius: 999px;
+  background: var(--st-alarm); color: white; font-size: 11px; line-height: 18px; text-align: center;
+}
+.event-item {
+  display: grid; grid-template-columns: 82px 1fr; gap: 2px 8px; align-items: center; padding: 6px 8px;
+  border: 1px solid var(--site-line); border-radius: 8px; background: var(--site-card-bg); cursor: pointer; font-size: 12px;
+}
+.event-item:hover { border-color: var(--site-accent); }
+.event-time { color: var(--site-sub); font-variant-numeric: tabular-nums; grid-row: span 2; }
+.event-name { color: var(--site-text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.event-change { color: var(--site-sub); }
+.event-change span { color: var(--site-text); font-weight: 700; }
+.event-change i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); margin-right: 4px; }
+.card-history { margin-top: 8px; }
+.card-history small { color: var(--site-sub); font-size: 11px; }
+.card-history ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 3px; }
+.card-history .event-item { grid-template-columns: 82px 1fr; padding: 3px 6px; cursor: default; }
+.card-history .event-time { grid-row: auto; }
+
+/* ---------- 평면도 확대·이동 ---------- */
+.site-plan-wrap { position: relative; touch-action: none; }
+.site-plan-wrap.panning { cursor: grabbing; }
+/* will-change를 쓰면 배율 1로 한 번 그린 그림을 늘려서 확대 때 글자가 흐려진다. 쓰지 않는다. */
+.site-plan-stage { transform-origin: 0 0; }
+/* 확대해도 아이콘·글자는 같은 크기(배율의 역수로 줄임) */
+.sensor-marker { transform: translate(-50%, -50%) scale(calc(1 / var(--zoom, 1))); }
+.zoom-tools {
+  position: absolute; right: 10px; top: 10px; z-index: 6; display: flex; align-items: center; gap: 2px;
+  padding: 3px; border-radius: 8px; background: var(--site-card-bg); border: 1px solid var(--site-line);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+.zoom-tools button {
+  width: 28px; height: 28px; padding: 0; border-radius: 6px; border: 0; box-shadow: none;
+  background: transparent; color: var(--site-text); font-size: 16px; font-weight: 700;
+}
+.zoom-tools button:hover { background: var(--site-plan-bg); }
+.zoom-tools span { min-width: 42px; text-align: center; font-size: 11px; color: var(--site-sub); font-variant-numeric: tabular-nums; }
+
+/* ---------- 목록 검색 ---------- */
+.list-search {
+  width: 100%; height: 32px; margin: 0 0 6px; padding: 0 10px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--site-line); background: var(--site-card-bg); color: var(--site-text);
+}
+
+/* ---------- 알림 확인 ---------- */
+.event-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.event-tools .check { font-size: 12px; min-height: 0; }
+.event-tools button { height: 28px; padding: 0 10px; font-size: 12px; }
+.event-item { position: relative; padding-right: 56px; }
+.event-item.acked { opacity: 0.5; }
+.event-ack {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%); height: 26px; padding: 0 10px;
+  border-radius: 6px; font-size: 12px; box-shadow: none;
+  background: var(--site-card-bg); color: var(--site-accent); border: 1px solid var(--site-line);
+}
+.event-ack:hover { border-color: var(--site-accent); }
+.card-history .event-item { padding-right: 6px; }
+

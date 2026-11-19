@@ -146,8 +146,8 @@ class MonitorService:
         _on_message가 self.lock을 잡은 채 부른다. 순서는 다음과 같다.
         1. S/{MAC} 토픽이면 센서 설정이다(브로커 retain 또는 누가 방금 보낸 설정). configs에 두고,
            설정 JSON이면 sensor_config에도 남긴다(대문 연결 판정이 주기·STOP을 읽는다). 측정 처리는 하지 않는다.
-        2. classify_vibration(PIEZO / ADXL-X·Y·Z)으로 먼저 보고, 아니면 초음파인지 본다.
-           samplerate와 numofsample이 다 있어야 진동이다.
+        2. 초음파(D/ 토픽, 또는 samplerate·numofsample 없음)인지 먼저 보고, 아니면 classify_vibration
+           (PIEZO / ADXL-X·Y·Z). samplerate 값과 numofsample이 다 있어야 진동이다.
         3. sensorData HEX를 샘플로 푼다. 실패하면 로그만 남기고 이 패킷은 저장하지 않는다.
         4. records[MAC][축]에 최신 한 개만 둔다. 수신 화면 그래프는 이것만 그린다.
         5. _save_csv로 CSV 큐와 SQLite packet에 같은 원본을 넘긴다.
@@ -171,9 +171,13 @@ class MonitorService:
         device = str(obj.get("dvicMacAddr") or obj.get("deviceId") or "").strip()
         if device and device not in self.devices:
             self.devices.append(device)
-        classified = mon.classify_vibration(obj)
-        if classified is None and mon.classify_ultrasonic(obj, topic):
+        # 초음파를 먼저 본다(D/ 토픽 또는 samplerate·numofsample이 없는 형식). 진동 패킷은 두 값이 늘 있어서
+        # 순서를 바꿔도 진동이 초음파로 잘못 가지 않는다. 반대로 진동을 먼저 보면, 빈 samplerate가 붙은
+        # 초음파가 seq 상위 0 때문에 PIEZO로 읽혀 디코드 실패로 버려졌다(2026-11-19).
+        if mon.classify_ultrasonic(obj, topic):
             classified = ("ULTRASONIC", None)
+        else:
+            classified = mon.classify_vibration(obj)
         if classified is None:
             self.log(f"{topic} 측정 데이터 아님")
             return
@@ -569,6 +573,12 @@ class MonitorService:
                 "connected": self.connected,
                 "mode": self.mode,
                 "origin": self.origin,
+                # 지금(또는 마지막으로) 붙은 브로커. 수신 모니터 화면이 입력칸 기본값 대신 이것을 보여 준다.
+                # active = 연결 시도 중이거나 연결됨(자동 연결이 브로커를 기다리는 중이면 connected는 False).
+                "host": self.host,
+                "port": self.port,
+                "topic": self.topic,
+                "active": self.client is not None,
                 "messages": self.messages,
                 "logs": list(self.logs),
                 "devices": list(self.devices),

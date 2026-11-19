@@ -17,3 +17,6 @@ docker-data/
 # Docker 옮기기 묶음(docker/make_bundle.py 결과)
 docker-bundle/
 /data/
+# 수신 CSV(로컬·개발·운영 공통 이름) / Docker DB 폴더
+data_csv_web/
+sensor_web_db/

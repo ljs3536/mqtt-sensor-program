@@ -1,11 +1,11 @@
-"""data_csv의 CSV로 일자별 통계(measurement) 다시 만들기.
+"""data_csv_web의 CSV로 일자별 통계(measurement) 다시 만들기.
 
 왜: 운영 서버에는 DB 없이 수신 CSV만 쌓여 있을 수 있다. 그 누적 CSV로 통계 화면·대문 알람을
 채우려면 CSV를 직접 읽어 통계를 내야 한다. 설정 화면 '통계 데이터' 탭의 버튼이 부른다.
 
 무엇을 읽나
-- data_csv 아래(하위 폴더 포함)의 `{MAC}_ADXL-X/Y/Z_sensorData_hex.csv` 세 파일 묶음. 폴더·MAC마다 한 묶음.
-  다른 PC에서 가져온 CSV 폴더도 data_csv 안에 넣으면 같이 읽는다.
+- data_csv_web 아래(하위 폴더 포함)의 `{MAC}_ADXL-X/Y/Z_sensorData_hex.csv` 세 파일 묶음. 폴더·MAC마다 한 묶음.
+  다른 PC에서 가져온 CSV 폴더도 data_csv_web 안에 넣으면 같이 읽는다.
 - X/Y/Z 묶기는 CSV 분석 화면과 같은 load_adxl_csv_xyz(packet_no 세트 번호 → 안 되면 seq).
   깨진 HEX는 복구하지 않고 그 축을 뺀다(세 축이 다 있는 세트만 통계에 들어간다).
 - HEX는 실시간 수신과 같은 decode_vibration_samples로 풀고, 세트 계산은 하루 통계와 같은
@@ -40,17 +40,31 @@ from web_db.src.load_file import load_adxl_csv_xyz
 from web_db.src.paths import DATA_CSV
 from web_db.src.stats_calc import adxl_set_stats, summarize_mac
 
-SUFFIX = "_ADXL-X_sensorData_hex.csv"
 
 
 def find_groups(folder=DATA_CSV):
-    """[(폴더, MAC, {"X": 경로, "Y": 경로, "Z": 경로})]. Y·Z 파일이 없는 묶음은 뺀다."""
+    """[(폴더, MAC, {"X": 경로, "Y": 경로, "Z": 경로})]. Y·Z 파일이 없는 묶음은 뺀다.
+
+    파일 이름은 대소문자를 가리지 않는다. Windows는 원래 안 가리지만 Linux(Docker)는 가려서,
+    '.CSV'나 'adxl-x'처럼 저장된 파일을 놓치지 않게 이름을 소문자로 바꿔 비교한다.
+    """
+    suffix = {axis: f"_adxl-{axis.lower()}_sensordata_hex.csv" for axis in ("X", "Y", "Z")}
+    found = {}  # (폴더, MAC 소문자) → {축: 경로}
+    names = {}  # (폴더, MAC 소문자) → 원래 MAC 글자
+    for path in Path(folder).rglob("*"):
+        if not path.is_file():
+            continue
+        lower = path.name.lower()
+        for axis, end in suffix.items():
+            if lower.endswith(end):
+                mac = path.name[: -len(end)]
+                key = (path.parent, mac.lower())
+                found.setdefault(key, {})[axis] = str(path)
+                names.setdefault(key, mac)
     groups = []
-    for x_path in sorted(Path(folder).rglob(f"*{SUFFIX}")):
-        mac = x_path.name[: -len(SUFFIX)]
-        paths = {axis: x_path.with_name(f"{mac}_ADXL-{axis}_sensorData_hex.csv") for axis in ("X", "Y", "Z")}
-        if all(p.exists() for p in paths.values()):
-            groups.append((x_path.parent, mac, {axis: str(p) for axis, p in paths.items()}))
+    for key in sorted(found, key=lambda k: (str(k[0]), k[1])):
+        if len(found[key]) == 3:
+            groups.append((key[0], names[key], found[key]))
     return groups
 
 

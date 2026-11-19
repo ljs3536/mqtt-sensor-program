@@ -23,7 +23,8 @@ from web_db.src.routes.generator import router as generator_router
 from web_db.src.routes.monitor import router as monitor_router
 from web_db.src.routes.pages import router as pages_router
 from web_db.src.routes.site import router as site_router
-from web_db.src.runtime import monitor
+from web_db.src.runtime import monitor, store
+from web_db.src.site_watch import start_site_watch
 
 app = FastAPI(title="sensor-program-db")
 app.mount("/static", StaticFiles(directory=FRONT / "static"), name="static")
@@ -35,6 +36,8 @@ app.include_router(db_router)
 app.include_router(site_router)
 
 start_daily_stats()
+# 센서 상태가 바뀔 때마다 기록(대문 '최근 알림', 카드의 '3시간째 끊김'). 1분마다, 수신 중일 때만.
+start_site_watch(store, monitor)
 # 설정 화면에서 '서버 시작 때 자동 연결'을 켜 두었으면 그 MQTT 값으로 수신을 시작한다.
 # 백그라운드 연결이라 브로커가 꺼져 있어도 서버는 뜨고, paho가 계속 다시 붙기를 시도한다.
 try:

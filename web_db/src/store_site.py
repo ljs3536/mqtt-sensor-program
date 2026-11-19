@@ -4,6 +4,7 @@
 - app_setting: 키 하나에 JSON 하나. 지금은 'mqtt'(설정 화면의 수신 MQTT 값) 하나.
 - floor_plan: 평면도 이미지 정보. 여러 장(층·구역마다 한 장)이고 화면은 탭으로 고른다.
   이미지 파일은 DB가 아니라 site_dir 폴더에 floor_plan_{id}{확장자}로 둔다. 탭 순서는 sort_order.
+- site_state, site_state_history: 센서별 지금 상태와 시작 시각, 상태가 바뀐 기록(site_watch.py가 1분마다 남긴다).
 - sensor_placement: MAC이 어느 평면도의 어디(x, y)에 있는지. x·y는 이미지 폭·높이에 대한
   비율(0~1)이라 화면 크기가 달라도 같은 자리에 그려진다. MAC 하나는 평면도 한 장에만 놓는다
   (replace_placements가 지킨다. 테이블 키는 (plan_id, mac)이라 DB만으로는 막지 않는다).
@@ -15,6 +16,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from web_db.src.db_util import _iso
@@ -236,13 +238,110 @@ class SiteMixin:
             self._conn.commit()
         return self.placements()
 
+    # ---------- 상태 기록(site_watch) ----------
+    def record_states(self, sensors, now, keep_days=180):
+        """지금 상태를 site_state와 비교해 바뀐 것만 site_state_history에 남긴다. 새 기록 목록을 돌려준다.
+
+        sensors: site_status.build_status의 sensors(state, link, alarm). now: ISO 시각 문자열.
+        - 처음 보는 MAC은 site_state에만 넣는다(이전 상태가 없으니 '바뀜' 기록은 없다).
+        - 상태가 같으면 checked_at만 고친다. 다르면 기록 한 줄 + since를 now로.
+        - keep_days보다 오래된 기록은 지운다(표가 끝없이 커지지 않게).
+        """
+        events = []
+        with self.lock:
+            current = {row["mac"]: dict(row) for row in self._conn.execute("SELECT * FROM site_state")}
+            for item in sensors:
+                mac, state = item["mac"], item["state"]
+                link, alarm = item.get("link", ""), item.get("alarm", "")
+                before = current.get(mac)
+                if before is None:
+                    self._conn.execute(
+                        "INSERT INTO site_state(mac, state, link, alarm, since, checked_at) VALUES (?,?,?,?,?,?)",
+                        (mac, state, link, alarm, now, now),
+                    )
+                    continue
+                if before["state"] == state:
+                    self._conn.execute(
+                        "UPDATE site_state SET link=?, alarm=?, checked_at=? WHERE mac=?", (link, alarm, now, mac)
+                    )
+                    continue
+                self._conn.execute(
+                    "UPDATE site_state SET state=?, link=?, alarm=?, since=?, checked_at=? WHERE mac=?",
+                    (state, link, alarm, now, now, mac),
+                )
+                cursor = self._conn.execute(
+                    "INSERT INTO site_state_history(mac, prev_state, state, link, alarm, changed_at) VALUES (?,?,?,?,?,?)",
+                    (mac, before["state"], state, link, alarm, now),
+                )
+                events.append({"id": cursor.lastrowid, "mac": mac, "prev_state": before["state"], "state": state, "changed_at": now})
+            cutoff = (datetime.fromisoformat(now) - timedelta(days=keep_days)).isoformat(timespec="milliseconds")
+            self._conn.execute("DELETE FROM site_state_history WHERE changed_at < ?", (cutoff,))
+            self._conn.commit()
+        return events
+
+    def state_since(self):
+        """{MAC: (상태, 그 상태가 시작된 시각)}. 대문 카드의 '3시간째 끊김'에 쓴다."""
+        with self.lock:
+            rows = self._conn.execute("SELECT mac, state, since FROM site_state").fetchall()
+        return {row["mac"]: (row["state"], row["since"]) for row in rows}
+
+    def state_events(self, limit=30, mac="", include_acked=True):
+        """최근 상태 변화 기록(새것부터). mac을 주면 그 MAC만. include_acked=False면 확인 안 한 것만."""
+        limit = max(1, min(int(limit or 30), 500))
+        where, args = [], []
+        if mac:
+            where.append("mac=?")
+            args.append(mac)
+        if not include_acked:
+            where.append("acked_at=''")
+        sql = "SELECT * FROM site_state_history"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY id DESC LIMIT ?"
+        with self.lock:
+            rows = self._conn.execute(sql, (*args, limit)).fetchall()
+        return [dict(row) for row in rows]
+
+    def unacked_problems(self):
+        """확인 안 한 문제 알림 수(경보·끊김·주의로 바뀐 기록). 대문 '최근 알림' 탭 배지."""
+        with self.lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM site_state_history WHERE acked_at='' AND state IN ('alarm','lost','warn')"
+            ).fetchone()
+        return int(row[0])
+
+    def ack_events(self, ids=None, all_events=False):
+        """알림 '확인'. ids의 기록(또는 all_events면 확인 안 한 전부)에 확인 시각을 넣는다. 고친 줄 수.
+
+        지우지 않는다. 대문 목록에서 숨길 뿐이고 '확인한 것도 보기'로 다시 볼 수 있다(언제 끊겼는지 추적용).
+        서버에 남기므로 한 사람이 확인하면 다른 화면에서도 사라진다.
+        """
+        now = _iso()
+        with self.lock:
+            if all_events:
+                changed = self._conn.execute(
+                    "UPDATE site_state_history SET acked_at=? WHERE acked_at=''", (now,)
+                ).rowcount
+            else:
+                clean = [int(x) for x in (ids or [])]
+                if not clean:
+                    return 0
+                marks = ",".join("?" * len(clean))
+                changed = self._conn.execute(
+                    f"UPDATE site_state_history SET acked_at=? WHERE acked_at='' AND id IN ({marks})", (now, *clean)
+                ).rowcount
+            self._conn.commit()
+        return int(changed)
+
     # ---------- 상태 판정용 읽기 ----------
     def site_rows(self):
         """대문 상태 API가 쓰는 MAC별 원자료를 한 번에 읽는다.
 
         - device: 이름, 마지막 수신 시각·센서 종류·배터리
         - sensor_config: 마지막 설정 JSON(웹이 보낸 것 + 브로커 retain으로 받은 것)
-        - measurement(ADXL): 통계 화면과 같은 SRSS 전체 평균(세트 수 가중), 마지막 통계 시각
+        - measurement(ADXL): **가장 최근 통계 한 줄**의 SRSS·세트 수·시각(2026-11-19 결정).
+          전체 평균으로 판정하면 지난 문제가 오래 남고 새 문제는 평균에 묻히므로 최근 줄 하나로 판정한다.
+          CSV 일자별 통계면 가장 최근 하루, 하루 통계면 가장 최근 하루 구간이다.
         - packet: 최근 패킷 120개의 (수신 시각, 종류, 축)(연결 판정용 수신 간격). 측정으로 묶는 일은 site_status가 한다.
         """
         with self.lock:
@@ -250,13 +349,16 @@ class SiteMixin:
                 """
                 SELECT d.mac, d.display_name, d.last_at, d.last_sensor, d.last_battery,
                        c.payload AS config, c.updated_at AS config_at, c.action AS config_action,
-                       SUM(m.set_count) AS set_count,
-                       SUM(m.srss_mms * m.set_count) / SUM(m.set_count) AS srss_mms,
-                       MAX(m.last_at) AS stat_last_at
+                       m.set_count AS set_count, m.srss_mms AS srss_mms,
+                       m.last_at AS stat_last_at, m.first_at AS stat_first_at
                 FROM device d
                 LEFT JOIN sensor_config c ON c.mac=d.mac
-                LEFT JOIN measurement m ON m.mac=d.mac AND m.sensor_type='ADXL'
-                GROUP BY d.mac
+                LEFT JOIN measurement m ON m.id = (
+                    SELECT id FROM measurement
+                    WHERE mac=d.mac AND sensor_type='ADXL'
+                    ORDER BY last_at DESC, id DESC LIMIT 1
+                )
+                WHERE d.mac IS NOT NULL AND d.mac<>''
                 ORDER BY d.created_at, d.mac
                 """
             ).fetchall()

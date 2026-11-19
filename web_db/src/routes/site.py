@@ -1,6 +1,8 @@
 """/api/site. 대문(평면도) 대시보드와 설정 화면의 MQTT 자동 연결.
 
-- GET  /api/site/status        센서별 연결·알람 상태와 요약(대문이 15초마다 부른다). 가볍게 유지한다.
+- GET  /api/site/status        센서별 상태·요약·최근 상태 변화(대문이 15초마다 부른다). 가볍게 유지한다.
+- GET  /api/site/events        상태 변화 기록(site_watch가 1분마다 남긴다).
+- POST /api/site/events/ack    알림 확인(목록에서 숨김, 기록은 남김).
 평면도는 여러 장(층·구역마다 한 장, 화면은 탭). 평면도 한 장에 센서 여러 개, 센서 하나는 한 장에만.
 - GET    /api/site/plans               평면도 목록(탭 순서)과 모든 센서 위치.
 - POST   /api/site/plans               평면도 추가(multipart: file, width, height, name).
@@ -17,25 +19,49 @@ from fastapi.responses import FileResponse
 
 from web_db.src import site_status
 from web_db.src.runtime import monitor, store
+from web_db.src.site_watch import receiver_info
 
 router = APIRouter()
 
 
 def _receiver():
-    """수신 연결 상태 요약. 대문 위쪽 줄과 상태 판정('수신 꺼짐')에 쓴다."""
-    return {
-        "connected": bool(monitor.connected),
-        "host": monitor.host,
-        "port": monitor.port,
-        "origin": monitor.origin,
-        "active": monitor.client is not None,
-    }
+    """수신 연결 상태 요약(site_watch.receiver_info와 같음)."""
+    return receiver_info(monitor)
 
 
 @router.get("/api/site/status")
 def site_status_get():
-    """MAC별 연결(마지막 수신 vs 원래 간격)과 알람(쌓인 통계 SRSS vs 한계). 최신화는 하지 않는다."""
-    return site_status.build_status(store.site_rows(), _receiver())
+    """MAC별 상태와 요약, 최근 상태 변화 20개.
+
+    - 연결: 마지막 수신 vs 원래 간격. 알람: 가장 최근 통계 한 줄의 SRSS vs 한계. 최신화는 하지 않는다.
+    - since: 지금 상태가 시작된 시각(site_watch 기록). 기록 상태와 지금 판정이 다르면(1분 안에 바뀐 것) None.
+    - events: 최근 상태 변화(새것부터). 대문 '최근 알림'이 그린다.
+    """
+    result = site_status.build_status(store.site_rows(), _receiver())
+    since = store.state_since()
+    for item in result["sensors"]:
+        saved = since.get(item["mac"])
+        item["since"] = saved[1] if saved and saved[0] == item["state"] else None
+    # 최근 기록(확인한 것 포함, 화면이 '확인한 것도 보기'로 거른다)과 확인 안 한 문제 수(탭 배지).
+    result["events"] = store.state_events(30)
+    result["unacked"] = store.unacked_problems()
+    return result
+
+
+@router.get("/api/site/events")
+def site_events(limit: int = 50, mac: str = "", unacked: bool = False):
+    """상태 변화 기록(새것부터). mac을 주면 그 MAC만, unacked=true면 확인 안 한 것만."""
+    return {"events": store.state_events(limit, mac.strip(), include_acked=not unacked)}
+
+
+@router.post("/api/site/events/ack")
+def site_events_ack(body: dict):
+    """알림 확인. 본문 {"ids": [기록 id...]} 또는 {"all": true}. 기록은 지우지 않고 확인 시각만 넣는다."""
+    try:
+        changed = store.ack_events(body.get("ids") or [], all_events=bool(body.get("all")))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "ids는 숫자 목록이어야 합니다") from None
+    return {"acked": changed, "unacked": store.unacked_problems()}
 
 
 def _plan_info(plan):

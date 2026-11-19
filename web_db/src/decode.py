@@ -94,6 +94,9 @@ def classify_vibration(obj):
         return None
     if "samplerate" not in obj or "numofsample" not in obj:
         return None
+    # 키만 있고 값이 비어 있으면 진동이 아니다(초음파를 빈 samplerate로 보낸 경우를 PIEZO로 오인하지 않게).
+    if str(obj.get("samplerate") or "").strip() == "":
+        return None
 
     try:
         sensor_type, frame = parse_seq(obj.get("seq"))
@@ -133,6 +136,9 @@ def classify_ultrasonic(obj, topic=""):
 
     topic_lower = str(topic or "").lower()
     if "ultrasonic" in topic_lower or "/ultra" in topic_lower:
+        return True
+    # 초음파 센서는 D/{MAC} 토픽으로 보낸다(진동 PIEZO·MEMS는 V/{MAC}). 토픽이 D/면 초음파로 본다.
+    if str(topic or "").startswith("D/"):
         return True
 
     # V049: 예전 H 프레임은 samplerate와 numofsample이 둘 다 없다.

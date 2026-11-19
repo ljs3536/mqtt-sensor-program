@@ -1,4 +1,4 @@
-"""수신 패킷을 data_csv 폴더의 HEX CSV와 decoded CSV로 쓴다."""
+"""수신 패킷을 data_csv_web 폴더의 HEX CSV와 decoded CSV로 쓴다."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from web_db.src.paths import DATA_CSV
 
 
 class CsvWriter:
-    """수신 패킷을 data_csv/YYYYMMDD_HHMMSS 에 HEX와 decoded로 나눠 쓴다.
+    """수신 패킷을 data_csv_web/YYYYMMDD_HHMMSS 에 HEX와 decoded로 나눠 쓴다.
 
     측정 START와 무관하게, CSV 저장이 켜진 연결 세션 동안만 기록한다.
     축 패킷은 도착 즉시 그 축 파일에 쓰고, 행마다 flush한다(세트가 다 모이길 기다리지 않는다).

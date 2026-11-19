@@ -80,6 +80,11 @@ def packet_to_template(row):
         "numofsample": "" if row.get("sample_count") is None else str(int(row["sample_count"])),
         "sensorData": str(row.get("sensor_data_hex") or ""),
     }
+    # 초음파는 실제 센서·CSV 송신(load_file.load_ultrasonic_csv)처럼 samplerate·numofsample을 넣지 않는다.
+    # 빈 값으로라도 두 키가 있으면 수신 쪽이 진동(seq 상위 0 → PIEZO)으로 읽어 디코드 실패로 버렸다(2026-11-19).
+    if str(row.get("sensor_type") or "").upper() == "ULTRASONIC":
+        obj.pop("samplerate")
+        obj.pop("numofsample")
     if row.get("tick"):
         obj["tick"] = row["tick"]
     # '_' 메타: 송신 때는 replay가 빼고, 속도 RMS 시간 이력이 시각·번호로 쓴다.

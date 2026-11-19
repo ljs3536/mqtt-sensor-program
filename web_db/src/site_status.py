@@ -6,10 +6,13 @@
 1. 연결(link): 데이터가 원래 간격대로 들어오고 있는가.
    센서는 생존 신호를 따로 보내지 않으므로 "마지막 수신 후 경과 시간"을 "원래 간격"과 비교한다.
    원래 간격 = 실제 수신 간격의 중앙값(측정 3회 이상일 때) → 없으면 설정 SENSING_PERIOD.
-2. 알람(alarm): 통계 화면과 같은 값·같은 기준. 최신화는 하지 않고 이미 쌓인 measurement만 본다.
-   SRSS 전체 평균(mm/s, 세트 수 가중) ≥ 한계 → over, ≥ 한계×80% → warn. ADXL만 해당.
+2. 알람(alarm): 가장 최근 통계 한 줄(measurement)의 SRSS(mm/s)로 판정한다(2026-11-19).
+   ≥ 한계 → over, ≥ 한계×80% → warn. ADXL만 해당(PIEZO·초음파는 기준이 없다).
+3. 배터리(battery): 센서가 보내는 batteryRmin(0~10). 3 이하면 low. 상태(state)와는 따로 표시한다.
 
-아래 상수는 임시 기준이다(docs/대문-평면도-대시보드-계획.md "연결 판정"). 바꿀 때는 이 파일만 고친다.
+연결 기준(2026-11-19 확정): 무선 센서는 보통 1시간에 한 번 보낸다.
+정상 = 마지막 수신 후 경과 ≤ 원래 간격 + 30초, 지연 = ≤ 간격×2 + 30초(한 번 빠짐), 그 밖은 끊김.
+바꿀 때는 아래 상수만 고친다(docs/대문-평면도-대시보드-계획.md "연결 판정").
 """
 
 from __future__ import annotations
@@ -19,8 +22,8 @@ import statistics
 from datetime import datetime
 
 # 정상: 경과 ≤ 간격 × LINK_OK_FACTOR + LINK_GRACE_S. 지연: ≤ 간격 × LINK_LATE_FACTOR + LINK_GRACE_S. 그 밖은 끊김.
-LINK_OK_FACTOR = 2.0
-LINK_LATE_FACTOR = 5.0
+LINK_OK_FACTOR = 1.0
+LINK_LATE_FACTOR = 2.0
 LINK_GRACE_S = 30.0
 # 축 정보가 없는 옛 자료(시각만)일 때만 쓰는 묶음 기준: 이 시간 안에 붙어 온 패킷은 같은 측정 한 번.
 # 축 정보가 있으면 축 순서(X→Y→Z)로 묶는다. 실제 ADXL은 축 사이가 5초 넘게 벌어지기도 해서
@@ -31,6 +34,8 @@ AXIS_RANK = {"X": 0, "Y": 1, "Z": 2}
 MIN_MEASURES = 3
 # 통계 화면과 같은 주의 기준(한계의 80%).
 WARN_RATIO = 0.8
+# 배터리(batteryRmin, 0~10). 이 값 이하면 부족(빨강).
+BATTERY_LOW = 3.0
 
 # 화면 문구와 색 이름. 화면(site.js)은 state 값으로 색을 고른다.
 LINK_TEXT = {
@@ -158,8 +163,17 @@ def link_state(row, receiver_on, now):
     return "lost", age, interval, source
 
 
+def battery_state(row):
+    """(배터리 값 또는 None, 'low' | 'ok' | 'none'). 값이 없거나 숫자가 아니면 'none'."""
+    try:
+        value = float(str(row.get("last_battery") or "").strip())
+    except ValueError:
+        return None, "none"
+    return value, ("low" if value <= BATTERY_LOW else "ok")
+
+
 def alarm_state(row):
-    """알람 판정 (state, SRSS 평균 또는 None, 한계). MEMS(ADXL)가 아닌 센서는 'na'."""
+    """알람 판정 (state, 최근 통계 SRSS 또는 None, 한계). MEMS(ADXL)가 아닌 센서는 'na'."""
     limit = float(row.get("limit") or 4.5)
     value = row.get("srss_mms")
     if value is None:
@@ -204,6 +218,7 @@ def build_status(rows, receiver, now=None):
     for row in rows:
         link, age, interval, source = link_state(row, receiver_on, now)
         alarm, value, limit = alarm_state(row)
+        battery, battery_flag = battery_state(row)
         config = _config(row)
         state = overall_state(link, alarm)
         sensors.append({
@@ -215,6 +230,8 @@ def build_status(rows, receiver, now=None):
             "last_at": row.get("last_at") or "",
             "age_s": age,
             "battery": row.get("last_battery") or "",
+            "battery_level": battery,
+            "battery_state": battery_flag,
             "link": link,
             "link_text": LINK_TEXT[link],
             "interval_s": interval,
@@ -227,6 +244,7 @@ def build_status(rows, receiver, now=None):
             "limit": limit,
             "set_count": int(row.get("set_count") or 0),
             "stat_last_at": row.get("stat_last_at") or "",
+            "stat_first_at": row.get("stat_first_at") or "",
         })
         counts["total"] += 1
         counts["link"][link] = counts["link"].get(link, 0) + 1
@@ -243,5 +261,6 @@ def build_status(rows, receiver, now=None):
             "late_factor": LINK_LATE_FACTOR,
             "grace_s": LINK_GRACE_S,
             "warn_ratio": WARN_RATIO,
+            "battery_low": BATTERY_LOW,
         },
     }

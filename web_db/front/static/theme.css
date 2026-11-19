@@ -297,6 +297,7 @@ html[data-theme="dark"] .mac-chip.named { border-color: #4a3424; box-shadow: ins
 html[data-theme="dark"] .pill { background: #2c2c2c; color: #c8c8c8; }
 html[data-theme="dark"] .pill.on { background: #1d3d28; color: #7dffa2; }
 html[data-theme="dark"] .pill.off { background: #2a2a2a; color: #9aa8b5; }
+html[data-theme="dark"] .pill.wait { background: #3a2f12; color: #f5c46b; }
 html[data-theme="dark"] button.secondary { background: #2c2c2c; color: #e6e6e6; border-color: #4a4a4a; }
 html[data-theme="dark"] .channel { border-color: #333; }
 html[data-theme="dark"] .track { background: #1a1a1a; }
@@ -380,3 +381,7 @@ html[data-theme="gray"] .filter-row .filter-note { color: #3d4b55; }
 html[data-theme="gray"] .filter-row input.freq.locked { background: #cfd7dd; }
 html[data-theme="dark"] .filter-row .filter-note { color: #9fb6c9; }
 html[data-theme="dark"] .filter-row input.freq.locked { background: #1a1a1a; color: #777; }
+
+html[data-theme="gray"] input:disabled,
+html[data-theme="gray"] select:disabled { background: #dfe5e9; color: #5c6d7a; }
+

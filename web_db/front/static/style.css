@@ -425,6 +425,10 @@ p.window-factor { margin: 0; }
 }
 .pill.on { background: #e4f6ea; color: #0d7a3a; }
 .pill.off { background: #eef1f4; color: #667586; }
+/* 연결 시도 중(자동 연결이 브로커를 기다리는 동안) */
+.pill.wait { background: #fff4dc; color: #8a5a00; }
+/* 수신 모니터: 서버가 실제로 붙은 브로커 안내 */
+.conn-info:empty { display: none; }
 .stats { align-self: center; color: #243646; font-size: 13px; }
 .between { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; }
 @media (max-width: 980px) {
@@ -808,3 +812,8 @@ body.layout-pin .studio-charts .chart-card > h2 {
 .card-legend .legend-swatch.dashed { border-top-style: dashed; border-top-width: 2px; }
 html[data-theme="dark"] .card-legend .legend-item { color: #c8c8c8; background: transparent; }
 html[data-theme="gray"] .card-legend .legend-item { color: #2c3338; background: transparent; }
+
+/* 잠긴 칸·버튼이 눈에 보이게(예: 수신 모니터가 연결 중일 때 Broker·Port·Topic·연결 버튼) */
+input:disabled, select:disabled { background: #eef2f6; color: #5d6e80; cursor: not-allowed; }
+button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+

@@ -7,6 +7,58 @@
  */
 let monitorLive = false;
 
+/*
+ * 연결 정보 표시(2026-11-19). 서버의 수신 연결은 하나뿐이고, 설정 화면의 자동 연결로 붙었을 수도 있다.
+ * 그래서 연결 중에는 입력칸 기본값(127.0.0.1)이 아니라 **서버가 실제로 붙은 값**을 칸에 채우고 잠근다.
+ * 끊겨 있으면 칸을 풀고, 처음 한 번은 설정 화면에 저장한 수신 MQTT 값으로 채운다(두 화면 기본값 통일).
+ */
+let savedMqttFilled = false;
+const ORIGIN_TEXT = { auto: "설정 화면 자동 연결", manual: "이 화면에서 연결" };
+function showConnection(data) {
+  const live = !!data.active;
+  const csvBox = document.querySelector("#csvEnabled");
+  const fields = ["#host", "#port", "#topic"].map((id) => document.querySelector(id));
+  if (live) {
+    fields[0].value = data.host || "";
+    fields[1].value = data.port || "";
+    fields[2].value = data.topic || "";
+    if (typeof data.csv_enabled === "boolean") csvBox.checked = data.csv_enabled;
+  }
+  // 연결 중에는 다른 값으로 착각하지 않게 칸을 잠근다. 바꾸려면 연결 해제 후 다시 연결.
+  fields.forEach((input) => (input.disabled = live));
+  csvBox.disabled = live;
+  document.querySelector("#connect").disabled = live;
+  const where = `${data.host}:${data.port}`;
+  const origin = ORIGIN_TEXT[data.origin] ? ` · ${ORIGIN_TEXT[data.origin]}` : "";
+  const linkStatus = document.querySelector("#linkStatus");
+  linkStatus.className = data.connected ? "pill on" : live ? "pill wait" : "pill off";
+  linkStatus.textContent = data.connected
+    ? `CONNECTED ${where} | ${data.messages} packets | CSV ${data.csv_enabled ? `${data.csv_saved} / 오류 ${data.csv_errors}` : "끔"}`
+    : live ? `연결 시도 중 ${where}` : "DISCONNECTED";
+  linkStatus.title = live ? `브로커 ${where}, 구독 ${data.topic}${origin}` : "";
+  const note = document.querySelector("#connInfo");
+  if (note) {
+    note.textContent = live
+      ? `서버 수신 연결: ${where} · 구독 ${data.topic}${origin}. 바꾸려면 '연결 해제' 후 다시 연결하세요.`
+      : "연결되어 있지 않습니다. 칸의 값은 설정 화면 '수신 MQTT'에 저장한 값입니다.";
+  }
+  if (!live && !savedMqttFilled) fillSavedMqtt();
+}
+/** 끊겨 있을 때 한 번, 설정 화면에 저장한 수신 MQTT 값으로 칸을 채운다. */
+async function fillSavedMqtt() {
+  savedMqttFilled = true;
+  try {
+    const data = await (await fetch("/api/site/mqtt")).json();
+    const cfg = data.settings || {};
+    if (data.receiver && data.receiver.active) return; // 그 사이 연결됐으면 연결 값이 우선
+    if (cfg.host) document.querySelector("#host").value = cfg.host;
+    if (cfg.port) document.querySelector("#port").value = cfg.port;
+    if (cfg.topic) document.querySelector("#topic").value = cfg.topic;
+  } catch (error) {
+    /* 못 읽으면 칸 기본값 그대로 */
+  }
+}
+
 /** 연결 상태, MAC 목록, 최신 곡선을 받아 화면에 반영한다. */
 async function refresh() {
   const query = graphDevice ? `?device=${encodeURIComponent(graphDevice)}` : "";
@@ -14,11 +66,7 @@ async function refresh() {
   monitorLive = !!data.connected;
   profiles = data.profiles || profiles;
   if (!document.querySelector("#profile").options.length) fillProfiles();
-  const linkStatus = document.querySelector("#linkStatus");
-  linkStatus.className = data.connected ? "pill on" : "pill off";
-  linkStatus.textContent = data.connected
-    ? `CONNECTED ${data.messages} packets | CSV ${data.csv_saved} / 오류 ${data.csv_errors}`
-    : "DISCONNECTED";
+  showConnection(data);
   csvInfo.textContent = data.csv_dir
     ? `저장 폴더: ${data.csv_dir}`
     : "CSV 체크 시 연결 중 수신 데이터를 바로 저장합니다. HEX와 decoded CSV를 저장 폴더에 나눕니다.";

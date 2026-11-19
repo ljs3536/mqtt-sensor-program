@@ -9,8 +9,8 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=26">
-  <link rel="stylesheet" href="/static/theme.css?v=12">
+  <link rel="stylesheet" href="/static/style.css?v=28">
+  <link rel="stylesheet" href="/static/theme.css?v=14">
   <style>
     .dash-note { color: #64748b; margin: 0 0 12px; }
     .board { display: grid; gap: 14px; }
@@ -32,6 +32,18 @@
     .limit-mark { position: absolute; top: 0; bottom: 0; width: 2px; background: #b45309; }
     .metric-value { font-variant-numeric: tabular-nums; font-size: 13px; margin-top: 4px; }
     .spark { height: 72px; position: relative; }
+    /* 최근 줄 값(센서 현황의 경보 판정과 같은 값) */
+    .metric-latest { font-size: 12px; margin-top: 2px; color: #3e5164; font-variant-numeric: tabular-nums; }
+    .metric-latest b.warn { color: #b45309; }
+    .metric-latest b.over { color: #dc2626; }
+    /* 센서 현황에서 넘어왔을 때 그 줄을 약 5초 강조했다가 서서히 없앤다 */
+    .channel { border-radius: 10px; transition: box-shadow 0.8s ease, background-color 0.8s ease; }
+    .channel.focus {
+      box-shadow: 0 0 0 2px #dc2626, 0 0 0 8px rgba(220, 38, 38, 0.15);
+      background-color: rgba(220, 38, 38, 0.05);
+    }
+    html[data-theme="dark"] .channel.focus { background-color: rgba(220, 38, 38, 0.12); }
+    html[data-theme="dark"] .metric-latest { color: #b5b5b5; }
     .spark canvas { display: block; width: 100% !important; height: 100% !important; }
     @media (max-width: 900px) {
       .channel { grid-template-columns: 1fr; }
@@ -138,7 +150,7 @@
       document.querySelector("#updatedNote").textContent = (stamp === null
         ? "아직 계산된 통계가 없습니다. "
         : `마지막 계산 ${stamp}. `) +
-        "통계는 매일 자정 뒤 자동으로 계산됩니다. 막대는 전체 평균이고, 그래프는 하루 구간별 변화입니다.";
+        "통계는 매일 자정 뒤 자동으로 계산됩니다. 막대는 전체 평균, '최근'은 가장 최근 통계(센서 현황 경보 기준)이고, 그래프는 구간별 변화입니다.";
       if (!items.length) {
         board.innerHTML = "<p>등록된 MAC이 없습니다.</p>";
         return;
@@ -159,12 +171,19 @@
         const name = item.display_name ? `<small>${item.display_name}</small>` : "";
         const sets = Number(item.set_count) || 0;
         const range = sets ? `전체 ${sets}세트 · 구간 ${series.length}개` : "통계 전";
-        return `<div class="channel">
+        // 최근 줄(센서 현황의 경보 판정 값). 한계 이상 over, 80% 이상 warn.
+        const latest = Number(item.latest_srss_mms);
+        const latestLevel = !Number.isFinite(latest) ? "" : latest >= limit ? "over" : latest >= limit * 0.8 ? "warn" : "";
+        const latestText = Number.isFinite(latest) && Number(item.set_count) > 0
+          ? `<div class="metric-latest">최근 ${String(item.latest_at || "").slice(5, 10)} <b class="${latestLevel}">${num(latest, 3)}</b>${latestLevel === "over" ? " · 한계 초과" : latestLevel === "warn" ? " · 주의" : ""}</div>`
+          : "";
+        return `<div class="channel" data-mac="${item.mac}">
           <div class="mac">${item.mac}${name}<small>${range}</small></div>
           <div>
             <div class="metric-title">SRSS 전체 평균 mm/s RMS</div>
             <div class="track"><div class="fill ${level}" style="width:${width}%"></div><div class="limit-mark" style="left:${mark}%"></div></div>
             <div class="metric-value">${num(value, 3)} / ${limit}</div>
+            ${latestText}
           </div>
           <div>
             <div class="metric-title">RMS 평균 ${num(item.rms, 4)} g</div>
@@ -177,9 +196,32 @@
         </div>`;
       }).join("");
       drawCharts();
+      focusMac();
     }
 
     /* 저장된 통계를 읽어 그린다. 최신화는 하지 않는다. */
+    /*
+     * 센서 현황 카드의 '통계에서 확인'·'통계 보기'는 주소(GET ?mac=)에 MAC을 남기지 않는다.
+     * 누를 때 sessionStorage('dashboard-focus')에 MAC을 넣고, 여기서 한 번 읽자마자 지운다.
+     * (POST로 페이지를 열면 새로고침·뒤로 가기 때 '양식 다시 제출' 경고가 떠서 이 방법을 쓴다.)
+     * 그 줄을 화면 가운데로 옮기고 약 5초 강조한 뒤 서서히 풀린다. 새로고침하면 다시 강조되지 않는다.
+     */
+    let focusTarget = null;
+    try {
+      focusTarget = sessionStorage.getItem("dashboard-focus");
+      sessionStorage.removeItem("dashboard-focus");
+    } catch (error) {
+      focusTarget = null;
+    }
+    function focusMac() {
+      if (!focusTarget) return;
+      const row = [...board.querySelectorAll(".channel")].find((node) => node.dataset.mac === focusTarget);
+      focusTarget = null; // 한 번만(테마를 바꿔 다시 그릴 때는 하지 않음)
+      if (!row) return;
+      row.scrollIntoView({ block: "center" });
+      row.classList.add("focus");
+      setTimeout(() => row.classList.remove("focus"), 5000);
+    }
     let lastData = null;
     async function load() {
       const data = await (await fetch("/api/db/dashboard")).json();

@@ -53,7 +53,8 @@ AXIS_ORDER = {"X": 0, "Y": 1, "Z": 2}
 def _rows(folder):
     """폴더의 모든 *_sensorData_hex.csv 줄을 (정렬 키, 파일 이름, 줄 dict)로 모은다."""
     result = []
-    for path in sorted(Path(folder).glob("*_sensorData_hex.csv")):
+    # 대소문자를 가리지 않는다(Linux는 '.CSV'와 '.csv'를 다른 이름으로 본다).
+    for path in sorted(p for p in Path(folder).iterdir() if p.is_file() and p.name.lower().endswith("_sensordata_hex.csv")):
         with open(path, encoding="utf-8-sig", newline="") as handle:
             for order, row in enumerate(csv.DictReader(handle)):
                 axis = str(row.get("axis") or "")
@@ -163,7 +164,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     folder = Path(args.folder)
-    if not any(folder.glob("*_sensorData_hex.csv")):
+    if not any(p.name.lower().endswith("_sensordata_hex.csv") for p in folder.iterdir() if p.is_file()):
         print(f"{folder}에 *_sensorData_hex.csv가 없습니다")
         return 1
     if args.reset:

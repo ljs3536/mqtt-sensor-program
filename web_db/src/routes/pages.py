@@ -8,7 +8,7 @@
 import re
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 
 from web_db.src.paths import FRONT
 
@@ -69,3 +69,9 @@ def dashboard_page():
 def settings_page():
     """장치 표시 이름과 통계 SRSS 한계."""
     return FileResponse(FRONT / "settings.html")
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    """탭 아이콘은 따로 두지 않는다. 브라우저가 매번 요청해 404 오류가 콘솔에 남지 않게 빈 응답(204)."""
+    return Response(status_code=204)

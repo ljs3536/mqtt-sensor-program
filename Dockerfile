@@ -1,11 +1,14 @@
 # web_db(센서 웹) 이미지. 데스크톱 프로그램(PySide6 등)은 넣지 않는다.
 #
-# 빌드:  docker build -t sensor-web .
-# 실행:  docker run -d --name sensor-web -p 8081:8081 -v sensor-data:/data sensor-web
+# 빌드:  docker build -t sensor-web:latest .
+# 저장:  docker save -o sensor-web.tar sensor-web:latest      (python docker/make_bundle.py 가 둘 다 한다)
+# 서버:  sensor-web.tar 와 docker-compose.yml 을 같은 폴더에 두고
+#        docker load -i sensor-web.tar && docker compose up -d --force-recreate
 #
-# 데이터는 모두 /data 볼륨에 남는다(SENSOR_DATA_DIR, web_db/src/paths.py).
-#   /data/sensor.sqlite, /data/site_files/(평면도), /data/data_csv/(수신 CSV), MEMS 보정 JSON
-# 컨테이너를 지우거나 이미지를 새로 받아도 볼륨만 그대로면 데이터는 남는다.
+# 데이터는 /data 아래(SENSOR_DATA_DIR, web_db/src/paths.py). compose가 서버 폴더를 연결한다.
+#   /data              = ./sensor_web_db  (sensor.sqlite, site_files/ 평면도, MEMS 보정 JSON)
+#   /data/data_csv_web = ./data_csv_web   (수신 CSV. 로컬·개발·운영 모두 같은 이름)
+# 시작할 때 docker/entrypoint.sh 가 CSV 폴더 주인과 같은 사용자로 바꿔 실행한다(설치 스크립트 불필요).
 #
 # 서버는 반드시 프로세스 하나(uvicorn worker 1개)로 돈다. MQTT 수신 상태, SQLite 잠금,
 # 하루 통계 스레드가 모두 한 프로세스 메모리에 있기 때문이다(--workers를 늘리지 않는다).
@@ -31,12 +34,16 @@ RUN pip install --no-cache-dir -r requirements-web.txt
 COPY mems_lsb_scale.json ./
 COPY web_db ./web_db
 
-# root가 아닌 사용자로 실행. /data는 이 사용자가 쓸 수 있게 만든다.
-RUN useradd --create-home --uid 1000 sensor \
-    && mkdir -p /data \
-    && chown -R sensor:sensor /data
-USER sensor
+# 시작 스크립트: 수신 CSV 폴더 주인으로 사용자를 바꿔 실행한다(setpriv는 기본 이미지에 있다).
+# Windows에서 받아도 되게 줄 끝 CR을 지운다.
+COPY docker/entrypoint.sh /usr/local/bin/sensor-entrypoint
+RUN sed -i 's/\r$//' /usr/local/bin/sensor-entrypoint \
+    && chmod 755 /usr/local/bin/sensor-entrypoint \
+    && mkdir -p /data/data_csv_web
+# 사용자를 바꿔도 홈 폴더가 없어 생기는 문제가 없게.
+ENV HOME=/tmp
 VOLUME ["/data"]
+ENTRYPOINT ["/usr/local/bin/sensor-entrypoint"]
 
 EXPOSE 8081
 

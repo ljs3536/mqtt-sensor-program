@@ -106,6 +106,9 @@ class QueryMixin:
                     """,
                     (item["mac"],),
                 ).fetchall()
+                # 가장 최근 줄(대문 경보 판정과 같은 값). 통계 화면이 '최근'으로 함께 보여 준다.
+                item["latest_srss_mms"] = history[0]["srss_mms"] if history else None
+                item["latest_at"] = history[0]["last_at"] if history else None
                 item["series"] = [
                     {
                         "t": point["last_at"],

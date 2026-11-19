@@ -63,6 +63,7 @@ class Store(QueryMixin, SiteMixin):
         - stat_cursor: MAC별 통계 읽기 위치
         - srss_limit, sensor_config, stat_meta: 한계값, 마지막 설정 JSON, 마지막 최신화 시각
         - app_setting: 키별 JSON 설정(지금은 'mqtt' 자동 연결 값)
+        - site_state, site_state_history: 센서별 지금 상태와 시작 시각, 상태가 바뀐 기록(site_watch가 1분마다)
         - floor_plan, sensor_placement: 대문 평면도(여러 장, 탭 순서 sort_order)와 센서 아이콘 위치(비율 0~1).
           평면도 한 장에 센서 여러 개, 센서 하나는 평면도 한 장에만
         """
@@ -166,6 +167,26 @@ class Store(QueryMixin, SiteMixin):
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY (plan_id, mac)
             );
+            CREATE TABLE IF NOT EXISTS site_state (
+                mac TEXT PRIMARY KEY,
+                state TEXT NOT NULL,
+                link TEXT NOT NULL DEFAULT '',
+                alarm TEXT NOT NULL DEFAULT '',
+                since TEXT NOT NULL,
+                checked_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS site_state_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                mac TEXT NOT NULL,
+                prev_state TEXT NOT NULL,
+                state TEXT NOT NULL,
+                link TEXT NOT NULL DEFAULT '',
+                alarm TEXT NOT NULL DEFAULT '',
+                changed_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_state_history_time ON site_state_history(changed_at);
+            CREATE INDEX IF NOT EXISTS idx_state_history_mac ON site_state_history(mac, changed_at);
+            CREATE INDEX IF NOT EXISTS idx_measurement_mac_time ON measurement(mac, last_at);
             DROP TABLE IF EXISTS daily_stat;
             """
         )
@@ -173,8 +194,16 @@ class Store(QueryMixin, SiteMixin):
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(floor_plan)")}
         if "sort_order" not in columns:
             self._conn.execute("ALTER TABLE floor_plan ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0")
+        # 최근 알림 '확인'(2026-11-19). 확인한 시각이 있으면 대문 알림 목록에서 숨긴다(기록은 남긴다).
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(site_state_history)")}
+        if "acked_at" not in columns:
+            self._conn.execute("ALTER TABLE site_state_history ADD COLUMN acked_at TEXT NOT NULL DEFAULT ''")
         # 옛 스키마에서 남은 MAC 빈 device 줄(mac이 NULL)은 화면 목록을 어지럽히므로 지운다.
-        self._conn.execute("DELETE FROM device WHERE mac IS NULL OR TRIM(mac)=''")
+        # 있을 때만 지운다. 늘 DELETE를 하면 다른 프로그램(DB Browser 등)이 쓰기 잠금을 잡고 있을 때
+        # 서버가 시작조차 못 한다(읽기는 WAL이라 잠금과 상관없이 된다).
+        empty = self._conn.execute("SELECT COUNT(*) FROM device WHERE mac IS NULL OR TRIM(mac)=''").fetchone()[0]
+        if empty:
+            self._conn.execute("DELETE FROM device WHERE mac IS NULL OR TRIM(mac)=''")
         self._conn.commit()
 
     def save_display_name(self, mac, name):

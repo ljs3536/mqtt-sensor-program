@@ -150,12 +150,25 @@ const mqttFields = {
 const mqttNote = document.querySelector("#mqttNote");
 
 /** 지금 수신 연결 상태를 알약 모양 표시에 넣는다. */
-function showReceiver(receiver) {
+/*
+ * 서버의 지금 수신 연결 표시. 수신 연결은 서버에 하나뿐이고, 이 화면의 자동 연결 또는
+ * 수신 모니터의 '연결' 버튼(수동) 중 마지막 것이 쓰인다. 어디서 붙었는지와,
+ * 저장한 값과 다른 곳에 붙어 있으면 그 사실을 함께 보여 준다(수신 모니터 화면과 같은 정보).
+ */
+function showReceiver(receiver, saved) {
   const pill = document.querySelector("#mqttState");
-  pill.className = "pill " + (receiver.connected ? "on" : "off");
+  const where = `${receiver.host}:${receiver.port}`;
+  const origin = receiver.origin === "auto" ? "자동 연결" : receiver.origin === "manual" ? "수신 모니터에서 연결" : "";
+  pill.className = "pill " + (receiver.connected ? "on" : receiver.active ? "wait" : "off");
   pill.textContent = receiver.connected
-    ? `연결됨 ${receiver.host}:${receiver.port}${receiver.origin === "auto" ? " (자동)" : ""}`
-    : receiver.active ? "연결 시도 중" : "연결 안 됨";
+    ? `연결됨 ${where}${origin ? ` (${origin})` : ""}`
+    : receiver.active ? `연결 시도 중 ${where}` : "연결 안 됨";
+  const cfg = saved || {};
+  const differs = receiver.active && cfg.host && (cfg.host !== receiver.host || Number(cfg.port) !== Number(receiver.port));
+  if (differs) {
+    mqttNote.textContent = `지금 수신은 저장한 값(${cfg.host}:${cfg.port})이 아니라 ${where}에 연결되어 있습니다` +
+      (origin ? `(${origin})` : "") + ". 저장한 값으로 바꾸려면 '서버 시작 때 자동 연결'을 켜고 저장하세요.";
+  }
 }
 
 /** 저장된 값과 연결 상태를 읽어 칸을 채운다. */
@@ -169,7 +182,7 @@ async function loadMqtt() {
   mqttFields.topic.value = cfg.topic;
   mqttFields.csv.checked = !!cfg.csv;
   mqttFields.auto.checked = !!cfg.auto;
-  showReceiver(data.receiver);
+  showReceiver(data.receiver, cfg);
 }
 
 document.querySelector("#mqttSave").onclick = async () => {
@@ -190,7 +203,7 @@ document.querySelector("#mqttSave").onclick = async () => {
     mqttNote.textContent = data.detail || "저장 실패";
     return;
   }
-  showReceiver(data.receiver);
+  showReceiver(data.receiver, data.settings);
   mqttNote.textContent = data.started
     ? "저장했습니다. 이 값으로 연결을 시작했습니다(브로커가 꺼져 있으면 계속 다시 시도합니다)."
     : "저장했습니다. 자동 연결이 꺼져 있어 지금 연결은 바꾸지 않았습니다.";

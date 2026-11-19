@@ -11,6 +11,8 @@ build
 dist
 docs
 data_csv
+data_csv_web
+sensor_web_db
 web
 web_db/sensor.sqlite*
 web_db/site_files
@@ -20,4 +22,4 @@ new_piezo_adc_*.py
 requirements.txt
 docker-data
 docker-bundle
-docker
+docker/make_bundle.py

@@ -17,9 +17,9 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=26">
-  <link rel="stylesheet" href="/static/theme.css?v=12">
-  <link rel="stylesheet" href="/static/site.css?v=4">
+  <link rel="stylesheet" href="/static/style.css?v=28">
+  <link rel="stylesheet" href="/static/theme.css?v=14">
+  <link rel="stylesheet" href="/static/site.css?v=8">
 </head>
 <body class="site-page" data-site-mode="view">
   <header>
@@ -55,6 +55,13 @@
           <p class="hint"><a href="/settings#plan">설정 → 평면도 배치</a>에서 평면도를 올리고 센서를 놓으면 여기에 보입니다.</p>
         </div>
         <div id="planWrap" class="site-plan-wrap" hidden>
+          <!-- 확대·이동: 휠 = 확대/축소, 빈 곳 끌기 = 이동(확대했을 때), 버튼 = + − 맞춤 -->
+          <div class="zoom-tools">
+            <button type="button" id="zoomIn" title="확대" aria-label="확대">+</button>
+            <span id="zoomText">100%</span>
+            <button type="button" id="zoomOut" title="축소" aria-label="축소">−</button>
+            <button type="button" id="zoomFit" title="전체 보기" aria-label="전체 보기">⤢</button>
+          </div>
           <div id="planStage" class="site-plan-stage">
             <img id="planImage" alt="평면도" draggable="false">
             <div id="markerLayer" class="site-markers"></div>
@@ -72,15 +79,26 @@
       </section>
 
       <aside class="card site-list-card">
-        <div class="site-list-head"><h2>센서 <small id="listCount"></small></h2></div>
+        <!-- 센서 목록 / 최근 알림(상태 변화 기록). 알림 탭 배지 = 마지막으로 본 뒤 새로 생긴 경보·끊김·주의 수 -->
+        <div class="site-list-head list-tabs">
+          <button type="button" class="active" data-list-tab="sensors">센서 <small id="listCount"></small></button>
+          <button type="button" data-list-tab="events">최근 알림 <span id="eventBadge" class="event-badge" hidden></span></button>
+        </div>
+        <input id="listSearch" class="list-search" type="search" placeholder="이름·MAC 검색" aria-label="센서 검색">
         <ul id="sensorList" class="site-list"></ul>
+        <!-- 알림 도구: 모두 확인, 확인한 것도 보기(알림 탭에서만 보인다) -->
+        <div id="eventTools" class="event-tools" hidden>
+          <label class="check"><input id="showAcked" type="checkbox"><span>확인한 것도 보기</span></label>
+          <button type="button" class="secondary" id="ackAll">모두 확인</button>
+        </div>
+        <ul id="eventList" class="site-list event-list" hidden></ul>
       </aside>
     </div>
 
     <div id="sensorCard" class="site-card" hidden></div>
   </main>
   <script src="/static/api.js?v=1"></script>
-  <script src="/static/site.js?v=6"></script>
+  <script src="/static/site.js?v=11"></script>
   <script src="/static/theme.js?v=4"></script>
 </body>
 </html>

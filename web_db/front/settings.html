@@ -9,8 +9,8 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=26">
-  <link rel="stylesheet" href="/static/theme.css?v=12">
+  <link rel="stylesheet" href="/static/style.css?v=28">
+  <link rel="stylesheet" href="/static/theme.css?v=14">
   <style>
     .settings-table { width: 100%; border-collapse: collapse; }
     .settings-table th, .settings-table td {
@@ -54,7 +54,7 @@
     html[data-theme="dark"] .csv-stats-info dt { color: #9aa8b5; }
     html[data-theme="dark"] .csv-progress { background: #333; }
   </style>
-  <link rel="stylesheet" href="/static/site.css?v=4">
+  <link rel="stylesheet" href="/static/site.css?v=8">
 </head>
 <body data-site-mode="edit">
   <header>
@@ -150,6 +150,13 @@
             <p class="hint">'+ 평면도 추가'로 PNG·JPG·WEBP·SVG 이미지(15MB 이하)를 올리세요. 층·구역마다 한 장씩 여러 장 둘 수 있습니다.</p>
           </div>
           <div id="planWrap" class="site-plan-wrap" hidden>
+          <!-- 확대·이동: 휠 = 확대/축소, 빈 곳 끌기 = 이동(확대했을 때), 버튼 = + − 맞춤 -->
+          <div class="zoom-tools">
+            <button type="button" id="zoomIn" title="확대" aria-label="확대">+</button>
+            <span id="zoomText">100%</span>
+            <button type="button" id="zoomOut" title="축소" aria-label="축소">−</button>
+            <button type="button" id="zoomFit" title="전체 보기" aria-label="전체 보기">⤢</button>
+          </div>
             <div id="planStage" class="site-plan-stage">
               <img id="planImage" alt="평면도" draggable="false">
               <div id="markerLayer" class="site-markers"></div>
@@ -165,13 +172,14 @@
               <option value="all">전체</option>
             </select>
           </div>
+          <input id="listSearch" class="list-search" type="search" placeholder="이름·MAC 검색" aria-label="센서 검색">
           <ul id="sensorList" class="site-list"></ul>
         </aside>
       </div>
     </div>
 
     <!--
-      통계 데이터: data_csv의 누적 CSV로 일자별 통계를 다시 만든다(관리용, /api/db/csv-stats, csv_stats.py).
+      통계 데이터: data_csv_web의 누적 CSV로 일자별 통계를 다시 만든다(관리용, /api/db/csv-stats, csv_stats.py).
       운영 서버처럼 DB 없이 CSV만 쌓인 곳에서 통계 화면·대문 알람을 채울 때 쓴다.
     -->
     <div data-panel="stats" hidden>
@@ -194,8 +202,8 @@
     </div>
   </main>
   <script src="/static/api.js?v=1"></script>
-  <script src="/static/settings.js?v=4"></script>
-  <script src="/static/site.js?v=6"></script>
+  <script src="/static/settings.js?v=5"></script>
+  <script src="/static/site.js?v=11"></script>
   <script src="/static/theme.js?v=4"></script>
 </body>
 </html>
