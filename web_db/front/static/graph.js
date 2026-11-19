@@ -69,11 +69,50 @@ const GraphView = (() => {
     },
   };
 
-  /** 빈 꺾은선 차트를 만들고 확대와 메뉴를 붙인다. */
-  function chart(id) {
+  /**
+   * 카드 제목 줄 범례(분석 화면). 그래프 안 범례는 위에 한 줄(약 30px)을 차지해서 그래프가 작아진다.
+   * 대신 같은 항목(색 + 이름)을 카드 제목(RAW/FFT) 오른쪽에 작게 그린다. 누르면 그 선을 숨기고/보인다.
+   * 항목은 Chart.js 기본 generateLabels로 만들어 색·점선이 그래프와 같다.
+   */
+  const cardLegend = {
+    id: "cardLegend",
+    afterUpdate(instance) {
+      const card = instance.canvas.closest(".chart-card");
+      const head = card && card.querySelector("h2");
+      if (!head) return;
+      let box = head.querySelector(".card-legend");
+      if (!box) {
+        box = document.createElement("span");
+        box.className = "card-legend";
+        head.appendChild(box);
+        box.addEventListener("click", (event) => {
+          const item = event.target.closest("[data-index]");
+          if (!item) return;
+          const index = Number(item.dataset.index);
+          instance.setDatasetVisibility(index, !instance.isDatasetVisible(index));
+          instance.update("none");
+        });
+      }
+      const items = Chart.defaults.plugins.legend.labels.generateLabels(instance);
+      const html = items
+        .map((item) => {
+          const dash = item.lineDash && item.lineDash.length ? " dashed" : "";
+          return `<button type="button" class="legend-item${item.hidden ? " off" : ""}" data-index="${item.datasetIndex}" title="눌러서 숨기기/보이기">` +
+            `<i class="legend-swatch${dash}" style="border-color:${item.strokeStyle}"></i>${String(item.text).replace(/[&<>]/g, "")}</button>`;
+        })
+        .join("");
+      if (box.innerHTML !== html) box.innerHTML = html; // 같으면 다시 그리지 않는다(마우스 깜빡임 방지)
+    },
+  };
+
+  /**
+   * 빈 꺾은선 차트를 만들고 확대와 메뉴를 붙인다.
+   * options.cardLegend: true면 그래프 안 범례를 끄고 카드 제목 줄 범례(cardLegend)를 쓴다(분석 화면).
+   */
+  function chart(id, opts = {}) {
     const instance = new Chart(document.getElementById(id), {
       type: "line",
-      plugins: [midGrid],
+      plugins: opts.cardLegend ? [midGrid, cardLegend] : [midGrid],
       data: { datasets: [] },
       options: {
         animation: false,
@@ -83,7 +122,11 @@ const GraphView = (() => {
         interaction: { mode: "nearest", intersect: false },
         layout: { padding: { top: 2, right: 12, bottom: 2, left: 2 } },
         plugins: {
-          legend: { position: "top", labels: { boxWidth: 12, color: "#1c2833", font: { size: 12, family: font } } },
+          legend: {
+            display: !opts.cardLegend,
+            position: "top",
+            labels: { boxWidth: 12, color: "#1c2833", font: { size: 12, family: font } },
+          },
           tooltip: { enabled: true },
           zoom: {
             zoom: { wheel: { enabled: false }, pinch: { enabled: true }, mode: "xy" },

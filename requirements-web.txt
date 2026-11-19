@@ -1,0 +1,8 @@
+# web_db(웹 서버)만 쓰는 패키지. Docker 이미지는 이것만 설치한다.
+# requirements.txt는 데스크톱 프로그램(PySide6, pyqtgraph 등)까지 포함한 전체 목록이다.
+# 버전은 개발 PC .venv에서 시험한 값(2026-11-18)으로 고정한다.
+fastapi==0.162.0
+uvicorn==0.54.0
+python-multipart==0.0.33
+paho-mqtt==2.2.0
+numpy==2.4.6

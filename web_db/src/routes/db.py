@@ -2,6 +2,11 @@
 
 통계 계산은 화면에서 시키지 않는다(최신화 버튼·API 없음, 2026-11-18). 스케줄러와
 명령줄 도구(import_csv)만 store.update_statistics를 부른다.
+
+예외: 설정 화면 '통계 데이터' 탭의 "CSV로 일자별 통계 다시 만들기"(관리자용).
+- POST /api/db/csv-stats  백그라운드로 시작(이미 돌고 있으면 409)
+- GET  /api/db/csv-stats  진행 상황과 마지막 결과
+data_csv 전체로 measurement를 일자별로 다시 만든다(csv_stats.py). 모든 사람이 같은 결과를 본다.
 """
 
 import threading
@@ -11,10 +16,13 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from web_db.src.csv_stats import CsvStatsJob, find_groups
 from web_db.src.grouping import group_adxl, packet_to_template
+from web_db.src.paths import DATA_CSV
 from web_db.src.runtime import replay, store
 
 router = APIRouter()
+csv_job = CsvStatsJob(store)
 
 
 class DbLoad(BaseModel):
@@ -169,3 +177,15 @@ def db_clear_device_name(mac: str):
         raise HTTPException(400, str(exc)) from exc
 
 
+@router.get("/api/db/csv-stats")
+def csv_stats_state():
+    """CSV 일자별 통계 작업 상태와, 지금 data_csv에서 찾은 X/Y/Z CSV 묶음 수(버튼 옆 안내용)."""
+    return dict(csv_job.state(), folder=str(DATA_CSV), groups_found=len(find_groups(DATA_CSV)))
+
+
+@router.post("/api/db/csv-stats")
+def csv_stats_start():
+    """data_csv 전체로 일자별 통계를 다시 만든다. 백그라운드로 돌고 GET으로 진행을 본다."""
+    if not csv_job.start(DATA_CSV):
+        raise HTTPException(409, "이미 통계를 만드는 중입니다")
+    return csv_job.state()

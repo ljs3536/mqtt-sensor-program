@@ -44,6 +44,31 @@ LINK_TEXT = {
 }
 ALARM_TEXT = {"ok": "정상", "warn": "주의", "over": "초과", "none": "통계 없음", "na": "알람 없음"}
 
+# 화면에 보이는 '하나의 상태'. 연결(link)과 알람(alarm) 두 판정 중 더 나쁜 쪽 하나로 줄인다.
+# 사용자는 아이콘 색 하나만 보면 된다. 순서(나쁜 것부터): 경보 > 끊김 > 주의 > 정상 > 대기.
+STATE_TEXT = {"alarm": "경보", "lost": "끊김", "warn": "주의", "ok": "정상", "idle": "대기"}
+STATE_ORDER = ["alarm", "lost", "warn", "ok", "idle"]
+
+
+def overall_state(link, alarm):
+    """연결·알람 판정 → 하나의 상태.
+
+    - 경보(alarm): 쌓인 통계 SRSS ≥ 한계.
+    - 끊김(lost): 원래 간격보다 훨씬 오래 수신 없음.
+    - 주의(warn): SRSS ≥ 한계의 80%, 또는 수신 지연.
+    - 정상(ok): 제때 수신 중이고 알람 없음.
+    - 대기(idle): 판단할 수 없음(수신 꺼짐, 측정 중지, 기록 없음, 주기 미상).
+    """
+    if alarm == "over":
+        return "alarm"
+    if link == "lost":
+        return "lost"
+    if alarm == "warn" or link == "late":
+        return "warn"
+    if link == "ok":
+        return "ok"
+    return "idle"
+
 
 def _time(text):
     """저장된 ISO 시각 문자열 → datetime. 해석할 수 없으면 None."""
@@ -169,18 +194,22 @@ def build_status(rows, receiver, now=None):
     """MAC별 상태 목록과 요약.
 
     rows: store.site_rows(). receiver: {"connected": bool, "host", "port"} (MonitorService에서).
-    돌려주는 dict: now, receiver, sensors[...], counts{link 상태별, alarm 상태별}.
+    돌려주는 dict: now, receiver, sensors[...], counts{link 상태별, alarm 상태별, state(하나의 상태)별}.
+    sensors는 나쁜 상태부터(경보 → 끊김 → 주의 → 정상 → 대기), 같은 상태 안에서는 원래 순서.
     """
     now = now or datetime.now()
     receiver_on = bool(receiver.get("connected"))
     sensors = []
-    counts = {"total": 0, "link": {}, "alarm": {}}
+    counts = {"total": 0, "link": {}, "alarm": {}, "state": {}}
     for row in rows:
         link, age, interval, source = link_state(row, receiver_on, now)
         alarm, value, limit = alarm_state(row)
         config = _config(row)
+        state = overall_state(link, alarm)
         sensors.append({
             "mac": row["mac"],
+            "state": state,
+            "state_text": STATE_TEXT[state],
             "name": row.get("display_name") or "",
             "kind": sensor_kind(row),
             "last_at": row.get("last_at") or "",
@@ -202,6 +231,8 @@ def build_status(rows, receiver, now=None):
         counts["total"] += 1
         counts["link"][link] = counts["link"].get(link, 0) + 1
         counts["alarm"][alarm] = counts["alarm"].get(alarm, 0) + 1
+        counts["state"][state] = counts["state"].get(state, 0) + 1
+    sensors.sort(key=lambda item: STATE_ORDER.index(item["state"]))
     return {
         "now": now.isoformat(timespec="seconds"),
         "receiver": receiver,

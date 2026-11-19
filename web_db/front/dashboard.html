@@ -9,8 +9,8 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=23">
-  <link rel="stylesheet" href="/static/theme.css?v=11">
+  <link rel="stylesheet" href="/static/style.css?v=26">
+  <link rel="stylesheet" href="/static/theme.css?v=12">
   <style>
     .dash-note { color: #64748b; margin: 0 0 12px; }
     .board { display: grid; gap: 14px; }
@@ -180,13 +180,19 @@
     }
 
     /* 저장된 통계를 읽어 그린다. 최신화는 하지 않는다. */
+    let lastData = null;
     async function load() {
       const data = await (await fetch("/api/db/dashboard")).json();
+      lastData = data;
       paint(data);
     }
+    // 헤더에서 테마를 바꾸면(새로고침 없음, theme.js) 작은 그래프 눈금 색을 새 테마로 다시 그린다.
+    window.addEventListener("sensor-theme", () => {
+      if (lastData) paint(lastData);
+    });
 
     load().catch((error) => alert(error.message));
   </script>
-  <script src="/static/theme.js?v=3"></script>
+  <script src="/static/theme.js?v=4"></script>
 </body>
 </html>

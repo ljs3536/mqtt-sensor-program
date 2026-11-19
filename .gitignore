@@ -4,7 +4,16 @@ web/uploads/
 web_db/sensor.sqlite
 web_db/sensor.sqlite-wal
 web_db/sensor.sqlite-shm
+# import_csv --reset 이 만드는 DB 백업
+web_db/sensor.sqlite.bak-*
+# 대문 평면도 이미지(화면에서 올린 현장 파일)
+web_db/site_files/
 __pycache__/
 *.pyc
 build/
 dist/
+# Docker 실행 데이터(docker-compose 볼륨)
+docker-data/
+# Docker 옮기기 묶음(docker/make_bundle.py 결과)
+docker-bundle/
+/data/

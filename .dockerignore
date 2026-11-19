@@ -1,0 +1,23 @@
+# 이미지에 넣지 않는 것. 이미지에는 web_db 소스와 기본 MEMS JSON만 들어간다.
+# 데이터(DB, CSV, 평면도)는 이미지가 아니라 /data 볼륨에 둔다.
+.git
+.venv
+.vscode
+.claude
+__pycache__
+**/__pycache__
+*.pyc
+build
+dist
+docs
+data_csv
+web
+web_db/sensor.sqlite*
+web_db/site_files
+*.spec
+mqtt_wave_replay_generator_*.py
+new_piezo_adc_*.py
+requirements.txt
+docker-data
+docker-bundle
+docker

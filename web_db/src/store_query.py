@@ -245,6 +245,71 @@ class QueryMixin:
             self._conn.commit()
         return {"macs": written, "failed_sets": failed, "updated_at": now}
 
+    # ---------- CSV 일자별 통계(csv_stats.CsvStatsJob) ----------
+    def adxl_packet_marks(self):
+        """MAC별 지금 마지막 ADXL packet id. CSV 통계가 끝난 뒤 통계 읽기 위치로 쓴다."""
+        with self.lock:
+            rows = self._conn.execute(
+                "SELECT mac, MAX(id) AS last_id FROM packet WHERE sensor_type='ADXL' GROUP BY mac"
+            ).fetchall()
+        return {row["mac"]: int(row["last_id"] or 0) for row in rows}
+
+    def replace_measurements_from_csv(self, rows, marks):
+        """measurement를 전부 지우고 CSV 일자별 줄로 바꾼다. 한 commit이라 중간 상태가 남지 않는다.
+
+        rows: csv_stats.rows_for_store 결과(MAC·날짜마다 한 줄). marks: adxl_packet_marks() (시작 순간 값).
+        - stat_cursor를 marks로 옮긴다. 그 id까지의 packet은 CSV에도 있으므로 하루 스케줄러가 다시 세지 않는다.
+          (MAX로 저장하므로 이미 더 앞선 위치면 그대로.) 그 뒤에 들어온 패킷만 다음 하루 통계에 들어간다.
+        - device에 없는 MAC은 등록한다. 마지막 수신이 비어 있으면 CSV 마지막 시각을 넣는다(대문 '마지막 수신').
+        - stat_meta(마지막 계산 시각)를 지금으로.
+        stats_lock은 부르는 쪽(CsvStatsJob)이 잡고 있다.
+        """
+        now = _iso()
+        last_seen = {}
+        for row in rows:
+            last_seen[row["mac"]] = max(last_seen.get(row["mac"], ""), row["last_at"])
+        with self.lock:
+            self._conn.execute("DELETE FROM measurement")
+            self._conn.executemany(
+                """
+                INSERT INTO measurement(
+                    mac, received_at, sensor_type, sample_rate, sample_count,
+                    rms, peak, srss, srss_mms, unit, g_per_lsb, set_key,
+                    set_count, first_at, last_at, computed_at, through_id
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    (
+                        row["mac"], row["received_at"], "ADXL", row["sample_rate"], row["sample_count"],
+                        row["rms"], row["peak"], row["srss"], row["srss_mms"], "g RMS", row["g_per_lsb"],
+                        f"CSV|{row['mac']}|{row['day']}", row["set_count"], row["first_at"], row["last_at"],
+                        now, int(marks.get(row["mac"], 0)),
+                    )
+                    for row in rows
+                ],
+            )
+            for mac, through in marks.items():
+                self._save_stat_through(mac, through)
+            for mac, seen in last_seen.items():
+                self._conn.execute(
+                    """
+                    INSERT INTO device(mac, created_at, updated_at, last_gw, last_battery, last_sensor, last_at)
+                    VALUES (?, ?, ?, '', '', 'ADXL', ?)
+                    ON CONFLICT(mac) DO UPDATE SET
+                        last_sensor=CASE WHEN device.last_at='' THEN 'ADXL' ELSE device.last_sensor END,
+                        last_at=CASE WHEN device.last_at='' THEN excluded.last_at ELSE device.last_at END
+                    """,
+                    (mac, now, now, seen),
+                )
+            self._conn.execute(
+                """
+                INSERT INTO stat_meta(key, updated_at) VALUES ('measurement', ?)
+                ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at
+                """,
+                (now,),
+            )
+            self._conn.commit()
+
     def _stat_through(self, mac):
         """lock을 가진 상태에서, 그 MAC이 통계에서 이미 본 마지막 packet id를 읽는다."""
         cursor = self._conn.execute(

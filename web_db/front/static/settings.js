@@ -198,3 +198,79 @@ document.querySelector("#mqttSave").onclick = async () => {
   setTimeout(() => loadMqtt().catch(() => {}), 2000);
 };
 loadMqtt().catch((error) => (mqttNote.textContent = error.message));
+
+/* ---------- 설정 탭(장치·수신 / 평면도 배치 / 통계 데이터) ----------
+ * 주소 끝 #devices #plan #stats 로 바로 연다(대문의 ⚙ 버튼은 /settings#plan).
+ * 평면도 배치 탭은 static/site.js(편집 모드)가 그린다. */
+const TABS = ["devices", "plan", "stats"];
+function showTab(name) {
+  const tab = TABS.includes(name) ? name : "devices";
+  document.querySelectorAll("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
+  document.querySelectorAll("[data-panel]").forEach((panel) => (panel.hidden = panel.dataset.panel !== tab));
+  if (tab === "stats") loadCsvStats();
+}
+document.querySelectorAll("[data-tab]").forEach((button) => {
+  button.addEventListener("click", () => {
+    history.replaceState(null, "", `#${button.dataset.tab}`);
+    showTab(button.dataset.tab);
+  });
+});
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+showTab(location.hash.slice(1));
+
+/* ---------- 통계 데이터: CSV로 일자별 통계 다시 만들기 ----------
+ * POST /api/db/csv-stats 로 시작하면 서버가 백그라운드로 돈다. 도는 동안 1초마다 GET으로 진행을 본다.
+ * 결과는 measurement를 통째로 바꾸므로 확인을 받는다. */
+let csvTimer = null;
+function csvText(id, text) {
+  document.querySelector(id).textContent = text;
+}
+function paintCsvStats(data, dashboard) {
+  csvText("#csvFolder", data.folder || "-");
+  csvText("#csvGroups", `${data.groups_found ?? "-"}개 (MAC별 X/Y/Z CSV 세트 파일 묶음)`);
+  if (dashboard) {
+    const items = (dashboard.items || []).filter((item) => item.set_count);
+    const sets = items.reduce((sum, item) => sum + item.set_count, 0);
+    const stamp = String(dashboard.updated_at || "").replace("T", " ").slice(0, 16);
+    csvText("#csvCurrent", items.length ? `${items.length}개 MAC · ${sets}세트 · 마지막 계산 ${stamp}` : "통계 없음");
+  }
+  const running = !!data.running;
+  document.querySelector("#csvStatsRun").disabled = running;
+  csvText("#csvPhase", running ? `${data.phase}…` : "");
+  const bar = document.querySelector("#csvProgress");
+  bar.hidden = !running;
+  bar.firstElementChild.style.width = data.total ? `${Math.round((data.done / data.total) * 100)}%` : "5%";
+  const result = document.querySelector("#csvResult");
+  result.classList.toggle("error", !!data.error);
+  if (data.error) {
+    result.textContent = `실패: ${data.error}`;
+  } else if (data.result) {
+    const r = data.result;
+    const range = r.first_day ? ` (${r.first_day} ~ ${r.last_day})` : "";
+    const extra = [r.failed ? `계산 못 한 세트 ${r.failed}개` : "", r.duplicates ? `중복 ${r.duplicates}개 제외` : "",
+      r.skipped_groups && r.skipped_groups.length ? `읽지 못한 묶음 ${r.skipped_groups.length}개` : ""].filter(Boolean).join(" · ");
+    result.textContent = `${r.message}${range} · ${r.sets}세트 · ${r.seconds}초${extra ? " · " + extra : ""}`;
+    result.title = (r.skipped_groups || []).join("\n");
+  } else {
+    result.textContent = "";
+  }
+}
+async function loadCsvStats() {
+  const [state, dashboard] = await Promise.all([
+    fetch("/api/db/csv-stats").then((response) => response.json()),
+    fetch("/api/db/dashboard").then((response) => response.json()),
+  ]);
+  paintCsvStats(state, dashboard);
+  clearTimeout(csvTimer);
+  if (state.running) csvTimer = setTimeout(loadCsvStats, 1000);
+}
+document.querySelector("#csvStatsRun").onclick = async () => {
+  if (!confirm("지금 통계를 모두 지우고 CSV 폴더의 데이터로 일자별 통계를 다시 만듭니다. 계속할까요?")) return;
+  const response = await fetch("/api/db/csv-stats", { method: "POST" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    alert(data.detail || "시작하지 못했습니다");
+    return;
+  }
+  loadCsvStats();
+};

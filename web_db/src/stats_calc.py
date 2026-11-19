@@ -1,6 +1,6 @@
 """완성된 ADXL X/Y/Z 한 세트의 SRSS, RMS, PEAK.
 
-수신 콜백에서는 호출하지 않는다. 통계 최신화 때만 쓴다.
+수신 콜백에서는 호출하지 않는다. 하루 통계(packet)와 CSV 일자별 통계(csv_stats) 때만 쓴다.
 SRSS g는 가속도 스펙트럼이고, srss_mms는 같은 스펙트럼을 mm/s RMS로 바꾼 값이다.
 """
 
@@ -21,7 +21,8 @@ def _parse_samples(text):
 def adxl_set_stats(found):
     """X/Y/Z 행 dict에서 RMS, PEAK, SRSS(g RMS), SRSS(mm/s RMS)를 계산한다.
 
-    found는 {"X": row, "Y": row, "Z": row}이고 row는 packet 줄이다.
+    found는 {"X": row, "Y": row, "Z": row}이고 row는 packet 줄(decoded_samples 문자열)이거나
+    CSV 통계가 만든 dict(samples 배열, sample_rate)다.
     샘플 단위는 LSB이고, 지금 저장된 1 LSB(g)를 곱해 g로 바꾼다.
     다음 경우는 ValueError로 이 세트를 버린다(최신화는 failed_sets로 센다).
     - 축 하나라도 샘플이 2개 미만이거나 샘플링 속도를 Hz로 읽을 수 없을 때
@@ -37,7 +38,8 @@ def adxl_set_stats(found):
     peak = 0.0
     for axis in ("X", "Y", "Z"):
         row = found[axis]
-        samples = _parse_samples(row["decoded_samples"])
+        # packet 줄은 decoded_samples 문자열, CSV 통계(csv_stats)는 이미 푼 samples 배열을 준다.
+        samples = row["samples"] if "samples" in row else _parse_samples(row["decoded_samples"])
         # packet에는 수신 값 그대로 있다. 그래프와 같은 규칙으로 장비 코드(10~15, 0x0A~0x0F)를 Hz로 읽는다.
         raw_rate = row["sample_rate"]
         rate = float(gen.normalize_sample_rate("ADXL", raw_rate, 0)) if raw_rate not in (None, "") else 0.0

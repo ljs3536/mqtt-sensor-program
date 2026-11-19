@@ -10,8 +10,8 @@
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=23" />
-    <link rel="stylesheet" href="/static/theme.css?v=11" />
+    <link rel="stylesheet" href="/static/style.css?v=26" />
+    <link rel="stylesheet" href="/static/theme.css?v=12" />
   </head>
   <body class="layout-pin">
     <header>
@@ -83,6 +83,8 @@
           <button type="button" id="dbLoad">조회</button>
           <span id="dbStatus" class="stats">최근 50세트까지 엽니다.</span>
         </div>
+        <!-- 패킷 이동 + 축 조작을 한 줄로(nav-row). 화면이 좁으면 자동으로 다음 줄로 넘어간다 -->
+        <div class="nav-row">
         <div class="packet-bar">
           <button type="button" class="secondary" id="prev">◀ 이전 패킷</button>
           <strong id="packetLabel">- / -</strong>
@@ -104,15 +106,16 @@
           <label class="check"
             ><input id="lockY" type="checkbox" /><span>Y축 고정</span></label
           >
-          <label>X min<input id="xMin" class="w-num" /></label>
-          <label>X max<input id="xMax" class="w-num" /></label>
-          <label>Y min<input id="yMin" class="w-num" /></label>
-          <label>Y max<input id="yMax" class="w-num" /></label>
+          <input id="xMin" class="w-num axis-num" placeholder="X min" aria-label="X min" />
+          <input id="xMax" class="w-num axis-num" placeholder="X max" aria-label="X max" />
+          <input id="yMin" class="w-num axis-num" placeholder="Y min" aria-label="Y min" />
+          <input id="yMax" class="w-num axis-num" placeholder="Y max" aria-label="Y max" />
           <button type="button" id="applyAxis">축 적용/고정</button>
           <button type="button" class="secondary" id="autoAxis">축 자동</button>
           <button type="button" class="secondary" id="resetZoom">
             그래프 전체 보기
           </button>
+        </div>
         </div>
         <div id="packetInfo" class="packet-info"></div>
         <details class="formula-fold">
@@ -160,15 +163,15 @@
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
     <script src="/static/api.js?v=1"></script>
-    <script src="/static/graph.js?v=9"></script>
+    <script src="/static/graph.js?v=10"></script>
     <script src="/static/filters.js?v=1"></script>
-    <script src="/static/generator-draw.js?v=3"></script>
+    <script src="/static/generator-draw.js?v=4"></script>
     <script src="/static/generator-api.js?v=2"></script>
     <script src="/static/generator.js?v=20"></script>
     <script src="/static/studio.js?v=6"></script>
     <script src="/static/db.js?v=5"></script>
     <!-- 속도 RMS 시간 이력 창. viewOptions·move·GraphView를 쓰므로 그 스크립트들 뒤에 둔다. -->
     <script src="/static/velocity-history.js?v=1"></script>
-    <script src="/static/theme.js?v=3"></script>
+    <script src="/static/theme.js?v=4"></script>
   </body>
 </html>

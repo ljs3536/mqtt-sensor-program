@@ -61,9 +61,9 @@ document.querySelector("#adxlFilters").innerHTML = filterMarkup([
 ]);
 refreshFilterNotes();
 
-/** 캔버스 id로 RAW 또는 FFT 차트를 만든다. */
+/** 캔버스 id로 RAW 또는 FFT 차트를 만든다. 범례는 카드 제목 줄에(그래프 높이를 아낀다). */
 function chart(id) {
-  return GraphView.chart(id);
+  return GraphView.chart(id, { cardLegend: true });
 }
 
 /** 파일 입력 옆에 고른 파일 이름을 보여 준다. */
@@ -311,14 +311,10 @@ function draw(preview) {
       }
     }
   }
-  rawChart.options.plugins.title = {
-    display: true,
-    text: preview.y_label || "RAW",
-  };
-  fftChart.options.plugins.title = {
-    display: true,
-    text: (preview.srss && preview.srss.text) || preview.fft_label || "FFT",
-  };
+  // 그래프 안 제목은 끈다(2026-11-18). RAW 제목('ADXL g' 등)은 Y축 이름과 같고,
+  // FFT 제목('SRSS = …')은 위 정보 칩에 이미 있다. 그만큼 그래프가 커진다.
+  rawChart.options.plugins.title = { display: false };
+  fftChart.options.plugins.title = { display: false };
   rawChart.options.scales.x.type = "linear";
   rawChart.options.scales.y.type = "linear";
   fftChart.options.scales.x.type = logX ? "logarithmic" : "linear";

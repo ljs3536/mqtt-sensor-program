@@ -12,7 +12,12 @@ header {
   justify-content: space-between;
   align-items: center;
   gap: 16px;
+  /* 모든 화면 같은 높이. 분석 화면(body.layout-pin)은 body가 세로 flex라서
+     flex-shrink를 막지 않으면 그래프 영역에 밀려 헤더가 줄어든다. */
   height: 52px;
+  min-height: 52px;
+  flex: 0 0 52px;
+  box-sizing: border-box;
   padding: 0 18px;
   background: #1e3348;
   color: white;
@@ -765,3 +770,41 @@ body.layout-pin #sensors .sensor-line .pair input {
   overflow-wrap: anywhere;
 }
 .filter-row input.freq.locked { background: #eef1f4; color: #7b8b9c; }
+
+/* ---------- 분석 화면(데이터 분석 CSV / 센서 데이터 분석) 조작 줄 낮추기 (2026-11-18) ----------
+ * 분석이 주인 화면이라 그래프에 높이를 더 준다. 그래프는 남는 높이를 다 쓰므로(studio-charts flex),
+ * 위 조작 줄이 낮아진 만큼 그래프가 커진다.
+ * - 라벨을 입력칸 위가 아니라 왼쪽에 둔다(줄마다 약 20px).
+ * - 패킷 이동 줄과 축 조작 줄을 한 줄(nav-row)로. 좁으면 다음 줄로 넘어간다.
+ * - 축 min/max는 라벨 대신 칸 안 글자(placeholder).
+ * - 그래프 카드 제목(RAW/FFT)은 작게. 그래프 안 제목·범례가 이미 있다. */
+body.layout-pin .stage-bar,
+body.layout-pin .packet-bar,
+body.layout-pin .axis-bar { align-items: center; gap: 6px 8px; margin-bottom: 0; }
+body.layout-pin .studio-stage > .stage-bar { margin-bottom: 6px; }
+body.layout-pin .stage-bar label:not(.check),
+body.layout-pin .packet-bar label:not(.check),
+body.layout-pin .axis-bar label:not(.check) { flex-direction: row; align-items: center; gap: 6px; white-space: nowrap; }
+body.layout-pin .nav-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-bottom: 6px; }
+body.layout-pin .axis-bar .axis-num { width: 78px; }
+body.layout-pin .packet-bar #index { width: 70px; }
+body.layout-pin .packet-info { margin-bottom: 4px; gap: 4px; }
+body.layout-pin .info-chip { padding: 2px 9px; }
+body.layout-pin .formula-fold { margin-bottom: 4px; }
+body.layout-pin .studio-charts .chart-card { padding: 4px 8px 6px; }
+body.layout-pin .studio-charts .chart-card > h2 {
+  display: flex; align-items: center; gap: 14px; min-height: 18px;
+  margin: 0; font-size: 12px; line-height: 1.2; color: #5d6e80; letter-spacing: 0.04em;
+}
+/* 카드 제목 줄 범례(graph.js cardLegend). 그래프 안 범례 대신이라 그래프 높이를 아낀다. */
+.card-legend { display: inline-flex; flex-wrap: wrap; gap: 2px 10px; letter-spacing: 0; }
+.card-legend .legend-item {
+  display: inline-flex; align-items: center; gap: 5px; height: 18px; padding: 0 2px;
+  background: transparent; border: 0; box-shadow: none; color: #3e5164; font-size: 11px; font-weight: 600;
+}
+.card-legend .legend-item:hover { text-decoration: underline; background: transparent; }
+.card-legend .legend-item.off { opacity: 0.4; text-decoration: line-through; }
+.card-legend .legend-swatch { display: inline-block; width: 14px; height: 0; border-top: 3px solid; }
+.card-legend .legend-swatch.dashed { border-top-style: dashed; border-top-width: 2px; }
+html[data-theme="dark"] .card-legend .legend-item { color: #c8c8c8; background: transparent; }
+html[data-theme="gray"] .card-legend .legend-item { color: #2c3338; background: transparent; }
