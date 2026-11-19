@@ -10,10 +10,12 @@ let monitorLive = false;
 /*
  * 연결 정보 표시(2026-11-19). 서버의 수신 연결은 하나뿐이고, 설정 화면의 자동 연결로 붙었을 수도 있다.
  * 그래서 연결 중에는 입력칸 기본값(127.0.0.1)이 아니라 **서버가 실제로 붙은 값**을 칸에 채우고 잠근다.
- * 끊겨 있으면 칸을 풀고, 처음 한 번은 설정 화면에 저장한 수신 MQTT 값으로 채운다(두 화면 기본값 통일).
+ * 끊겨 있으면 칸을 풀고, 처음 한 번은 마지막으로 연결했던 값으로 채운다.
+ * 연결은 이 화면에서만 한다. 서버는 마지막 연결을 기억해, 다시 켜지면 그 주소로 다시 연결한다(origin "auto").
  */
 let savedMqttFilled = false;
-const ORIGIN_TEXT = { auto: "설정 화면 자동 연결", manual: "이 화면에서 연결" };
+let wasLive = null; // 직전 상태가 연결 중이었는지(null = 페이지를 막 연 상태)
+const ORIGIN_TEXT = { auto: "서버 재시작 후 자동으로 다시 연결", manual: "이 화면에서 연결" };
 function showConnection(data) {
   const live = !!data.active;
   const csvBox = document.querySelector("#csvEnabled");
@@ -22,11 +24,14 @@ function showConnection(data) {
     fields[0].value = data.host || "";
     fields[1].value = data.port || "";
     fields[2].value = data.topic || "";
-    if (typeof data.csv_enabled === "boolean") csvBox.checked = data.csv_enabled;
+    if (typeof data.csv_enabled === "boolean") csvBox.checked = data.csv_enabled; // 지금 연결의 실제 CSV 저장 여부
   }
+  csvBox.disabled = live;
+  // 끊겨 있을 때 CSV 저장은 늘 켜진 상태에서 시작한다(필요할 때만 사용자가 끈다). 연결 중에는 실제 값.
+  if (!live && wasLive !== false) csvBox.checked = true;
+  wasLive = live;
   // 연결 중에는 다른 값으로 착각하지 않게 칸을 잠근다. 바꾸려면 연결 해제 후 다시 연결.
   fields.forEach((input) => (input.disabled = live));
-  csvBox.disabled = live;
   document.querySelector("#connect").disabled = live;
   const where = `${data.host}:${data.port}`;
   const origin = ORIGIN_TEXT[data.origin] ? ` · ${ORIGIN_TEXT[data.origin]}` : "";
@@ -39,12 +44,12 @@ function showConnection(data) {
   const note = document.querySelector("#connInfo");
   if (note) {
     note.textContent = live
-      ? `서버 수신 연결: ${where} · 구독 ${data.topic}${origin}. 바꾸려면 '연결 해제' 후 다시 연결하세요.`
-      : "연결되어 있지 않습니다. 칸의 값은 설정 화면 '수신 MQTT'에 저장한 값입니다.";
+      ? `서버 수신 연결: ${where} · 구독 ${data.topic}${origin}. '연결 해제' 전까지는 서버가 다시 켜져도 이 주소로 다시 연결합니다. 바꾸려면 '연결 해제' 후 다시 연결하세요.`
+      : "연결되어 있지 않습니다. 센서 데이터가 저장되지 않습니다. 칸의 값은 마지막으로 연결했던 주소입니다.";
   }
   if (!live && !savedMqttFilled) fillSavedMqtt();
 }
-/** 끊겨 있을 때 한 번, 설정 화면에 저장한 수신 MQTT 값으로 칸을 채운다. */
+/** 끊겨 있을 때 한 번, 마지막으로 연결했던 값으로 칸을 채운다(/api/site/mqtt). */
 async function fillSavedMqtt() {
   savedMqttFilled = true;
   try {

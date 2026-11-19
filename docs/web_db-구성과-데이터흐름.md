@@ -69,7 +69,7 @@
 | `generator.js` | 분석 화면 버튼을 위 함수에 연결. 전송 중일 때만 1초마다 송신 숫자와 로그를 갱신한다. 그 밖에는 버튼 동작 뒤에 한 번 읽는다 |
 | `studio.js` | DB 분석 서랍과 센서 탭. 계산 API는 `generator-*.js`를 그대로 쓴다 |
 | `db.js` | `/api/db/devices`, `/api/db/stats`, `/api/db/load`. 연 패킷은 `draw`로 넘긴다 |
-| `settings.js` | 수신 MQTT 자동 연결 값, 장치 이름과 SRSS 한계 저장. `/api/site/mqtt`, `/api/db/device-name`, `/api/analysis/srss-limit` |
+| `settings.js` | 설정 탭, 장치 이름과 SRSS 한계 저장, CSV 일자별 통계. `/api/db/device-name`, `/api/db/csv-stats` |
 | `site.js` | 대문. 평면도 탭(여러 장, 탭마다 문제 수 배지), 아이콘 그리기, 정보 카드, 배치 편집(평면도 추가·교체·이름·순서·삭제, 끌어 놓기·이동·빼기·저장), 15초 상태 갱신 |
 
 수신 화면의 흐름은 `monitor.js` 버튼 → `monitor-api.js` → 서버 → `monitor-draw.js`다. 분석 화면은 `generator.js` 또는 `db.js` → `generator-api.js` → 서버 → `generator-draw.js`다. 통계와 설정 화면은 각자 `dashboard.html`, `settings.js` 안에서 같은 방식으로 서버 JSON만 읽고 쓴다.
@@ -86,9 +86,9 @@
 2. FastAPI 앱에 `/static`과 라우터 다섯 개(`pages`, `generator`, `monitor`, `analysis`, `db`)를 붙인다.
 3. `start_daily_stats()`가 하루 통계 스레드를 켠다. 이미 살아 있으면 새로 만들지 않는다.
 
-4. 설정 화면에서 '서버 시작 때 자동 연결'을 켜 두었으면 `monitor.auto_connect()`가 저장된 MQTT 값으로 백그라운드 연결을 시작한다. 브로커가 꺼져 있어도 서버는 뜨고, paho가 1~30초 간격으로 다시 붙기를 시도한다.
+4. 수신 모니터에서 마지막으로 '연결'한 뒤 '연결 해제'를 하지 않았으면 `monitor.auto_connect()`가 기억한 주소·Topic·CSV 체크로 백그라운드 연결을 시작한다. 브로커가 꺼져 있어도 서버는 뜨고, paho가 1~30초 간격으로 다시 붙기를 시도한다.
 
-자동 연결을 켜지 않았으면 MQTT 수신은 시작하지 않는다. 수신 화면(`/receiver`)에서 연결을 눌러야 한다. 어느 쪽이든 구독은 `_on_connect`에서 하므로, 끊겼다가 다시 붙으면 다시 구독한다.
+마지막에 '연결 해제'를 했으면 MQTT 수신은 시작하지 않는다. 수신 화면(`/receiver`)에서 연결해야 한다.
 
 ## 스레드와 잠금
 
@@ -122,7 +122,7 @@
 | `GET·POST /api/site/plans/{id}/image` | 평면도 이미지 / 이미지 교체(이름·위치 유지) |
 | `PATCH·DELETE /api/site/plans/{id}` | 이름 바꾸기 `{"name"}`·탭 순서 `{"move": -1\|1}` / 평면도 한 장과 그 위치 삭제 |
 | `POST /api/site/placements` | 모든 평면도의 센서 위치를 통째로 저장 `[{plan_id, mac, x, y}]`(x·y는 0~1). 같은 MAC은 마지막 한 곳만 |
-| `GET·POST /api/site/mqtt` | 설정 화면의 수신 MQTT 값. 자동 연결이 켜져 있으면 저장하면서 다시 붙는다 |
+| `GET /api/site/mqtt` | 마지막 수신 연결 값(수신 모니터 '연결' 때 저장)과 지금 연결 상태. 저장 API는 없다(연결·해제가 저장한다) |
 | `POST /api/monitor/connect`, `/disconnect` | 수신 MQTT 연결·해제. 연결 때 CSV 폴더를 연다 |
 | `GET /api/monitor/state?device=` | 연결 상태, MAC 목록, 로그, 최신 그래프. 연결된 동안 화면이 1초마다 부른다 |
 | `POST /api/monitor/view` | 수신 그래프 옵션과 창 길이를 바꾸고 다시 그린다 |

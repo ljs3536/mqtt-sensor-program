@@ -1,209 +1,361 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <title>설정</title>
-  <script>
-  (function () {
-    var theme = localStorage.getItem("sensor-theme") || "white";
-    document.documentElement.setAttribute("data-theme", theme);
-  })();
-  </script>
-  <link rel="stylesheet" href="/static/style.css?v=28">
-  <link rel="stylesheet" href="/static/theme.css?v=14">
-  <style>
-    .settings-table { width: 100%; border-collapse: collapse; }
-    .settings-table th, .settings-table td {
-      text-align: left;
-      padding: 8px 6px;
-      border-bottom: 1px solid #d5dee8;
-      vertical-align: middle;
-    }
-    .settings-table input.w-name { width: 220px; }
-    .settings-table input.w-limit { width: 110px; }
-    .settings-mac { font-weight: 800; word-break: break-all; }
-    .settings-meta { color: #5d6e80; font-size: 12px; white-space: nowrap; }
-    .add-row { margin-bottom: 14px; }
-    html[data-theme="gray"] .settings-table th,
-    html[data-theme="gray"] .settings-table td { border-color: #aeb8c0; }
-    html[data-theme="gray"] .settings-meta { color: #2c3338; }
-    html[data-theme="dark"] .settings-table th,
-    html[data-theme="dark"] .settings-table td { border-color: #333; color: #e6e6e6; }
-    html[data-theme="dark"] .settings-meta { color: #9aa8b5; }
-    /* 설정 탭: 장치·수신 / 평면도 배치 / 통계 데이터. 주소 #devices #plan #stats 로 바로 열 수 있다. */
-    .settings-tabs { display: flex; gap: 4px; margin: 0 0 10px; border-bottom: 2px solid #d5dee8; }
-    .settings-tabs button {
-      background: transparent; color: #5d6e80; box-shadow: none; border-radius: 8px 8px 0 0;
-      border: 0; border-bottom: 3px solid transparent; margin-bottom: -2px; padding: 0 16px; height: 38px; font-weight: 700;
-    }
-    .settings-tabs button:hover { color: #1c2833; background: rgba(31, 106, 165, 0.06); }
-    .settings-tabs button.active { color: #1f6aa5; border-bottom-color: #1f6aa5; }
-    html[data-theme="gray"] .settings-tabs { border-color: #aeb8c0; }
-    html[data-theme="gray"] .settings-tabs button.active { color: #c45c12; border-bottom-color: #c45c12; }
-    html[data-theme="dark"] .settings-tabs { border-color: #333; }
-    html[data-theme="dark"] .settings-tabs button { color: #a3a3a3; }
-    html[data-theme="dark"] .settings-tabs button.active { color: #f0a05a; border-bottom-color: #f0a05a; }
-    [data-panel][hidden] { display: none !important; }
-    .csv-stats-info { display: grid; grid-template-columns: 130px 1fr; gap: 4px 10px; margin: 10px 0; font-size: 13px; }
-    .csv-stats-info dt { color: #5d6e80; }
-    .csv-stats-info dd { margin: 0; overflow-wrap: anywhere; }
-    .csv-progress { height: 8px; border-radius: 4px; background: #e3e9ef; overflow: hidden; margin: 8px 0; max-width: 480px; }
-    .csv-progress > div { height: 100%; width: 0; background: #1f6aa5; transition: width 0.3s; }
-    .csv-result { font-size: 13px; }
-    .csv-result.error { color: #b42318; }
-    html[data-theme="dark"] .csv-stats-info dt { color: #9aa8b5; }
-    html[data-theme="dark"] .csv-progress { background: #333; }
-  </style>
-  <link rel="stylesheet" href="/static/site.css?v=8">
-</head>
-<body data-site-mode="edit">
-  <header>
-    <strong class="brand">설정</strong>
-    <nav>
-      <a href="/">센서 현황</a>
-      <a href="/receiver">센서 수신 모니터</a>
-      <a href="/generator">데이터 분석 CSV</a>
-      <a href="/studio">센서 데이터 분석</a>
-      <a href="/dashboard">통계</a>
-      <a class="active" href="/settings">설정</a>
-    </nav>
-  </header>
-  <main>
-    <nav class="settings-tabs" role="tablist">
-      <button type="button" data-tab="devices">장치 · 수신</button>
-      <button type="button" data-tab="plan">평면도 배치</button>
-      <button type="button" data-tab="stats">통계 데이터</button>
-    </nav>
-    <div data-panel="devices">
-    <!--
-      수신 MQTT: 대문(센서 현황)이 상태를 판정하려면 서버가 늘 수신하고 있어야 한다.
-      '서버 시작 때 자동 연결'을 켜면 서버가 켜질 때와 지금 저장할 때 이 값으로 붙고,
-      끊기면 스스로 다시 붙는다(/api/site/mqtt, MonitorService.auto_connect).
-    -->
-    <section class="card">
-      <h2>수신 MQTT (자동 연결)</h2>
-      <p class="hint">서버가 이 값으로 브로커에 붙어 센서 데이터를 받습니다. 수신 데이터는 SQLite에 항상 저장되고, CSV 저장은 켤 때만 합니다(자동 연결은 계속 붙어 있으므로 CSV가 계속 쌓입니다). 설정 Topic S/# 는 자동으로 함께 구독합니다.</p>
-      <div class="row">
-        <label>Broker<input id="mqttHost" value="127.0.0.1"></label>
-        <label>Port<input id="mqttPort" class="w-num" value="1883"></label>
-        <label>구독 Topic(s)<input id="mqttTopic" value="V/#,D/#"></label>
-        <label class="check"><input id="mqttCsv" type="checkbox"><span>CSV 저장</span></label>
-        <label class="check"><input id="mqttAuto" type="checkbox"><span>서버 시작 때 자동 연결</span></label>
-        <button type="button" id="mqttSave">저장</button>
-        <span id="mqttState" class="pill off">-</span>
+  <head>
+    <meta charset="utf-8" />
+    <title>설정</title>
+    <script>
+      (function () {
+        var theme = localStorage.getItem("sensor-theme") || "white";
+        document.documentElement.setAttribute("data-theme", theme);
+      })();
+    </script>
+    <link rel="stylesheet" href="/static/style.css?v=28" />
+    <link rel="stylesheet" href="/static/theme.css?v=14" />
+    <style>
+      .settings-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .settings-table th,
+      .settings-table td {
+        text-align: left;
+        padding: 8px 6px;
+        border-bottom: 1px solid #d5dee8;
+        vertical-align: middle;
+      }
+      .settings-table input.w-name {
+        width: 220px;
+      }
+      .settings-table input.w-limit {
+        width: 110px;
+      }
+      .settings-mac {
+        font-weight: 800;
+        word-break: break-all;
+      }
+      .settings-meta {
+        color: #5d6e80;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .add-row {
+        margin-bottom: 14px;
+      }
+      html[data-theme="gray"] .settings-table th,
+      html[data-theme="gray"] .settings-table td {
+        border-color: #aeb8c0;
+      }
+      html[data-theme="gray"] .settings-meta {
+        color: #2c3338;
+      }
+      html[data-theme="dark"] .settings-table th,
+      html[data-theme="dark"] .settings-table td {
+        border-color: #333;
+        color: #e6e6e6;
+      }
+      html[data-theme="dark"] .settings-meta {
+        color: #9aa8b5;
+      }
+      /* 설정 탭: 장치·수신 / 평면도 배치 / 통계 데이터. 주소 #devices #plan #stats 로 바로 열 수 있다. */
+      .settings-tabs {
+        display: flex;
+        gap: 4px;
+        margin: 0 0 10px;
+        border-bottom: 2px solid #d5dee8;
+      }
+      .settings-tabs button {
+        background: transparent;
+        color: #5d6e80;
+        box-shadow: none;
+        border-radius: 8px 8px 0 0;
+        border: 0;
+        border-bottom: 3px solid transparent;
+        margin-bottom: -2px;
+        padding: 0 16px;
+        height: 38px;
+        font-weight: 700;
+      }
+      .settings-tabs button:hover {
+        color: #1c2833;
+        background: rgba(31, 106, 165, 0.06);
+      }
+      .settings-tabs button.active {
+        color: #1f6aa5;
+        border-bottom-color: #1f6aa5;
+      }
+      html[data-theme="gray"] .settings-tabs {
+        border-color: #aeb8c0;
+      }
+      html[data-theme="gray"] .settings-tabs button.active {
+        color: #c45c12;
+        border-bottom-color: #c45c12;
+      }
+      html[data-theme="dark"] .settings-tabs {
+        border-color: #333;
+      }
+      html[data-theme="dark"] .settings-tabs button {
+        color: #a3a3a3;
+      }
+      html[data-theme="dark"] .settings-tabs button.active {
+        color: #f0a05a;
+        border-bottom-color: #f0a05a;
+      }
+      [data-panel][hidden] {
+        display: none !important;
+      }
+      .csv-stats-info {
+        display: grid;
+        grid-template-columns: 130px 1fr;
+        gap: 4px 10px;
+        margin: 10px 0;
+        font-size: 13px;
+      }
+      .csv-stats-info dt {
+        color: #5d6e80;
+      }
+      .csv-stats-info dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .csv-progress {
+        height: 8px;
+        border-radius: 4px;
+        background: #e3e9ef;
+        overflow: hidden;
+        margin: 8px 0;
+        max-width: 480px;
+      }
+      .csv-progress > div {
+        height: 100%;
+        width: 0;
+        background: #1f6aa5;
+        transition: width 0.3s;
+      }
+      .csv-result {
+        font-size: 13px;
+      }
+      .csv-result.error {
+        color: #b42318;
+      }
+      html[data-theme="dark"] .csv-stats-info dt {
+        color: #9aa8b5;
+      }
+      html[data-theme="dark"] .csv-progress {
+        background: #333;
+      }
+    </style>
+    <link rel="stylesheet" href="/static/site.css?v=8" />
+  </head>
+  <body data-site-mode="edit">
+    <header>
+      <strong class="brand">설정</strong>
+      <nav>
+        <a href="/">센서 현황</a>
+        <a href="/receiver">센서 수신 모니터</a>
+        <a href="/generator">데이터 분석 CSV</a>
+        <a href="/studio">센서 데이터 분석</a>
+        <a href="/dashboard">통계</a>
+        <a class="active" href="/settings">설정</a>
+      </nav>
+    </header>
+    <main>
+      <nav class="settings-tabs" role="tablist">
+        <button type="button" data-tab="devices">장치 · 수신</button>
+        <button type="button" data-tab="plan">평면도 배치</button>
+        <button type="button" data-tab="stats">통계 데이터</button>
+      </nav>
+      <div data-panel="devices">
+        <section class="card">
+          <h2>장치 이름 / SRSS 한계</h2>
+          <p class="hint">
+            표시 이름은 통계와 분석 MAC 목록에 붙습니다. SRSS 한계(mm/s RMS)는
+            통계 막대의 기준선이고, 그래프의 SRSS 한계선과 같은 값입니다. 비어
+            있으면 4.5입니다.
+          </p>
+          <div class="row add-row">
+            <label>MAC<input id="newMac" placeholder="장치 MAC" /></label>
+            <label>이름<input id="newName" placeholder="표시 이름" /></label>
+            <label
+              >SRSS 한계<input id="newLimit" class="w-num" value="4.5"
+            /></label>
+            <button type="button" id="addDevice">추가</button>
+          </div>
+          <p class="hint" id="settingsNote"></p>
+          <table class="settings-table">
+            <thead>
+              <tr>
+                <th>MAC</th>
+                <th>이름</th>
+                <th>SRSS 한계</th>
+                <th>패킷</th>
+                <th>마지막 수신</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="deviceRows"></tbody>
+          </table>
+        </section>
       </div>
-      <p class="hint" id="mqttNote"></p>
-    </section>
-    <section class="card">
-      <h2>장치 이름 / SRSS 한계</h2>
-      <p class="hint">표시 이름은 통계와 분석 MAC 목록에 붙습니다. SRSS 한계(mm/s RMS)는 통계 막대의 기준선이고, 그래프의 SRSS 한계선과 같은 값입니다. 비어 있으면 4.5입니다.</p>
-      <div class="row add-row">
-        <label>MAC<input id="newMac" placeholder="장치 MAC"></label>
-        <label>이름<input id="newName" placeholder="표시 이름"></label>
-        <label>SRSS 한계<input id="newLimit" class="w-num" value="4.5"></label>
-        <button type="button" id="addDevice">추가</button>
-      </div>
-      <p class="hint" id="settingsNote"></p>
-      <table class="settings-table">
-        <thead>
-          <tr>
-            <th>MAC</th>
-            <th>이름</th>
-            <th>SRSS 한계</th>
-            <th>패킷</th>
-            <th>마지막 수신</th>
-            <th></th>
-          </tr>
-        </thead>
-        <tbody id="deviceRows"></tbody>
-      </table>
-    </section>
-    </div>
 
-    <!--
+      <!--
       평면도 배치(관리용). 대문(/)은 보기 전용이고 배치는 여기서만 바꾼다.
       static/site.js가 body의 data-site-mode="edit"로 편집 모드로 돈다.
     -->
-    <div data-panel="plan" class="site-main" hidden>
-      <section class="card site-editbar">
-        <input id="planFile" type="file" accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml" hidden>
-        <button type="button" id="planAdd">+ 평면도 추가</button>
-        <span class="site-plan-tools" id="planTools">
-          <button type="button" class="secondary" id="planReplace">이미지 교체</button>
-          <button type="button" class="secondary" id="planRename">이름 바꾸기</button>
-          <button type="button" class="secondary" id="planLeft" title="탭을 앞으로">◀</button>
-          <button type="button" class="secondary" id="planRight" title="탭을 뒤로">▶</button>
-          <button type="button" class="stop" id="planDelete">이 평면도 삭제</button>
-        </span>
-        <span class="site-edit-actions">
-          <span id="dirtyText" class="hint"></span>
-          <button type="button" class="secondary" id="editCancel" disabled>되돌리기</button>
-          <button type="button" class="go" id="editSave" disabled>배치 저장</button>
-        </span>
-        <p class="site-edit-help">오른쪽 목록의 센서를 평면도로 끌어 놓고, 아이콘을 끌어 옮깁니다. ×는 평면도에서 빼기. 위치는 '배치 저장'을 눌러야 남습니다. 평면도 추가·교체·이름·순서·삭제는 바로 반영됩니다.</p>
-      </section>
-      <div class="site-layout">
-        <section class="card site-plan-card">
-          <div id="planTabs" class="site-tabs" role="tablist" hidden></div>
-          <div id="planEmpty" class="site-empty" hidden>
-            <p><strong>평면도가 없습니다.</strong></p>
-            <p class="hint">'+ 평면도 추가'로 PNG·JPG·WEBP·SVG 이미지(15MB 이하)를 올리세요. 층·구역마다 한 장씩 여러 장 둘 수 있습니다.</p>
-          </div>
-          <div id="planWrap" class="site-plan-wrap" hidden>
-          <!-- 확대·이동: 휠 = 확대/축소, 빈 곳 끌기 = 이동(확대했을 때), 버튼 = + − 맞춤 -->
-          <div class="zoom-tools">
-            <button type="button" id="zoomIn" title="확대" aria-label="확대">+</button>
-            <span id="zoomText">100%</span>
-            <button type="button" id="zoomOut" title="축소" aria-label="축소">−</button>
-            <button type="button" id="zoomFit" title="전체 보기" aria-label="전체 보기">⤢</button>
-          </div>
-            <div id="planStage" class="site-plan-stage">
-              <img id="planImage" alt="평면도" draggable="false">
-              <div id="markerLayer" class="site-markers"></div>
-            </div>
-          </div>
+      <div data-panel="plan" class="site-main" hidden>
+        <section class="card site-editbar">
+          <input
+            id="planFile"
+            type="file"
+            accept=".png,.jpg,.jpeg,.webp,.svg,image/png,image/jpeg,image/webp,image/svg+xml"
+            hidden
+          />
+          <button type="button" id="planAdd">+ 평면도 추가</button>
+          <span class="site-plan-tools" id="planTools">
+            <button type="button" class="secondary" id="planReplace">
+              이미지 교체
+            </button>
+            <button type="button" class="secondary" id="planRename">
+              이름 바꾸기
+            </button>
+            <button
+              type="button"
+              class="secondary"
+              id="planLeft"
+              title="탭을 앞으로"
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              class="secondary"
+              id="planRight"
+              title="탭을 뒤로"
+            >
+              ▶
+            </button>
+            <button type="button" class="stop" id="planDelete">
+              이 평면도 삭제
+            </button>
+          </span>
+          <span class="site-edit-actions">
+            <span id="dirtyText" class="hint"></span>
+            <button type="button" class="secondary" id="editCancel" disabled>
+              되돌리기
+            </button>
+            <button type="button" class="go" id="editSave" disabled>
+              배치 저장
+            </button>
+          </span>
+          <p class="site-edit-help">
+            오른쪽 목록의 센서를 평면도로 끌어 놓고, 아이콘을 끌어 옮깁니다. ×는
+            평면도에서 빼기. 위치는 '배치 저장'을 눌러야 남습니다. 평면도
+            추가·교체·이름·순서·삭제는 바로 반영됩니다.
+          </p>
         </section>
-        <aside class="card site-list-card">
-          <div class="site-list-head">
-            <h2>센서 <small id="listCount"></small></h2>
-            <select id="listFilter" aria-label="목록 보기">
-              <option value="unplaced">평면도 없음</option>
-              <option value="here">이 평면도</option>
-              <option value="all">전체</option>
-            </select>
-          </div>
-          <input id="listSearch" class="list-search" type="search" placeholder="이름·MAC 검색" aria-label="센서 검색">
-          <ul id="sensorList" class="site-list"></ul>
-        </aside>
+        <div class="site-layout">
+          <section class="card site-plan-card">
+            <div id="planTabs" class="site-tabs" role="tablist" hidden></div>
+            <div id="planEmpty" class="site-empty" hidden>
+              <p><strong>평면도가 없습니다.</strong></p>
+              <p class="hint">
+                '+ 평면도 추가'로 PNG·JPG·WEBP·SVG 이미지(15MB 이하)를 올리세요.
+                층·구역마다 한 장씩 여러 장 둘 수 있습니다.
+              </p>
+            </div>
+            <div id="planWrap" class="site-plan-wrap" hidden>
+              <!-- 확대·이동: 휠 = 확대/축소, 빈 곳 끌기 = 이동(확대했을 때), 버튼 = + − 맞춤 -->
+              <div class="zoom-tools">
+                <button
+                  type="button"
+                  id="zoomIn"
+                  title="확대"
+                  aria-label="확대"
+                >
+                  +
+                </button>
+                <span id="zoomText">100%</span>
+                <button
+                  type="button"
+                  id="zoomOut"
+                  title="축소"
+                  aria-label="축소"
+                >
+                  −
+                </button>
+                <button
+                  type="button"
+                  id="zoomFit"
+                  title="전체 보기"
+                  aria-label="전체 보기"
+                >
+                  ⤢
+                </button>
+              </div>
+              <div id="planStage" class="site-plan-stage">
+                <img id="planImage" alt="평면도" draggable="false" />
+                <div id="markerLayer" class="site-markers"></div>
+              </div>
+            </div>
+          </section>
+          <aside class="card site-list-card">
+            <div class="site-list-head">
+              <h2>센서 <small id="listCount"></small></h2>
+              <select id="listFilter" aria-label="목록 보기">
+                <option value="unplaced">평면도 없음</option>
+                <option value="here">이 평면도</option>
+                <option value="all">전체</option>
+              </select>
+            </div>
+            <input
+              id="listSearch"
+              class="list-search"
+              type="search"
+              placeholder="이름·MAC 검색"
+              aria-label="센서 검색"
+            />
+            <ul id="sensorList" class="site-list"></ul>
+          </aside>
+        </div>
       </div>
-    </div>
 
-    <!--
+      <!--
       통계 데이터: data_csv_web의 누적 CSV로 일자별 통계를 다시 만든다(관리용, /api/db/csv-stats, csv_stats.py).
       운영 서버처럼 DB 없이 CSV만 쌓인 곳에서 통계 화면·대문 알람을 채울 때 쓴다.
     -->
-    <div data-panel="stats" hidden>
-      <section class="card">
-        <h2>CSV로 일자별 통계 만들기</h2>
-        <p class="hint">수신 CSV 폴더의 MEMS(ADXL) X/Y/Z 데이터로 하루마다 통계를 다시 계산합니다. 통계 화면과 센서 현황의 진동 값이 이 결과로 바뀝니다.</p>
-        <dl class="csv-stats-info">
-          <dt>CSV 폴더</dt><dd id="csvFolder">-</dd>
-          <dt>찾은 CSV 묶음</dt><dd id="csvGroups">-</dd>
-          <dt>지금 통계</dt><dd id="csvCurrent">-</dd>
-        </dl>
-        <div class="row">
-          <button type="button" id="csvStatsRun">CSV로 일자별 통계 다시 만들기</button>
-          <span id="csvPhase" class="hint"></span>
-        </div>
-        <div class="csv-progress" id="csvProgress" hidden><div></div></div>
-        <p id="csvResult" class="csv-result"></p>
-        <p class="hint">주의: 기존 통계를 모두 지우고 CSV 결과로 바꿉니다. CSV 저장을 꺼 두었던 기간의 데이터는 통계에서 빠집니다. 그 뒤 새로 받는 데이터는 매일 자정 뒤 자동 통계에 더해집니다.</p>
-      </section>
-    </div>
-  </main>
-  <script src="/static/api.js?v=1"></script>
-  <script src="/static/settings.js?v=5"></script>
-  <script src="/static/site.js?v=11"></script>
-  <script src="/static/theme.js?v=4"></script>
-</body>
+      <div data-panel="stats" hidden>
+        <section class="card">
+          <h2>CSV로 일자별 통계 만들기</h2>
+          <p class="hint">
+            수신 CSV 폴더의 MEMS(ADXL) X/Y/Z 데이터로 하루마다 통계를 다시
+            계산합니다. 통계 화면과 센서 현황의 진동 값이 이 결과로 바뀝니다.
+          </p>
+          <dl class="csv-stats-info">
+            <dt>CSV 폴더</dt>
+            <dd id="csvFolder">-</dd>
+            <dt>찾은 CSV 묶음</dt>
+            <dd id="csvGroups">-</dd>
+            <dt>지금 통계</dt>
+            <dd id="csvCurrent">-</dd>
+          </dl>
+          <div class="row">
+            <button type="button" id="csvStatsRun">
+              CSV로 일자별 통계 다시 만들기
+            </button>
+            <span id="csvPhase" class="hint"></span>
+          </div>
+          <div class="csv-progress" id="csvProgress" hidden><div></div></div>
+          <p id="csvResult" class="csv-result"></p>
+          <p class="hint">
+            주의: 기존 통계를 모두 지우고 CSV 결과로 바꿉니다. CSV 저장을 꺼
+            두었던 기간의 데이터는 통계에서 빠집니다. 그 뒤 새로 받는 데이터는
+            매일 자정 뒤 자동 통계에 더해집니다.
+          </p>
+        </section>
+      </div>
+    </main>
+    <script src="/static/api.js?v=1"></script>
+    <script src="/static/settings.js?v=6"></script>
+    <script src="/static/site.js?v=12"></script>
+    <script src="/static/theme.js?v=4"></script>
+  </body>
 </html>

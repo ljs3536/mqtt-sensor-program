@@ -27,17 +27,24 @@ document.querySelector("#clearMacs").onclick = () => {
   document.querySelector("#macCount").textContent = "0개 선택";
 };
 
-/** 브로커 연결과 CSV 저장 여부를 서버에 보낸다. */
+/**
+ * 브로커에 연결한다(CSV 저장 체크 포함). 서버는 이 주소와 CSV 체크를 기억해 두었다가
+ * '연결 해제'를 누르기 전까지는 서버가 다시 켜져도 같은 값으로 다시 연결한다(설정 화면의 수신 MQTT 칸은 없앰).
+ */
 document.querySelector("#connect").onclick = async () => {
   const { response, data } = await postJson("/api/monitor/connect", {
     host: host.value, port: Number(port.value), topic: topic.value,
-    csv_enabled: csvEnabled.checked,
+    csv_enabled: document.querySelector("#csvEnabled").checked,
   });
   if (!response.ok) alert(data.detail || "연결 실패");
+  else if (data.warning) alert(data.warning);
   refresh();
 };
 document.querySelector("#disconnect").onclick = async () => {
-  await fetch("/api/monitor/disconnect", { method: "POST" });
+  if (!confirm("수신을 끊을까요? 끊는 동안 센서 데이터가 저장되지 않고, 서버가 다시 켜져도 자동으로 연결하지 않습니다.")) return;
+  const response = await fetch("/api/monitor/disconnect", { method: "POST" });
+  const data = await readJson(response).catch(() => ({}));
+  if (data.warning) alert(data.warning);
   refresh();
 };
 document.querySelector("#analysis").addEventListener("change", () => {

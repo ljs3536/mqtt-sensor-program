@@ -286,7 +286,7 @@
     banner.hidden = !!receiver.connected;
     banner.innerHTML = receiver.active
       ? "수신 서버에 연결하는 중입니다. 연결되기 전까지 센서 연결 상태는 '대기'로 보입니다."
-      : '센서 데이터 수신이 꺼져 있어 연결 상태를 판단할 수 없습니다. <a href="/settings">설정</a>에서 수신 MQTT를 켜 주세요.';
+      : '센서 데이터 수신이 꺼져 있어 연결 상태를 판단할 수 없습니다. <a href="/receiver">센서 수신 모니터</a>에서 연결해 주세요.';
     $("liveDot").className = "live-dot" + (receiver.connected ? " on" : "");
     $("liveDot").title = receiver.connected ? `수신 중 (${receiver.host}:${receiver.port})` : "수신 꺼짐";
     const counts = (status.counts && status.counts.state) || {};

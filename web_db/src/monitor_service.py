@@ -489,11 +489,27 @@ class MonitorService:
         self.mode = "MQTT"
         self.log(f"MQTT 구독 {', '.join(self._topics)}")
 
-    def auto_connect(self):
-        """설정 화면에 저장한 MQTT 값(app_setting 'mqtt')의 자동 연결이 켜져 있으면 붙는다.
+    def remember_connection(self, host, port, topic, on, csv=None):
+        """수신 모니터의 연결·해제를 app_setting 'mqtt'에 남긴다(2026-11-19).
 
-        서버가 켜질 때(server.py)와 설정 화면에서 저장할 때 부른다. 브로커가 꺼져 있어도
-        background 연결이라 서버 시작을 막지 않는다. 돌려주는 값: 연결을 시작했으면 True.
+        연결 = 그 주소와 CSV 저장 체크를 기억하고 auto=True(서버가 다시 켜지면 같은 값으로 다시 연결).
+        해제 = auto=False(다시 켜져도 연결하지 않음). 주소는 남겨 두어 다음에 칸을 채운다.
+        설정 화면의 '수신 MQTT' 칸은 없앴다. 연결은 수신 모니터에서만 한다.
+        """
+        cfg = dict(self.store.get_setting("mqtt") or {})
+        if on:
+            cfg.update(host=str(host), port=int(port), topic=str(topic))
+        if csv is not None:
+            cfg["csv"] = bool(csv)
+        cfg["auto"] = bool(on)
+        self.store.save_setting("mqtt", cfg)
+
+    def auto_connect(self):
+        """서버가 켜질 때(server.py) 마지막 연결을 다시 잇는다.
+
+        수신 모니터에서 '연결'한 뒤 '연결 해제'를 하지 않은 채 서버가 다시 켜졌으면(컨테이너 재시작,
+        재부팅, 새 이미지 배포) 그 주소·CSV 체크로 background 연결한다. 브로커가 꺼져 있어도 서버 시작을
+        막지 않고 계속 다시 시도한다. 돌려주는 값: 연결을 시작했으면 True.
         """
         cfg = self.store.get_setting("mqtt") or {}
         if not cfg.get("auto"):
@@ -502,7 +518,7 @@ class MonitorService:
             str(cfg.get("host") or "127.0.0.1"),
             int(cfg.get("port") or 1883),
             str(cfg.get("topic") or "V/#,D/#"),
-            csv_enabled=bool(cfg.get("csv")),
+            csv_enabled=bool(cfg.get("csv", True)),
             background=True,
             origin="auto",
         )

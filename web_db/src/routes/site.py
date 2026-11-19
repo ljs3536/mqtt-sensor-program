@@ -11,7 +11,7 @@
 - PATCH  /api/site/plans/{id}          이름 바꾸기 {"name"} / 탭 순서 {"move": -1|1}.
 - DELETE /api/site/plans/{id}          평면도 한 장과 그 위치 삭제.
 - POST   /api/site/placements          편집 화면 '저장'. 모든 평면도의 위치 통째로 바꾸기 [{plan_id, mac, x, y}].
-- GET·POST /api/site/mqtt      설정 화면의 수신 MQTT 값(자동 연결 포함).
+- GET  /api/site/mqtt          마지막 수신 연결 값(수신 모니터 '연결' 때 저장, 서버 재시작 때 다시 연결).
 """
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -163,37 +163,11 @@ def site_placements(body: dict):
     return {"placements": items}
 
 
-DEFAULT_MQTT = {"host": "127.0.0.1", "port": 1883, "topic": "V/#,D/#", "csv": False, "auto": False}
+DEFAULT_MQTT = {"host": "127.0.0.1", "port": 1883, "topic": "V/#,D/#", "csv": True, "auto": False}
 
 
 @router.get("/api/site/mqtt")
 def site_mqtt_get():
-    """저장된 수신 MQTT 값과 지금 연결 상태."""
+    """마지막 수신 연결 값(수신 모니터가 연결할 때 저장)과 지금 연결 상태. 수신 모니터가 칸을 채울 때 쓴다."""
     cfg = dict(DEFAULT_MQTT, **(store.get_setting("mqtt") or {}))
     return {"settings": cfg, "receiver": _receiver()}
-
-
-@router.post("/api/site/mqtt")
-def site_mqtt_save(body: dict):
-    """수신 MQTT 값을 저장한다. 자동 연결이 켜져 있으면 저장한 값으로 바로 다시 붙는다.
-
-    본문: host, port, topic, csv(자동 연결 때 CSV 저장), auto(서버 시작 때 자동 연결).
-    자동 연결을 끄면 저장만 하고 지금 연결은 건드리지 않는다(끊으려면 수신 모니터에서).
-    """
-    host = str(body.get("host") or "").strip()
-    topic = str(body.get("topic") or "").strip()
-    try:
-        port = int(body.get("port"))
-    except (TypeError, ValueError):
-        raise HTTPException(400, "Port는 숫자여야 합니다") from None
-    if not host or not topic or not 0 < port < 65536:
-        raise HTTPException(400, "Broker, Port, 구독 Topic을 확인해 주세요")
-    cfg = {"host": host, "port": port, "topic": topic, "csv": bool(body.get("csv")), "auto": bool(body.get("auto"))}
-    store.save_setting("mqtt", cfg)
-    started = False
-    if cfg["auto"]:
-        try:
-            started = monitor.auto_connect()
-        except Exception as exc:
-            raise HTTPException(400, f"저장했지만 연결 시작 실패: {exc}") from exc
-    return {"settings": cfg, "started": started, "receiver": _receiver()}

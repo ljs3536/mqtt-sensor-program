@@ -12,24 +12,41 @@ router = APIRouter()
 @router.post("/api/monitor/connect")
 async def monitor_connect(body: dict):
     """수신 모니터를 브로커에 연결한다."""
+    host = str(body.get("host") or "127.0.0.1").strip()
+    port = int(body.get("port") or 1883)
+    topic = str(body.get("topic") or "V/#,D/#").strip()
+    csv_enabled = bool(body.get("csv_enabled", True))
     try:
-        monitor.connect_mqtt(
-            body.get("host") or "127.0.0.1",
-            int(body.get("port") or 1883),
-            body.get("topic") or "V/#,D/#",
-            csv_enabled=body.get("csv_enabled", True),
-        )
+        monitor.connect_mqtt(host, port, topic, csv_enabled=csv_enabled)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
-    return monitor.state()
+    # 이 연결(CSV 체크 포함)을 기억한다. 서버가 다시 켜지면 '연결 해제'를 하기 전까지 같은 값으로 다시 연결한다.
+    # 연결 자체는 이미 됐으므로, 기억(DB 쓰기)이 실패해도 500을 내지 않고 경고만 붙인다.
+    return dict(monitor.state(), warning=_remember(host, port, topic, True, csv_enabled))
+
+
+def _remember(host, port, topic, on, csv=None):
+    """연결 값을 DB에 남긴다. 실패하면(다른 프로그램이 DB 쓰기 잠금을 잡은 경우 등) 경고 문장을 돌려준다."""
+    try:
+        monitor.remember_connection(host, port, topic, on=on, csv=csv)
+        return ""
+    except Exception as exc:
+        message = (
+            f"연결 값을 DB에 저장하지 못했습니다({exc}). 서버가 다시 켜질 때 자동 연결이 이 값을 따르지 않을 수 있습니다. "
+            "DB Browser 같은 프로그램이 DB를 쓰기 중으로 잡고 있으면 닫거나 변경사항을 쓰기/취소하세요(그동안 수신 데이터도 DB에 저장되지 않습니다)."
+        )
+        monitor.log(message)
+        return message
 
 
 @router.post("/api/monitor/disconnect")
 def monitor_disconnect():
     """수신 MQTT와 CSV 세션을 끊는다."""
     monitor.disconnect()
+    # 사람이 끊은 것이므로 서버가 다시 켜져도 다시 연결하지 않는다(저장 실패는 경고만).
+    warning = _remember(monitor.host, monitor.port, monitor.topic, False)
     monitor.log("연결 해제")
-    return monitor.state()
+    return dict(monitor.state(), warning=warning)
 
 
 @router.post("/api/monitor/logs/clear")
