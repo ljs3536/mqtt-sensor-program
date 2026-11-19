@@ -15,14 +15,14 @@
 | `web_db/src/server.py` | FastAPI 앱. 정적 파일과 라우트를 붙이고 하루 통계 스레드를 켠다 |
 | `web_db/src/routes` | 주소별 HTTP. `pages`, `monitor`, `generator`, `analysis`, `db`, `site` |
 | `web_db/src/monitor_service.py` | MQTT 수신, 최신 파형, CSV와 SQLite로 넘김 |
-| `web_db/src/save_csv.py` | 연결 동안 `data_csv/YYYYMMDD_HHMMSS`에 HEX·decoded CSV |
+| `web_db/src/save_csv.py` | 연결 동안 `data_csv_web/YYYYMMDD_HHMMSS`에 HEX·decoded CSV |
 | `web_db/src/replay.py` | 파일 또는 DB에서 연 패킷을 MQTT로 반복 송신 |
 | `web_db/src/store.py` | SQLite 연결, 스키마, 패킷·이름·설정 저장 |
 | `web_db/src/store_query.py` | MAC 목록, 통계 조회, 측정 최신화, 분석용 패킷 조회 |
 | `web_db/src/store_site.py` | 앱 설정(`app_setting`), 평면도(`floor_plan`, 이미지는 `site_files/`), 센서 위치(`sensor_placement`), 대문 상태용 원자료 |
 | `web_db/src/site_status.py` | 대문의 센서 연결·알람 판정. 임시 기준값 상수가 맨 위에 있다 |
-| `web_db/src/paths.py` | 코드·데이터 경로. 환경변수 `SENSOR_DATA_DIR`가 있으면 DB·평면도·CSV·MEMS JSON을 그 폴더 하나에 둔다(Docker 볼륨 `/data`). `docs/Docker-AWS-배포.md` |
-| `web_db/src/csv_stats.py` | data_csv의 CSV로 일자별 통계(measurement) 다시 만들기. 설정 '통계 데이터' 탭 |
+| `web_db/src/paths.py` | 코드·데이터 경로. 수신 CSV는 어디서나 `data_csv_web`. 환경변수 `SENSOR_DATA_DIR`가 있으면 DB·평면도·MEMS JSON을 그 폴더에, CSV를 그 아래 `data_csv_web`에 둔다(Docker: `/data` = `./sensor_web_db`, `/data/data_csv_web` = `./data_csv_web`). 배포는 `docs/웹-기능상세.md` "실행" |
+| `web_db/src/csv_stats.py` | data_csv_web의 CSV로 일자별 통계(measurement) 다시 만들기. 설정 '통계 데이터' 탭 |
 | `web_db/src/import_csv.py` | CSV 폴더를 SQLite `packet`에 다시 채우기(명령줄 전용). 아래 "CSV 폴더로 DB 채우기" |
 | `web_db/src/grouping.py` | ADXL seq로 X/Y/Z를 한 세트에 묶음 |
 | `web_db/src/stats_calc.py` | 완성된 XYZ 한 세트의 RMS, PEAK, SRSS |
@@ -259,7 +259,7 @@ LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같�
 
 설정 '통계 데이터' 탭의 버튼(`POST /api/db/csv-stats`) → `csv_stats.CsvStatsJob`. 운영 서버처럼 DB 없이 CSV만 있는 곳에서 통계를 채운다.
 
-1. `data_csv` 아래(하위 폴더 포함) `{MAC}_ADXL-X/Y/Z_sensorData_hex.csv` 세 파일 묶음을 모두 찾는다. 다른 곳의 CSV 폴더도 `data_csv` 안에 넣으면 같이 읽는다.
+1. `data_csv_web` 아래(하위 폴더 포함) `{MAC}_ADXL-X/Y/Z_sensorData_hex.csv` 세 파일 묶음을 모두 찾는다. 다른 곳의 CSV 폴더도 `data_csv_web` 안에 넣으면 같이 읽는다.
 2. 묶음마다 CSV 분석 화면과 같은 `load_adxl_csv_xyz`로 X/Y/Z 세트를 묶는다(packet_no → seq). 깨진 HEX는 복구하지 않고 그 세트를 뺀다.
 3. 세트마다 수신과 같은 디코드, 하루 통계와 같은 `adxl_set_stats`로 RMS·PEAK·SRSS를 낸다. 같은 데이터면 DB 통계와 값이 같다(2026-11-06 자료 7개 MAC 379세트에서 세트 수·SRSS 평균 일치 확인).
 4. 같은 세트(MAC + 세 축 수신 시각)가 여러 폴더에 있으면 한 번만 센다.
@@ -268,7 +268,7 @@ LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같�
 7. `stat_cursor`를 시작 순간의 MAC별 마지막 packet id로 옮긴다. 그 패킷은 CSV에도 있으므로 하루 스케줄러가 다시 세지 않고, 그 뒤 수신분만 더한다.
 8. `device`에 없는 MAC은 등록한다(통계 화면 목록이 device 기준). 마지막 수신이 비어 있으면 CSV 마지막 시각을 넣는다.
 
-전제: CSV가 원본 전체다. CSV 저장을 꺼 둔 기간은 통계에서 빠진다(`docs/packet-보관-정리-예정.md`의 CSV 상시 저장과 같은 이유). `Store.stats_lock`을 처음부터 끝까지 잡으므로 하루 스케줄러와 겹치지 않는다. 로컬 `data_csv`(43묶음, 531세트)는 약 2초.
+전제: CSV가 원본 전체다. CSV 저장을 꺼 둔 기간은 통계에서 빠진다(`docs/packet-보관-정리-예정.md`의 CSV 상시 저장과 같은 이유). `Store.stats_lock`을 처음부터 끝까지 잡으므로 하루 스케줄러와 겹치지 않는다. 로컬 `data_csv_web`(43묶음, 531세트)는 약 2초.
 
 ## CSV 폴더로 DB 채우기
 

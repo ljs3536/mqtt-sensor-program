@@ -17,6 +17,8 @@ DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 �
 | `stat_meta` | `measurement`를 마지막으로 만든 시각. 키는 `measurement` 하나다 |
 | `app_setting` | 키 하나에 JSON 하나인 앱 설정. 지금은 `mqtt`(설정 화면의 수신 Broker·Port·Topic·CSV·자동 연결) |
 | `floor_plan` | 대문 평면도 이미지 정보. 여러 장(층·구역마다 한 장, 화면은 탭). 이미지 파일은 DB 옆 `site_files/`에 둔다 |
+| `site_state` | 센서별 지금 상태(경보·끊김·주의·정상·대기)와 그 상태가 시작된 시각(`since`). `site_watch`가 1분마다 고친다. MAC당 한 줄 |
+| `site_state_history` | 상태가 바뀔 때마다 한 줄(`prev_state` → `state`, `changed_at`). 수신이 꺼져 있을 때는 기록하지 않는다. 180일보다 오래된 줄은 지운다 |
 | `sensor_placement` | 평면도 위 센서 아이콘 위치. x·y는 이미지 폭·높이에 대한 비율(0~1). 평면도 한 장에 센서 여러 개, 센서 하나는 평면도 한 장에만 |
 
 통계의 저장소는 `measurement` 한 곳이다.
