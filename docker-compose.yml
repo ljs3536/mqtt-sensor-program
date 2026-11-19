@@ -1,7 +1,7 @@
 # 센서 웹. 서버에는 이 파일과 sensor-web.tar 두 개만 두면 된다.
 #
 #   docker load -i sensor-web.tar
-#   docker compose up -d --force-recreate      → http://<서버 주소>:8090
+#   docker compose up -d --force-recreate      → http://<서버 주소>:8060
 # --force-recreate: 새 tar를 load 해도 이미지 이름(sensor-web:latest)이 같으면 떠 있는 컨테이너가
 # 옛 이미지로 계속 돌 수 있다. 컨테이너를 새로 만들어 새 이미지를 확실히 쓰게 한다(데이터는 바깥 폴더라 그대로).
 #
@@ -11,7 +11,7 @@
 # 컨테이너는 ./data_csv_web 주인과 같은 사용자로 돈다(이미지 안 시작 스크립트). 폴더가 없으면 Docker가 root로 만든다.
 #
 # 이미지 만들기(소스 PC): python docker/make_bundle.py  → docker-bundle/ 에 sensor-web.tar 와 이 파일
-# 포트를 바꾸려면 아래 "8090"만 고친다(컨테이너 안은 8081 고정).
+# 포트를 바꾸려면 아래 "8060"만 고친다(컨테이너 안은 8081 고정). 8060 = 운영 서버 예전 웹과 같은 포트.
 # MQTT 브로커 주소는 설정 화면 '수신 MQTT'에 넣는다. 같은 서버의 브로커면 host.docker.internal.
 services:
   web:
@@ -19,7 +19,7 @@ services:
     container_name: sensor-web
     restart: unless-stopped
     ports:
-      - "8090:8081"
+      - "8060:8081"
     volumes:
       - ./sensor_web_db:/data
       - ./data_csv_web:/data/data_csv_web
