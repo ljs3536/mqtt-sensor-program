@@ -88,14 +88,19 @@ document.querySelector("#saveDeviceName").onclick = async () => {
   refresh().catch(() => {});
 };
 
-/** 설정 적용 뒤에 이름 목록과 저장된 JSON을 다시 읽는다. */
+/**
+ * 설정 적용 뒤에 이름 목록과 저장된 JSON을 다시 읽는다.
+ * 원래 command()의 결과(보냈으면 true)를 그대로 돌려준다. STOP 버튼이 이 값을 보고
+ * 센서 타입 칸을 normal로 돌려놓는다(예전에는 결과를 버려서 칸이 그대로 남았다).
+ */
 const monitorCommand = command;
 command = async function saveCommand(action) {
-  await monitorCommand(action);
+  const sent = await monitorCommand(action);
   if (action === "apply" || action === "start" || action === "stop") {
     refreshNameMacs();
     await loadProfile();
   }
+  return sent;
 };
 
 new MutationObserver(refreshNameMacs).observe(document.querySelector("#macs"), {

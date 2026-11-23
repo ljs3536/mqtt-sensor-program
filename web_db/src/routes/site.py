@@ -163,7 +163,8 @@ def site_placements(body: dict):
     return {"placements": items}
 
 
-DEFAULT_MQTT = {"host": "127.0.0.1", "port": 1883, "topic": "V/#,D/#", "csv": True, "auto": False}
+# qos: 수신 구독 QoS(수신기 V057 기본 1). 2026-11-20 전에 저장한 값에는 없어서 이 기본값을 쓴다.
+DEFAULT_MQTT = {"host": "127.0.0.1", "port": 1883, "topic": "V/#,D/#", "qos": 1, "csv": True, "auto": False}
 
 
 @router.get("/api/site/mqtt")

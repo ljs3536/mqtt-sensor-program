@@ -139,6 +139,30 @@ def recover_adxl_hex_prefix(value, expected_samples):
     return prefix.upper(), sample_count, is_partial
 
 
+STATUS_METADATA_KEYS = ('acqStatus', 'apSsid', 'apRssi')
+
+
+def copy_status_metadata(row, obj):
+    """CSV 행의 acqStatus·apSsid·apRssi를 패킷에 옮긴다(발생기 v070과 같음).
+
+    값이 있는 열만 넣는다. apRssi는 정수로 읽히면 정수, 아니면 글자 그대로.
+    빈 값을 OK/REPLAY/0으로 채우는 일(v070 송신)은 하지 않는다.
+    """
+    for key in STATUS_METADATA_KEYS:
+        value = row.get(key)
+        if value is None or not str(value).strip():
+            continue
+        text = str(value).strip()
+        if key == 'apRssi':
+            try:
+                obj[key] = int(text)
+            except ValueError:
+                obj[key] = text
+        else:
+            obj[key] = text
+    return obj
+
+
 def _adxl_csv_events(paths, *, recover_partial=True):
     """Load XYZ CSV, preserving row markers for sequence alignment.
 
@@ -212,6 +236,7 @@ def _adxl_csv_events(paths, *, recover_partial=True):
                         obj['g_range'] = str(row['g_range']).strip()
                     if str(row.get('tick') or '').strip():
                         obj['tick'] = str(row['tick']).strip()
+                    copy_status_metadata(row, obj)
                 except (ValueError, TypeError) as exc:
                     warnings.append(f'{axis} {row_num}행 seq={seq}: 복구 불가({exc}) → 해당 축 제외')
                 events.append({'axis': axis, 'low': seq_number & 15, 'seq': seq,
@@ -459,6 +484,7 @@ def load_piezo_csv(path: str) -> list[dict]:
             tick = str(row.get("tick") or "").strip()
             if tick:
                 obj["tick"] = tick
+            copy_status_metadata(row, obj)
 
             templates.append(obj)
 
@@ -535,6 +561,7 @@ def load_ultrasonic_csv(path: str) -> list[dict]:
                 }
                 if str(row.get('tick') or '').strip():
                     obj['tick'] = str(row['tick']).strip()
+                copy_status_metadata(row, obj)
                 templates.append(obj)
             except (ValueError, TypeError) as exc:
                 errors.append(f'{line_no}행: {exc}')

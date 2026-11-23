@@ -124,6 +124,8 @@ class CsvWriter:
             "packet_no", "received_at", "source", "dvicMacAddr", "gwMacAddr",
             "sensor_type", "axis", "seq", "tick", "batteryRmin", "samplerate",
             "numofsample", "payload_bytes",
+            # 수신기 V057과 같은 열. 센서가 보낸 상태 메타데이터를 받은 그대로(없으면 빈 칸) 남긴다.
+            "acqStatus", "apSsid", "apRssi",
         ]
         hex_header = common + ["sensorData_bytes", "sensorData_hex"]
         decoded_header = common + ["decoded_sample_count", "decoded_samples"]
@@ -150,6 +152,7 @@ class CsvWriter:
                     packet_number(item), item["received_at"], "MQTT", item["device"], item["gw"],
                     item["kind"], item["axis"], item["seq"], item["tick"], item["battery"],
                     item["sample_rate"], item["num_samples"], item["payload_bytes"],
+                    item.get("acq_status", ""), item.get("ap_ssid", ""), item.get("ap_rssi", ""),
                 ]
                 hex_path = session / f"{device}_{kind}_sensorData_hex.csv"
                 hex_writer, hex_file = writer_for(hex_path, hex_header)

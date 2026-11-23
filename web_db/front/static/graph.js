@@ -69,6 +69,163 @@ const GraphView = (() => {
     },
   };
 
+  /** 커서 값 글자. 아주 크거나 작으면 지수, 아니면 유효숫자 6자리. */
+  function fmt(value) {
+    if (!Number.isFinite(value)) return "-";
+    const size = Math.abs(value);
+    if (size !== 0 && (size >= 1e5 || size < 1e-3)) return value.toExponential(4);
+    return String(Number(value.toPrecision(6)));
+  }
+
+  /** 축 제목 글자(단위 포함). 없으면 빈 칸. */
+  function axisName(plot, axis) {
+    const titleOption = plot.options.scales[axis] && plot.options.scales[axis].title;
+    return titleOption && titleOption.display && titleOption.text ? String(titleOption.text) : "";
+  }
+
+  /** 점 하나의 x, y 숫자. parsing:false라 {x, y} 객체가 기본이고, 숫자 배열도 받는다. */
+  function pointXY(dataset, item, index) {
+    if (item && typeof item === "object" && !Array.isArray(item)) return [Number(item.x), Number(item.y)];
+    if (Array.isArray(item)) return [Number(item[0]), Number(item[1])];
+    return [index, Number(item)];
+  }
+
+  /** 클릭한 화면 좌표에서 radius(px) 안의 가장 가까운 점. 보이는 선만 본다. 없으면 null. */
+  function nearestPoint(plot, px, py, radius = 35) {
+    const sx = plot.scales.x;
+    const sy = plot.scales.y;
+    if (!sx || !sy) return null;
+    let best = null;
+    plot.data.datasets.forEach((dataset, datasetIndex) => {
+      if (!plot.isDatasetVisible(datasetIndex) || !dataset.data) return;
+      dataset.data.forEach((item, index) => {
+        const [x, y] = pointXY(dataset, item, index);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const dx = sx.getPixelForValue(x) - px;
+        const dy = sy.getPixelForValue(y) - py;
+        const distance = Math.hypot(dx, dy);
+        if (distance <= radius && (!best || distance < best.distance)) {
+          best = { distance, label: String(dataset.label || ""), x };
+        }
+      });
+    });
+    return best;
+  }
+
+  /** 고정 커서가 가리키는 지금 값. 같은 이름의 선에서 고정한 X에 가장 가까운 점이다. */
+  function pinnedValue(plot, pin) {
+    const datasetIndex = plot.data.datasets.findIndex((dataset) => String(dataset.label || "") === pin.label);
+    if (datasetIndex < 0 || !plot.isDatasetVisible(datasetIndex)) return null;
+    const dataset = plot.data.datasets[datasetIndex];
+    let best = null;
+    (dataset.data || []).forEach((item, index) => {
+      const [x, y] = pointXY(dataset, item, index);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      const gap = Math.abs(x - pin.x);
+      if (!best || gap < best.gap) best = { gap, x, y };
+    });
+    if (!best) return null;
+    return { x: best.x, y: best.y, color: dataset.borderColor || "#ff8c00" };
+  }
+
+  /**
+   * 고정 커서(수신기 V057, 발생기 v070의 클릭 커서).
+   * - 곡선을 클릭하면(끌지 않고) 35px 안의 가장 가까운 점에 커서를 고정한다.
+   * - 고정한 것은 '선 이름 + X'다. 새 패킷이 오거나 다른 패킷으로 옮겨 다시 그려도 같은 선의
+   *   같은 X(시간·주파수)에서 지금 Y를 다시 찾아 보여 준다(V057 "같은 축/동일 X의 최신 Y를 추적").
+   * - 곡선이 없는 곳을 클릭하거나 우클릭 메뉴의 '커서 해제'를 누르면 푼다.
+   * 그래프마다 하나씩이다. 수신 모니터, 두 분석 화면의 RAW/FFT, 속도 RMS 시간 이력 창에 모두 붙는다.
+   */
+  const pinCursor = {
+    id: "pinCursor",
+    afterDatasetsDraw(plot) {
+      const pin = plot.$pin;
+      const area = plot.chartArea;
+      if (!pin || !area) return;
+      const value = pinnedValue(plot, pin);
+      if (!value) return;
+      const px = plot.scales.x.getPixelForValue(value.x);
+      const py = plot.scales.y.getPixelForValue(value.y);
+      if (!Number.isFinite(px) || !Number.isFinite(py)) return;
+      const dark = !!(window.SensorTheme && window.SensorTheme.dark);
+      const ctx = plot.ctx;
+      ctx.save();
+      // 세로 점선(고정한 X)과 점 표시
+      if (px >= area.left && px <= area.right) {
+        ctx.beginPath();
+        ctx.setLineDash([4, 3]);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = "#ff8c00";
+        ctx.moveTo(px, area.top);
+        ctx.lineTo(px, area.bottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (py >= area.top && py <= area.bottom) {
+          ctx.beginPath();
+          ctx.arc(px, py, 4.5, 0, Math.PI * 2);
+          ctx.fillStyle = "#ff8c00";
+          ctx.fill();
+          ctx.lineWidth = 1.5;
+          ctx.strokeStyle = dark ? "#111" : "#fff";
+          ctx.stroke();
+        }
+      }
+      // 값 상자: 그래프 안 오른쪽 위에 둔다(점 위치와 상관없이 늘 같은 자리라 읽기 쉽다).
+      const xName = axisName(plot, "x");
+      const yName = axisName(plot, "y");
+      // X 눈금을 따로 쓰는 그래프(속도 RMS 시간 이력: 시각)는 눈금과 같은 글자로 보인다.
+      const tickText = plot.options.scales.x.ticks && plot.options.scales.x.ticks.callback;
+      let xText = fmt(value.x);
+      if (typeof tickText === "function") {
+        try {
+          xText = String(tickText.call(plot.scales.x, value.x, 0, [{ value: value.x }]));
+        } catch (error) {
+          xText = fmt(value.x);
+        }
+      }
+      const lines = [
+        `고정 ${pin.label}`,
+        `X = ${xText}${xName ? ` (${xName})` : ""}`,
+        `Y = ${fmt(value.y)}${yName ? ` (${yName})` : ""}`,
+      ];
+      ctx.font = `12px ${font}`;
+      const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 14;
+      const height = lines.length * 16 + 8;
+      const left = Math.max(area.left + 4, area.right - width - 6);
+      const top = area.top + 6;
+      ctx.fillStyle = dark ? "rgba(20, 28, 24, 0.88)" : "rgba(255, 255, 255, 0.9)";
+      ctx.strokeStyle = "#ff8c00";
+      ctx.lineWidth = 1;
+      ctx.fillRect(left, top, width, height);
+      ctx.strokeRect(left, top, width, height);
+      ctx.fillStyle = dark ? "#e4efd8" : "#17324d";
+      ctx.textBaseline = "top";
+      lines.forEach((line, index) => ctx.fillText(line, left + 7, top + 5 + index * 16));
+      ctx.restore();
+    },
+  };
+
+  /** 클릭 위치로 커서를 고정하거나(점이 가까울 때), 푼다(먼 곳). */
+  function clickPin(plot, event) {
+    const rect = plot.canvas.getBoundingClientRect();
+    const px = event.clientX - rect.left;
+    const py = event.clientY - rect.top;
+    const area = plot.chartArea;
+    // 그래프 양 끝의 점(예: 시간 이력의 첫·마지막 세트)은 영역 경계에 걸려 있어, 경계 밖 몇 px도 받는다.
+    const edge = 8;
+    if (!area || px < area.left - edge || px > area.right + edge || py < area.top - edge || py > area.bottom + edge) return;
+    const hit = nearestPoint(plot, px, py);
+    plot.$pin = hit ? { label: hit.label, x: hit.x } : null;
+    plot.update("none");
+  }
+
+  /** 고정 커서를 푼다. */
+  function clearPin(plot) {
+    if (!plot || !plot.$pin) return;
+    plot.$pin = null;
+    plot.update("none");
+  }
+
   /**
    * 카드 제목 줄 범례(분석 화면). 그래프 안 범례는 위에 한 줄(약 30px)을 차지해서 그래프가 작아진다.
    * 대신 같은 항목(색 + 이름)을 카드 제목(RAW/FFT) 오른쪽에 작게 그린다. 누르면 그 선을 숨기고/보인다.
@@ -112,7 +269,7 @@ const GraphView = (() => {
   function chart(id, opts = {}) {
     const instance = new Chart(document.getElementById(id), {
       type: "line",
-      plugins: opts.cardLegend ? [midGrid, cardLegend] : [midGrid],
+      plugins: opts.cardLegend ? [midGrid, pinCursor, cardLegend] : [midGrid, pinCursor],
       data: { datasets: [] },
       options: {
         animation: false,
@@ -211,6 +368,7 @@ const GraphView = (() => {
       ["X축 축소", () => applyZoom(plot, "x", { x: (plot.scales.x.min + plot.scales.x.max) / 2 }, 1.35)],
       ["전체 보기", () => { if (typeof plot.resetZoom === "function") plot.resetZoom(); }],
     ];
+    if (plot.$pin) actions.push(["커서 해제", () => clearPin(plot)]);
     actions.forEach(([label, run]) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -279,9 +437,13 @@ const GraphView = (() => {
       plot.update("none");
     });
     window.addEventListener("pointerup", (event) => {
-      if (plot.$drag && plot.$drag.id === event.pointerId) {
+      const drag = plot.$drag;
+      if (drag && drag.id === event.pointerId) {
         plot.$drag = null;
         canvas.style.cursor = "grab";
+        // 거의 움직이지 않았고(4px 안) 휠도 안 돌렸으면 끌기가 아니라 클릭이다 → 커서 고정.
+        const moved = Math.hypot(event.clientX - drag.x, event.clientY - drag.y);
+        if (moved < 4 && !wheeled && event.button === 0) clickPin(plot, event);
       }
     });
     window.addEventListener("pointercancel", (event) => {
@@ -494,5 +656,5 @@ const GraphView = (() => {
     requestAnimationFrame(drawAxis);
   }
 
-  return { chart, axes, xText, yText, bindAxisBar, showFftCheck };
+  return { chart, axes, xText, yText, bindAxisBar, showFftCheck, clearPin };
 })();

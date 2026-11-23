@@ -36,6 +36,14 @@
             <label>Broker<input id="host" value="127.0.0.1" /></label>
             <label>Port<input id="port" class="w-port" value="1883" /></label>
             <label>구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#" /></label>
+            <!-- 구독 QoS(수신기 V057과 같음, 기본 1). 현재 설정 조회도 이 QoS. 설정 적용·START·STOP은 늘 QoS 1 -->
+            <label>QoS
+              <select id="qos" title="구독과 현재 설정 조회에 쓰는 QoS. 센서 명령(설정 적용·START·STOP)은 늘 QoS 1">
+                <option value="0">0</option>
+                <option value="1" selected>1</option>
+                <option value="2">2</option>
+              </select>
+            </label>
             <button type="button" id="connect">연결</button>
             <button type="button" class="secondary" id="disconnect">연결 해제</button>
           </div>
@@ -391,12 +399,12 @@
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
     <script src="/static/api.js?v=1"></script>
-    <script src="/static/graph.js?v=10"></script>
+    <script src="/static/graph.js?v=13"></script>
     <script src="/static/filters.js?v=1"></script>
     <script src="/static/monitor-draw.js?v=4"></script>
-    <script src="/static/monitor-api.js?v=7"></script>
-    <script src="/static/monitor.js?v=20"></script>
-    <script src="/static/monitor-db.js?v=3"></script>
+    <script src="/static/monitor-api.js?v=8"></script>
+    <script src="/static/monitor.js?v=21"></script>
+    <script src="/static/monitor-db.js?v=4"></script>
     <script src="/static/theme.js?v=4"></script>
   </body>
 </html>

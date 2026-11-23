@@ -37,10 +37,10 @@ DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 �
 | `packet` | `id`(PK, AUTOINCREMENT), `mac`, `received_at`, `gw_mac`, `sensor_type`(PIEZO·ADXL·ULTRASONIC), `axis`(X·Y·Z, PIEZO, H), `seq`, `tick`, `battery`, `sample_rate`, `sample_count`, `payload_bytes`, `sensor_data_hex`, `decoded_samples`, `min_khz`, `interval_hz`, `freq_start_khz`, `freq_end_khz`, `set_key`, `set_no` |
 | `measurement` | 아래 measurement 절 |
 | `srss_limit` | `mac`(PK, 정규화한 키), `limit_mm_s`, `updated_at` |
-| `sensor_config` | `mac`(PK), `action`(설정 적용·START·STOP·`retain 수신`), `payload`(JSON 문자열), `updated_at` |
+| `sensor_config` | `mac`(PK), `action`(설정 적용·START·`STOP → normal`·`retain 수신`), `payload`(JSON 문자열), `updated_at`. STOP은 3단계 끝에 브로커에 남는 normal 설정을 저장한다(2026-11-20 전에는 `STOP`과 `SENSORTYPE 0`) |
 | `stat_cursor` | `mac`(PK), `through_id`, `updated_at` |
 | `stat_meta` | `key`(PK), `updated_at` |
-| `app_setting` | `key`(PK), `value`(JSON 문자열), `updated_at` |
+| `app_setting` | `key`(PK), `value`(JSON 문자열), `updated_at`. `mqtt` 값: `host`, `port`, `topic`, `qos`(구독 QoS, 2026-11-20부터. 없으면 1), `csv`, `auto` |
 | `floor_plan` | `id`(PK, AUTOINCREMENT), `name`, `file`(site_files 안 이름 `floor_plan_{id}.{확장자}`), `width`, `height`(원본 픽셀), `sort_order`(탭 순서, 한 장만 쓰던 DB에는 시작할 때 열을 붙인다), `created_at`, `updated_at` |
 | `sensor_placement` | `plan_id`(→floor_plan, 삭제 시 함께 삭제), `mac`, `x`, `y`(0~1), `updated_at`. PK는 (`plan_id`, `mac`). MAC 하나가 한 평면도에만 있게 하는 것은 `replace_placements`가 지킨다 |
 

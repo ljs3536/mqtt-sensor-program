@@ -19,6 +19,39 @@ from web_db.src.save_csv import CsvWriter
 from web_db.src.view_pack import _envelope_index, _pack_pair, _take
 
 
+# 센서 명령(수신기 V057 '모드 A command'와 같음).
+# - 설정 적용·START·STOP은 S/{MAC}에 QoS 1, retain으로 보낸다(구독 QoS 선택과 별개로 고정).
+# - MQTT 명령은 JSON 본문만 보낸다. 끝에 CR이나 LF를 붙이지 않는다(CR은 시리얼 전용 규칙).
+# - JSON 길이는 CR 1바이트를 포함해 1024바이트 이하여야 한다.
+# - STOP은 3단계(STOP retain → retain 삭제 → normal retain)이고 단계마다 PUBACK을 기다린다.
+COMMAND_QOS = 1
+COMMAND_MAX_BYTES = 1024
+PUBACK_TIMEOUT_S = 10
+# 수신(구독) QoS 기본값. 수신기 V057 DEFAULT_QOS와 같다. 현재 설정 조회(CONFIG ?)도 이 QoS로 보낸다.
+DEFAULT_SUBSCRIBE_QOS = 1
+
+
+def subscribe_qos(value, default=DEFAULT_SUBSCRIBE_QOS):
+    """화면·저장값을 0/1/2 QoS로 읽는다. 없으면 기본값, 범위 밖이면 오류."""
+    if value is None or str(value).strip() == "":
+        return int(default)
+    try:
+        qos = int(str(value).strip())
+    except ValueError:
+        raise ValueError("QoS는 0, 1, 2 중 하나여야 합니다") from None
+    if qos not in (0, 1, 2):
+        raise ValueError("QoS는 0, 1, 2 중 하나여야 합니다")
+    return qos
+
+
+def command_text(payload):
+    """센서 명령 JSON 문자열. CR 포함 1024바이트를 넘으면 보내지 않고 오류(V057과 같음)."""
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if len(text.encode("utf-8")) + 1 > COMMAND_MAX_BYTES:
+        raise ValueError(f"센서 명령은 CR 포함 {COMMAND_MAX_BYTES}바이트 이하여야 합니다")
+    return text
+
+
 def _window_count(value, length):
     """창 길이를 샘플 수 안으로 제한한다. 전체면 샘플 수다."""
     text = str(value or "전체").strip()
@@ -66,10 +99,20 @@ def _sensor_config(sensor, period, profile, stop=False, sensor_type=None, g_rang
         return {"COMMPATH": "0", "SENSORTYPE": "0"}
     if code not in ("1", "2", "3", "4"):
         code = "1" if str(sensor).upper() == "PIEZO" else "2"
-    period_text = str(int(period))
-    if int(period) < 0:
+    # 수신기 V057처럼 0 이상의 정수만 받는다. 빈칸·소수(1.7)·글자는 잘라 쓰지 않고 오류로 알린다.
+    try:
+        if isinstance(period, bool):
+            raise ValueError
+        if isinstance(period, float):
+            if not period.is_integer():
+                raise ValueError
+            period = int(period)
+        period_value = int(str(period).strip())
+    except (TypeError, ValueError):
+        raise ValueError("측정 주기는 0 이상의 정수(초)여야 합니다") from None
+    if period_value < 0:
         raise ValueError("측정 주기는 0 이상의 정수(초)여야 합니다")
-    payload = {"COMMPATH": "0", "SENSORTYPE": code, "SENSING_PERIOD": period_text}
+    payload = {"COMMPATH": "0", "SENSORTYPE": code, "SENSING_PERIOD": str(period_value)}
     if code in ("1", "3"):
         rate, count = mon.PIEZO_PROFILE_MAP[profile]
         gain = str(piezo_gain).strip()
@@ -126,6 +169,8 @@ class MonitorService:
         self.host = "127.0.0.1"
         self.port = 1883
         self.topic = "V/#,D/#"
+        # 구독 QoS(0/1/2, 기본 1). 현재 설정 조회(CONFIG ?)도 이 값으로 보낸다(V057과 같음).
+        self.qos = DEFAULT_SUBSCRIBE_QOS
         # 실제로 구독할 토픽 목록(S/# 포함). 다시 붙을 때(_on_connect) 이 목록으로 다시 구독한다.
         self._topics = []
         # 'auto'면 설정 화면 값으로 서버가 붙인 연결, 'manual'이면 수신 모니터의 연결 버튼.
@@ -238,6 +283,10 @@ class MonitorService:
             "sample_rate": obj.get("samplerate", ""),
             "num_samples": obj.get("numofsample", ""),
             "payload_bytes": len(json.dumps(obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")),
+            # 수신기 V057 CSV와 같은 상태 메타데이터. 없거나 null이면 빈 칸(CSV에만 쓰고 DB에는 넣지 않는다).
+            "acq_status": "" if obj.get("acqStatus") is None else str(obj.get("acqStatus")),
+            "ap_ssid": "" if obj.get("apSsid") is None else str(obj.get("apSsid")),
+            "ap_rssi": "" if obj.get("apRssi") is None else str(obj.get("apRssi")),
             "sensor_data": sensor_hex,
             "decoded": np.asarray(decoded),
             "meta": meta,
@@ -413,6 +462,10 @@ class MonitorService:
         """
         with self.lock:
             self.messages += 1
+        # STOP 2단계(retain 삭제)는 S/{MAC}에 빈 메시지를 보낸다. S/# 구독으로 되돌아오므로 JSON 오류로 보지 않는다.
+        if not msg.payload and str(msg.topic).startswith("S/"):
+            self.log(f"설정 retain 삭제 수신 {msg.topic}")
+            return
         try:
             obj = json.loads(msg.payload.decode("utf-8"))
         except Exception:
@@ -429,7 +482,8 @@ class MonitorService:
                     "(해당 프레임 제외, 그래프 처리 계속)"
                 )
 
-    def connect_mqtt(self, host, port, topic, csv_enabled=True, background=False, origin="manual"):
+    def connect_mqtt(self, host, port, topic, csv_enabled=True, background=False, origin="manual",
+                     qos=DEFAULT_SUBSCRIBE_QOS):
         """브로커에 붙고 토픽을 구독한다. CSV가 켜지면 저장 폴더를 연다.
 
         - 이전 연결은 먼저 끊는다. 사용자가 고른 토픽에 설정 토픽 S/#를 항상 더한다.
@@ -439,6 +493,7 @@ class MonitorService:
         - background=True(서버 시작·설정 화면의 자동 연결): connect_async로 붙는다. 브로커가 아직
           꺼져 있어도 예외 없이 paho가 계속 다시 시도하고, 붙는 순간 _on_connect가 구독한다.
         """
+        qos = subscribe_qos(qos)
         self.disconnect()
         client = mqtt_client(f"web-monitor-{int(time.time())}")
         client.on_message = self._on_message
@@ -453,6 +508,7 @@ class MonitorService:
         self.client = client
         self.origin = origin
         self.host, self.port, self.topic = host, int(port), topic
+        self.qos = qos
         if background:
             client.connect_async(host, int(port), keepalive=30)
         else:
@@ -469,7 +525,7 @@ class MonitorService:
         self.mode = "MQTT"
         self.log(
             f"MQTT {'자동 ' if origin == 'auto' else ''}연결 {'시도 ' if background else ''}"
-            f"{host}:{port} 구독={', '.join(topics)}"
+            f"{host}:{port} 구독={', '.join(topics)} QoS={qos}"
         )
         if folder:
             self.log(f"CSV 저장 시작 {folder}")
@@ -484,12 +540,12 @@ class MonitorService:
         if failure:
             self.log(f"MQTT 연결 거절 {reason_code}")
             return
-        client.subscribe([(item, 0) for item in self._topics])
+        client.subscribe([(item, self.qos) for item in self._topics])
         self.connected = True
         self.mode = "MQTT"
-        self.log(f"MQTT 구독 {', '.join(self._topics)}")
+        self.log(f"MQTT 구독 {', '.join(self._topics)} QoS={self.qos}")
 
-    def remember_connection(self, host, port, topic, on, csv=None):
+    def remember_connection(self, host, port, topic, on, csv=None, qos=None):
         """수신 모니터의 연결·해제를 app_setting 'mqtt'에 남긴다(2026-11-19).
 
         연결 = 그 주소와 CSV 저장 체크를 기억하고 auto=True(서버가 다시 켜지면 같은 값으로 다시 연결).
@@ -501,6 +557,8 @@ class MonitorService:
             cfg.update(host=str(host), port=int(port), topic=str(topic))
         if csv is not None:
             cfg["csv"] = bool(csv)
+        if qos is not None:
+            cfg["qos"] = subscribe_qos(qos)
         cfg["auto"] = bool(on)
         self.store.save_setting("mqtt", cfg)
 
@@ -521,6 +579,8 @@ class MonitorService:
             csv_enabled=bool(cfg.get("csv", True)),
             background=True,
             origin="auto",
+            # QoS를 저장하기 전(2026-11-20 전)의 값에는 qos가 없다. 그때는 기본 1.
+            qos=subscribe_qos(cfg.get("qos")),
         )
         return True
 
@@ -546,31 +606,89 @@ class MonitorService:
         self.mode = ""
         self.origin = ""
 
-    def publish_config(self, macs, payload, label, retain=True):
-        """S/{MAC} 로 설정 JSON을 보낸다. retain 명령은 끝에 CR LF를 붙인다.
-
-        retain=True(설정 적용, START, STOP)면 브로커가 마지막 값을 들고 있다가,
-        센서가 나중에 붙어도 그 설정을 받는다. 그 JSON을 sensor_config에 MAC별로 남긴다.
-        retain=False(현재 설정 조회 CONFIG ?)는 남기지 않는다. QoS는 0이다.
-        """
+    def _require_connection(self, macs):
+        """명령을 보낼 수 있는 상태인지 본다. 연결과 대상 MAC이 있어야 한다."""
         if self.client is None or not self.connected:
             raise ValueError("먼저 MQTT에 연결하세요")
         if not macs:
             raise ValueError("설정할 센서 MAC을 선택하세요")
-        text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-        if retain:
-            text += "\r\n"
+
+    def _save_config(self, mac, payload, label):
+        """보낸 설정 JSON을 sensor_config에 남긴다. 실패해도 명령은 이미 나갔으므로 로그만."""
+        try:
+            self.store.save_sensor_config(mac, payload, label)
+        except Exception as exc:
+            self.log(f"설정 JSON 저장 실패 {mac}: {exc}")
+
+    def publish_config(self, macs, payload, label, retain=True):
+        """S/{MAC} 로 설정 JSON을 보낸다(수신기 V057 _send_control_payload와 같음).
+
+        - retain=True(설정 적용, START): QoS 1, retain. 브로커가 마지막 값을 들고 있다가
+          센서가 나중에 붙어도 그 설정을 준다. 그 JSON을 sensor_config에 MAC별로 남긴다.
+          PUBACK은 기다리지 않는다(V057과 같음. 보내기 요청이 받아졌는지 rc만 본다).
+        - retain=False(현재 설정 조회 CONFIG ?): 구독 QoS로 보내고 남기지 않는다.
+        - 본문은 JSON만. CR LF를 붙이지 않는다. CR 포함 1024바이트를 넘으면 보내지 않는다.
+        - 여러 MAC 중 일부가 실패해도 나머지는 보내고, 끝에 실패 목록을 오류로 알린다.
+        """
+        self._require_connection(macs)
+        text = command_text(payload)
+        qos = COMMAND_QOS if retain else self.qos
+        failures = []
         for mac in macs:
-            info = self.client.publish(f"S/{mac}", text.encode("utf-8"), qos=0, retain=retain)
-            if info.rc != mqtt.MQTT_ERR_SUCCESS:
-                raise RuntimeError(f"S/{mac} 전송 실패 rc={info.rc}")
-            self.log(f"{label} S/{mac} retain={retain} {text.strip()}")
+            try:
+                info = self.client.publish(f"S/{mac}", text.encode("utf-8"), qos=qos, retain=retain)
+                if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                    raise RuntimeError(f"rc={info.rc}")
+            except Exception as exc:
+                failures.append(f"{mac}({exc})")
+                self.log(f"{label} S/{mac} 전송 실패: {exc}")
+                continue
+            self.log(f"{label} S/{mac} QoS={qos} retain={retain} {text}")
             if retain:
+                self._save_config(mac, payload, label)
+        if failures:
+            raise RuntimeError(
+                f"{label} 일부/전체 전송 실패: 성공 {len(macs) - len(failures)}/{len(macs)}, 실패 {', '.join(failures)}"
+            )
+        return text
+
+    def stop_to_normal(self, macs, normal_payload, label="STOP"):
+        """STOP 3단계(수신기 V057 _mqtt_collection_stop과 같음).
+
+        MAC마다 S/{MAC}에 QoS 1, retain으로 차례로 보낸다.
+        1. {"COMMPATH":"0","SENSORTYPE":"0"}  collection 종료
+        2. 빈 메시지                          브로커의 retain 지우기
+        3. normal 설정(SENSORTYPE 1 또는 2)    센서가 다음에 깨어나면 normal 측정으로 돌아간다
+        단계마다 PUBACK을 PUBACK_TIMEOUT_S초까지 기다린다. 한 단계라도 실패하면 거기서 멈추고 오류를 낸다
+        (다음 단계·다음 MAC으로 가지 않는다). 브로커에는 마지막 normal 설정이 남으므로
+        sensor_config에도 그 normal JSON을 남긴다.
+
+        이 함수는 최대 MAC 수 × 3 × 10초 동안 기다린다. HTTP 라우트는 스레드 풀(def)에서 부른다.
+        """
+        self._require_connection(macs)
+        stop_text = command_text({"COMMPATH": "0", "SENSORTYPE": "0"})
+        normal_text = command_text(normal_payload)
+        steps = (
+            ("STOP retained", stop_text.encode("utf-8")),
+            ("retained 삭제", b""),
+            ("normal retained", normal_text.encode("utf-8")),
+        )
+        for mac in macs:
+            topic = f"S/{mac}"
+            for step, body in steps:
+                info = self.client.publish(topic, body, qos=COMMAND_QOS, retain=True)
+                if info.rc != mqtt.MQTT_ERR_SUCCESS:
+                    raise RuntimeError(f"{mac} {step} 전송 오류 rc={info.rc}")
                 try:
-                    self.store.save_sensor_config(mac, payload, label)
+                    info.wait_for_publish(timeout=PUBACK_TIMEOUT_S)
                 except Exception as exc:
-                    self.log(f"설정 JSON 저장 실패 {mac}: {exc}")
-        return text.strip()
+                    raise RuntimeError(f"{mac} {step} PUBACK 대기 실패: {exc}") from exc
+                if not info.is_published():
+                    raise RuntimeError(f"{mac} {step} PUBACK 시간 초과({PUBACK_TIMEOUT_S}초)")
+                self.log(f"{label} {topic} {step} QoS={COMMAND_QOS} retain=True PUBACK 확인")
+            self._save_config(mac, normal_payload, f"{label} → normal")
+        self.log(f"{label} 완료: {len(macs)}개 센서, normal 복귀 {normal_text}")
+        return f"{stop_text}\n(retain 삭제)\n{normal_text}"
 
     def state(self, device=""):
         """연결 상태, MAC 목록, 최신 그래프를 한 덩어리로 돌려준다."""
@@ -594,6 +712,7 @@ class MonitorService:
                 "host": self.host,
                 "port": self.port,
                 "topic": self.topic,
+                "qos": self.qos,
                 "active": self.client is not None,
                 "messages": self.messages,
                 "logs": list(self.logs),

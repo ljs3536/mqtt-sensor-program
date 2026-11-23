@@ -19,11 +19,12 @@ const ORIGIN_TEXT = { auto: "서버 재시작 후 자동으로 다시 연결", m
 function showConnection(data) {
   const live = !!data.active;
   const csvBox = document.querySelector("#csvEnabled");
-  const fields = ["#host", "#port", "#topic"].map((id) => document.querySelector(id));
+  const fields = ["#host", "#port", "#topic", "#qos"].map((id) => document.querySelector(id));
   if (live) {
     fields[0].value = data.host || "";
     fields[1].value = data.port || "";
     fields[2].value = data.topic || "";
+    if (data.qos != null) fields[3].value = String(data.qos);
     if (typeof data.csv_enabled === "boolean") csvBox.checked = data.csv_enabled; // 지금 연결의 실제 CSV 저장 여부
   }
   csvBox.disabled = live;
@@ -40,11 +41,11 @@ function showConnection(data) {
   linkStatus.textContent = data.connected
     ? `CONNECTED ${where} | ${data.messages} packets | CSV ${data.csv_enabled ? `${data.csv_saved} / 오류 ${data.csv_errors}` : "끔"}`
     : live ? `연결 시도 중 ${where}` : "DISCONNECTED";
-  linkStatus.title = live ? `브로커 ${where}, 구독 ${data.topic}${origin}` : "";
+  linkStatus.title = live ? `브로커 ${where}, 구독 ${data.topic} QoS ${data.qos}${origin}` : "";
   const note = document.querySelector("#connInfo");
   if (note) {
     note.textContent = live
-      ? `서버 수신 연결: ${where} · 구독 ${data.topic}${origin}. '연결 해제' 전까지는 서버가 다시 켜져도 이 주소로 다시 연결합니다. 바꾸려면 '연결 해제' 후 다시 연결하세요.`
+      ? `서버 수신 연결: ${where} · 구독 ${data.topic} (QoS ${data.qos})${origin}. '연결 해제' 전까지는 서버가 다시 켜져도 이 주소로 다시 연결합니다. 바꾸려면 '연결 해제' 후 다시 연결하세요.`
       : "연결되어 있지 않습니다. 센서 데이터가 저장되지 않습니다. 칸의 값은 마지막으로 연결했던 주소입니다.";
   }
   if (!live && !savedMqttFilled) fillSavedMqtt();
@@ -59,6 +60,7 @@ async function fillSavedMqtt() {
     if (cfg.host) document.querySelector("#host").value = cfg.host;
     if (cfg.port) document.querySelector("#port").value = cfg.port;
     if (cfg.topic) document.querySelector("#topic").value = cfg.topic;
+    if (cfg.qos != null) document.querySelector("#qos").value = String(cfg.qos);
   } catch (error) {
     /* 못 읽으면 칸 기본값 그대로 */
   }
@@ -101,12 +103,12 @@ async function pushView() {
   await refresh();
 }
 
-/** 고른 MAC으로 설정 적용, START, STOP, 설정 조회를 보낸다. */
+/** 고른 MAC으로 설정 적용, START, STOP, 설정 조회를 보낸다. 보냈으면 true. */
 async function command(action) {
   const macs = commandTargets();
   if (!macs.length) {
     alert("체크된 MAC이 없고, 직접 입력한 MAC도 없습니다.");
-    return;
+    return false;
   }
   const names = {
     apply: "설정 적용",
@@ -115,22 +117,29 @@ async function command(action) {
     query: "현재 설정 조회",
   };
   const label = names[action] || action;
-  if (!confirm(`${macs.join(", ")} 주소로 ${label}하겠습니까?`)) return;
+  if (!confirm(`${macs.join(", ")} 주소로 ${label}하겠습니까?`)) return false;
+  // STOP은 MAC마다 3단계(STOP → retain 삭제 → normal)를 보내고 단계마다 PUBACK을 기다린다(최대 10초씩).
+  const buttons = ["#start", "#stop", "#apply", "#query"].map((id) => document.querySelector(id)).filter(Boolean);
+  buttons.forEach((button) => (button.disabled = true));
+  if (action === "stop") preview.textContent = "STOP 3단계 전송 중(STOP → retain 삭제 → normal, 단계마다 PUBACK 대기)…";
   const { response, data } = await postJson("/api/monitor/command", {
     action,
     macs,
     sensor: sensor.value,
-    period: Number(period.value),
+    // 칸 글자 그대로 보낸다. 0 이상의 정수인지는 서버가 수신기 V057과 같은 규칙으로 검사한다
+    // (예전에는 Number()로 바꿔 빈칸이 0이 되고, 서버가 0을 1로 바꿨다).
+    period: period.value.trim(),
     profile: profile.value,
     sensor_type: document.querySelector("#sensorType") ? sensorType.value : "",
     g_range: document.querySelector("#gRange") ? gRange.value : "16",
     piezo_gain: document.querySelector("#piezoGain") ? piezoGain.value : "30",
-  });
+  }).finally(() => buttons.forEach((button) => (button.disabled = false)));
   if (!response.ok) {
     alert(data.detail || "명령 실패");
-    return;
+    return false;
   }
   preview.textContent = data.payload || "";
+  return true;
 }
 
 /** 저장된 g/LSB와 보정 스위치를 화면에 채운다. */

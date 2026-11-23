@@ -57,7 +57,7 @@
 | --- | --- |
 | `api.js` | `readJson`, `postJson`. 응답 본문을 읽고 JSON POST를 보낸다 |
 | `filters.js` | HPF/LPF/Notch 칸(수신 모니터·분석 화면 공용). 줄마다 실제 계산식 문구, LPF `자동 Fs/2` |
-| `graph.js` | RAW/FFT 차트, 확대, 축 고정, FFT 검증 그림. 서버를 호출하지 않는다 |
+| `graph.js` | RAW/FFT 차트, 확대, 축 고정, 고정 커서(클릭, `pinCursor`), FFT 검증 그림. 서버를 호출하지 않는다 |
 | `theme.js` | White / Gray / Dark. 차트가 다시 그려질 때 눈금 색을 맞춘다. 나중에 만드는 차트는 `SensorTheme.watch`로 붙인다 |
 | `monitor-draw.js` | 수신 화면의 그래프 옵션과 곡선 그리기 |
 | `monitor-api.js` | `/api/monitor/state`, 명령, `/api/monitor/view` |
@@ -123,10 +123,10 @@
 | `PATCH·DELETE /api/site/plans/{id}` | 이름 바꾸기 `{"name"}`·탭 순서 `{"move": -1\|1}` / 평면도 한 장과 그 위치 삭제 |
 | `POST /api/site/placements` | 모든 평면도의 센서 위치를 통째로 저장 `[{plan_id, mac, x, y}]`(x·y는 0~1). 같은 MAC은 마지막 한 곳만 |
 | `GET /api/site/mqtt` | 마지막 수신 연결 값(수신 모니터 '연결' 때 저장)과 지금 연결 상태. 저장 API는 없다(연결·해제가 저장한다) |
-| `POST /api/monitor/connect`, `/disconnect` | 수신 MQTT 연결·해제. 연결 때 CSV 폴더를 연다 |
+| `POST /api/monitor/connect`, `/disconnect` | 수신 MQTT 연결·해제. 본문 `host`, `port`, `topic`, `qos`(0/1/2, 기본 1), `csv_enabled`. 연결 때 CSV 폴더를 연다 |
 | `GET /api/monitor/state?device=` | 연결 상태, MAC 목록, 로그, 최신 그래프. 연결된 동안 화면이 1초마다 부른다 |
 | `POST /api/monitor/view` | 수신 그래프 옵션과 창 길이를 바꾸고 다시 그린다 |
-| `POST /api/monitor/command` | `start`, `stop`, `apply`, `query`를 `S/{MAC}`에 보낸다 |
+| `POST /api/monitor/command` | `start`, `stop`(3단계, PUBACK 대기), `apply`, `query`를 `S/{MAC}`에 보낸다 |
 | `POST /api/monitor/fft-check`, `/logs/clear` | 수신 RAW의 FFT 왕복 검사, 로그 비우기 |
 | `POST /api/generator/upload`, `/upload-adxl-csv` | 파일을 임시 파일로 읽어 재전송 목록에 올리고 바로 지운다 |
 | `POST /api/generator/preview`, `/fft-check` | 재전송 목록의 패킷 하나를 옵션대로 그린다(옵션 `psd.on`이면 FFT 칸이 PSD), FFT 왕복 검사 |
@@ -141,12 +141,16 @@
 
 ## 수신해서 저장하기
 
-1. 모니터가 브로커에 붙으면 `V/#`, `D/#`, `S/#`를 구독한다.
+1. 모니터가 브로커에 붙으면 `V/#`, `D/#`, `S/#`를 고른 QoS(기본 1)로 구독한다.
 2. 측정 JSON이 오면 `decode.py`가 PIEZO, ADXL 축, 초음파를 가른다.
 3. HEX를 샘플 배열로 푼다. PIEZO는 7D escape를 풀고, ADXL은 풀지 않은 signed int16이다.
 4. 같은 패킷을 두 곳에 넣는다.
    - CSV가 켜져 있으면 `save_csv.py`가 연결 폴더에 한 줄씩 쓴다. ADXL의 `packet_no`는 X/Y/Z가 같이 쓰는 세트 번호다
      (아래 "CSV packet_no" 참고). PIEZO·초음파는 파일마다 1부터 센 행 번호다.
+     열은 수신기 V057과 같다: `packet_no, received_at, source, dvicMacAddr, gwMacAddr, sensor_type, axis, seq, tick,
+     batteryRmin, samplerate, numofsample, payload_bytes, acqStatus, apSsid, apRssi` 뒤에 HEX(`sensorData_bytes, sensorData_hex`)
+     또는 decoded 열. `acqStatus`·`apSsid`·`apRssi`는 받은 JSON 값 그대로(없으면 빈 칸)이고 2026-11-20부터 있다. DB에는 넣지 않는다.
+     CSV를 열 때(`load_file.copy_status_metadata`)는 값이 있는 열만 패킷에 넣어 그대로 송신한다(발생기 v070과 같음).
    - `store.save_packet`이 `packet` 테이블에 같은 원본을 넣는다. 여기서 FFT나 SRSS는 계산하지 않는다.
 5. ADXL은 seq 상위 4비트가 축, 하위 4비트가 증가 번호다. `10`, `21`, `32`처럼 이어지면 같은 `set_no`다.
 6. 메모리의 최신 파형만 수신 화면 그래프로 그린다. 이 계산은 통계 테이블과 별개다.
@@ -176,19 +180,41 @@
 
 ## 센서 설정 명령
 
-수신 화면의 버튼은 `POST /api/monitor/command` → `_sensor_config`가 JSON을 만들고 → `publish_config`가 `S/{MAC}`로 보낸다.
+수신 화면의 버튼은 `POST /api/monitor/command` → `_sensor_config`가 JSON을 만들고 → `publish_config`(STOP은 `stop_to_normal`)가 `S/{MAC}`로 보낸다. 규칙은 수신기 V057 '모드 A command'와 같다(2026-11-20 맞춤).
 
-| 버튼 | SENSORTYPE | retain | 내용 |
-| --- | --- | --- | --- |
-| 설정 적용 | 고른 값(1 PIEZO normal, 2 MEMS normal, 3·4 collection) | O | 주기, Fs+N, PIEZO는 `PIEZO_GAIN`, MEMS는 `MEMS_G_RANGE`(2/4/8/16 → 0/1/2/3) |
-| START | 센서 타입 칸에서 고른 값 그대로 (수신기 V057과 같음. collection으로 시작하려면 3 또는 4를 고른다) | O | 설정 적용과 같은 항목 |
-| STOP | 0 | O | `COMMPATH`, `SENSORTYPE`만 |
-| 현재 설정 조회 | 없음 | X | `{"CONFIG":"?"}`. MAC 1개만 |
+| 버튼 | SENSORTYPE | QoS | retain | 내용 |
+| --- | --- | --- | --- | --- |
+| 설정 적용 | 고른 값(1 PIEZO normal, 2 MEMS normal, 3·4 collection) | 1 | O | 주기, Fs+N, PIEZO는 `PIEZO_GAIN`, MEMS는 `MEMS_G_RANGE`(2/4/8/16 → 0/1/2/3) |
+| START | 센서 타입 칸에서 고른 값 그대로 (수신기 V057과 같음. collection으로 시작하려면 3 또는 4를 고른다) | 1 | O | 설정 적용과 같은 항목 |
+| STOP | 0 → (retain 삭제) → normal | 1 | O | 아래 "STOP 3단계" |
+| 현재 설정 조회 | 없음 | 구독 QoS | X | `{"CONFIG":"?"}`. MAC 1개만 |
 
 - `COMMPATH`는 항상 `0`이다. `MEMS_SAMPLE_RATE`는 `0x`를 뺀 코드(`08`~`0F`)다.
-- retain 명령은 끝에 CR LF를 붙인다. retain이라 센서가 나중에 붙어도 마지막 설정을 받는다.
-- QoS는 0이다. 브로커가 받았는지 확인(PUBACK)을 기다리지 않는다.
+- 본문은 JSON만 보낸다. 끝에 CR이나 LF를 붙이지 않는다(V057: CR은 시리얼 전용. 웹은 11-20 전에 `\r\n`을 붙였다).
+- JSON이 CR 포함 1024바이트를 넘으면 보내지 않는다(`command_text`).
+- retain이라 센서가 나중에 붙어도 마지막 설정을 받는다.
+- 측정 주기는 0 이상의 정수만 받는다. 빈칸·소수·음수는 400.
+- 여러 MAC 중 일부 전송이 실패해도 나머지는 보내고, 끝에 실패 목록을 오류로 알린다(V057과 같음).
+- 설정 적용·START는 PUBACK을 기다리지 않는다(보내기 요청 rc만 본다, V057과 같음).
 - 연결된 상태에서만 보낼 수 있다. 끊겨 있으면 `먼저 MQTT에 연결하세요`가 나온다.
+
+### STOP 3단계
+
+MAC마다 QoS 1, retain으로 차례로 보내고, 단계마다 PUBACK을 10초(`PUBACK_TIMEOUT_S`)까지 기다린다. 한 단계라도 실패하면 거기서 멈추고 오류를 낸다(다음 단계·다음 MAC으로 가지 않는다).
+
+1. `{"COMMPATH":"0","SENSORTYPE":"0"}` — collection 종료
+2. 빈 메시지(0바이트) — 브로커의 retain 지우기
+3. normal 설정 — 종류 칸이 PIEZO면 `SENSORTYPE 1`, MEMS면 `2`. 주기·Fs+N·게인/G Range는 지금 칸 값
+
+- 그래서 STOP 뒤 브로커에는 normal 설정이 남고, 센서는 다음에 깨어나면 normal 측정으로 돌아간다. `sensor_config`에도 그 normal JSON을 `STOP → normal`로 남긴다(대문은 '측정 중지'가 아니라 normal 주기로 판정).
+- normal 설정을 만드는 칸 값이 잘못되면(주기 빈칸 등) 1단계부터 아무것도 보내지 않는다.
+- S/# 구독으로 2단계의 빈 메시지가 되돌아오면 `설정 retain 삭제 수신` 로그만 남긴다.
+- 보내는 데 성공하면 화면의 센서 타입 칸이 normal(1/2)로 돌아간다. 보내는 동안 명령 버튼은 잠긴다.
+- MAC 수 × 3 × 10초까지 걸릴 수 있어 이 라우트는 `def`(스레드 풀)다. 기다리는 동안 다른 요청은 막히지 않는다.
+
+### 구독 QoS
+
+수신 모니터 연결 줄의 QoS(0/1/2, 기본 1, V057 `DEFAULT_QOS`와 같음)로 `V/#`, `D/#`, `S/#`를 구독하고, 현재 설정 조회도 이 QoS로 보낸다. 연결 값과 함께 `app_setting` 'mqtt'의 `qos`에 기억하고, 서버가 다시 켜질 때 같은 QoS로 다시 붙는다. 11-20 전에 저장한 값에는 `qos`가 없어서 1로 붙는다. 센서 명령(설정 적용·START·STOP)은 이 값과 상관없이 늘 QoS 1이다.
 
 ## 그래프 계산
 
@@ -348,7 +374,7 @@ python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 
 | 패킷 저장 때 직전 패킷 조회 | `assign_set`이 `WHERE mac, sensor_type ORDER BY id DESC LIMIT 1`로 직전 ADXL을 찾는다. 인덱스가 `(mac, received_at)`뿐이라 그 MAC의 행을 모두 정렬한다 | 행이 쌓일수록 저장 한 번이 느려진다. 시험 DB에서 같은 MAC 1만 행 약 4 ms, 10만 행 약 46 ms, 50만 행 약 234 ms. `(mac, sensor_type, id)` 인덱스를 추가하면 0.3 ms 안팎이다. 저장이 느려지면 수신 스레드와 수신 화면 갱신도 같이 늦어진다 |
 | 통계 읽기, `/studio` 최근 N세트 | 같은 인덱스 문제로 그 MAC의 행을 정렬하거나 `set_key`로 묶는다 | 패킷이 많을수록 느려진다. 위 인덱스로 통계 읽기는 함께 빨라진다 |
 | `GET /api/db/devices` | MAC마다 `packet`의 전체 행 수를 센다 | 분석·설정 화면에서 MAC 목록을 열 때 전체 패킷 수에 비례해 느려진다 |
-| MQTT 끊김 | 고쳤다. 구독을 `_on_connect`에서 하므로 paho가 다시 붙으면 다시 구독한다. 끊긴 동안 온 메시지(QoS 0)는 없다 | 끊긴 동안의 측정은 저장되지 않는다 |
+| MQTT 끊김 | 고쳤다. 구독을 `_on_connect`에서 하므로 paho가 다시 붙으면 다시 구독한다. clean session이라 구독 QoS가 1이어도 끊긴 동안 온 메시지는 받지 못한다 | 끊긴 동안의 측정은 저장되지 않는다 |
 | retain 설정으로 생기는 장치 | 구독하면 브로커가 가진 `S/{MAC}` retain 설정을 모두 받아 `sensor_config`에 남기고, `device`에도 그 MAC이 생긴다 | 데이터를 보낸 적 없는 MAC도 대문·설정·통계 목록에 나온다(대문에서는 '기록 없음') |
 | 수신 그래프 옵션 | `MonitorService.view_options`, `window`가 서버에 하나다 | 브라우저 두 개로 수신 화면을 열면 한쪽에서 바꾼 옵션이 다른 쪽에도 적용된다 |
 | 재전송 목록 | `/generator`와 `/studio`가 `replay.templates`를 같이 쓴다 | 한 화면에서 연 데이터가 다른 화면의 같은 센서 목록을 덮는다 |

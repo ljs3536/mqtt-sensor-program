@@ -34,6 +34,7 @@ document.querySelector("#clearMacs").onclick = () => {
 document.querySelector("#connect").onclick = async () => {
   const { response, data } = await postJson("/api/monitor/connect", {
     host: host.value, port: Number(port.value), topic: topic.value,
+    qos: Number(document.querySelector("#qos").value),
     csv_enabled: document.querySelector("#csvEnabled").checked,
   });
   if (!response.ok) alert(data.detail || "연결 실패");
@@ -78,12 +79,15 @@ document.querySelector("#applySrssLimit").onclick = async () => {
 // 예전에는 누르는 순간 PIEZO 3, MEMS 4(collection)로 바꿨지만, 이제는 사용자가 고른 0~4를 존중한다.
 // collection으로 시작하려면 센서 타입에서 3 또는 4를 고른 뒤 START를 누른다.
 document.querySelector("#start").onclick = () => command("start");
-document.querySelector("#stop").onclick = () => {
-  if (document.querySelector("#sensorType")) {
-    sensorType.value = "0";
+// STOP은 센서 타입 칸과 상관없이 SENSORTYPE 0을 보낸다. 보낸 뒤에는 수신기 V057처럼
+// 센서 타입 칸을 종류에 맞는 normal(PIEZO 1, MEMS 2)로 돌려놓는다.
+// (예전에는 칸을 0으로 바꾼 채 두어서, 다음 START가 다시 STOP(0)을 보냈다.)
+document.querySelector("#stop").onclick = async () => {
+  const sent = await command("stop");
+  if (sent && document.querySelector("#sensorType")) {
+    sensorType.value = sensor.value === "PIEZO" ? "1" : "2";
     syncSensorType(false);
   }
-  command("stop");
 };
 syncSensorType(false);
 document.querySelector("#apply").onclick = () => command("apply");

@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 
 from web_db.src import core as mon
-from web_db.src.monitor_service import _sensor_config
+from web_db.src.monitor_service import _sensor_config, subscribe_qos
 from web_db.src.runtime import monitor
 
 router = APIRouter()
@@ -17,18 +17,19 @@ async def monitor_connect(body: dict):
     topic = str(body.get("topic") or "V/#,D/#").strip()
     csv_enabled = bool(body.get("csv_enabled", True))
     try:
-        monitor.connect_mqtt(host, port, topic, csv_enabled=csv_enabled)
+        qos = subscribe_qos(body.get("qos"))
+        monitor.connect_mqtt(host, port, topic, csv_enabled=csv_enabled, qos=qos)
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
-    # 이 연결(CSV 체크 포함)을 기억한다. 서버가 다시 켜지면 '연결 해제'를 하기 전까지 같은 값으로 다시 연결한다.
+    # 이 연결(CSV 체크·QoS 포함)을 기억한다. 서버가 다시 켜지면 '연결 해제'를 하기 전까지 같은 값으로 다시 연결한다.
     # 연결 자체는 이미 됐으므로, 기억(DB 쓰기)이 실패해도 500을 내지 않고 경고만 붙인다.
-    return dict(monitor.state(), warning=_remember(host, port, topic, True, csv_enabled))
+    return dict(monitor.state(), warning=_remember(host, port, topic, True, csv_enabled, qos))
 
 
-def _remember(host, port, topic, on, csv=None):
+def _remember(host, port, topic, on, csv=None, qos=None):
     """연결 값을 DB에 남긴다. 실패하면(다른 프로그램이 DB 쓰기 잠금을 잡은 경우 등) 경고 문장을 돌려준다."""
     try:
-        monitor.remember_connection(host, port, topic, on=on, csv=csv)
+        monitor.remember_connection(host, port, topic, on=on, csv=csv, qos=qos)
         return ""
     except Exception as exc:
         message = (
@@ -82,23 +83,40 @@ async def monitor_view(body: dict):
 
 
 @router.post("/api/monitor/command")
-async def monitor_command(body: dict):
-    """고른 MAC에 START, STOP, 설정 적용, 설정 조회를 보낸다."""
+def monitor_command(body: dict):
+    """고른 MAC에 START, STOP, 설정 적용, 설정 조회를 보낸다.
+
+    async가 아니라 def다. STOP은 단계마다 PUBACK을 최대 10초 기다리므로, 스레드 풀에서 돌아야
+    그동안 다른 화면 요청(상태 조회 등)이 막히지 않는다.
+    """
     action = str(body.get("action") or "")
     macs = [str(item).strip() for item in body.get("macs") or [] if str(item).strip()]
     sensor = str(body.get("sensor") or "ADXL").upper()
-    period = body.get("period") or 1
+    # 0도 올바른 주기다. 값이 아예 없을 때만 1을 쓴다(예전 `or 1`은 0을 1로 바꿨다).
+    period = body.get("period")
+    if period is None:
+        period = 1
     labels = mon.ADXL_PROFILE_LABELS if sensor == "ADXL" else mon.PIEZO_PROFILE_LABELS
     profile = body.get("profile") or labels[-1]
+    g_range = body.get("g_range") or "16"
+    piezo_gain = body.get("piezo_gain") if body.get("piezo_gain") is not None else "30"
     try:
         if action == "query":
             if len(macs) != 1:
                 raise ValueError("현재 설정 조회는 센서 MAC 1개만 선택하세요")
             payload = monitor.publish_config(macs, {"CONFIG": "?"}, "현재 설정 조회", retain=False)
         elif action == "stop":
-            payload = monitor.publish_config(
-                macs, _sensor_config(sensor, period, profile, stop=True), "STOP"
+            # 수신기 V057 STOP: SENSORTYPE 0 → retain 삭제 → normal(종류가 PIEZO면 1, 아니면 2).
+            # normal 설정은 지금 화면 칸(주기, Fs+N, G Range, 게인)으로 만든다. 칸 값이 잘못되면 아무것도 보내지 않는다.
+            normal = _sensor_config(
+                sensor,
+                period,
+                profile,
+                sensor_type="1" if sensor == "PIEZO" else "2",
+                g_range=g_range,
+                piezo_gain=piezo_gain,
             )
+            payload = monitor.stop_to_normal(macs, normal, "STOP")
         elif action in ("start", "apply"):
             label = "START" if action == "start" else "설정 적용"
             payload = monitor.publish_config(
@@ -108,8 +126,8 @@ async def monitor_command(body: dict):
                     period,
                     profile,
                     sensor_type=body.get("sensor_type"),
-                    g_range=body.get("g_range") or "16",
-                    piezo_gain=body.get("piezo_gain") if body.get("piezo_gain") is not None else "30",
+                    g_range=g_range,
+                    piezo_gain=piezo_gain,
                 ),
                 label,
             )
