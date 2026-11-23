@@ -400,7 +400,8 @@ def load_piezo_csv(path: str) -> list[dict]:
       - gwMacAddr / dvicMacAddr / batteryRmin / seq / tick
 
     CSV의 부가 컬럼(packet_no, received_at, payload_bytes 등)은
-    MQTT payload에는 포함하지 않는다.
+    MQTT payload에는 포함하지 않는다. received_at·packet_no는 화면 표시용
+    '_received_at'·'_packet_no' 메타로만 두고, 송신 때 replay가 뺀다.
     """
     templates = []
 
@@ -479,6 +480,10 @@ def load_piezo_csv(path: str) -> list[dict]:
                 "samplerate": samplerate,
                 "numofsample": numofsample,
                 "sensorData": sensor_hex.upper(),
+                # 화면 표시용 메타(ADXL CSV와 같음). '_'로 시작하는 키는 송신 때 replay가 뺀다.
+                # 분석 화면 패킷 정보 줄의 시각은 replay._packet_time이 이 값을 쓴다.
+                "_received_at": str(row.get("received_at") or "").strip(),
+                "_packet_no": str(row.get("packet_no") or "").strip(),
             }
 
             tick = str(row.get("tick") or "").strip()
@@ -525,6 +530,7 @@ def load_ultrasonic_csv(path: str) -> list[dict]:
 
     H payload: 12-byte header + 320 float32 readings (1292 bytes total).
     CSV metadata such as packet_no/received_at/source is not published.
+    received_at·packet_no는 화면 표시용 '_received_at'·'_packet_no' 메타로만 둔다(송신 때 제외).
     """
     templates = []
     errors = []
@@ -558,6 +564,9 @@ def load_ultrasonic_csv(path: str) -> list[dict]:
                     'batteryRmin': str(row.get('batteryRmin') or '0').strip(),
                     'seq': str(row.get('seq') or '00').strip(),
                     'sensorData': value.upper(),
+                    # 화면 표시용 메타(ADXL·PIEZO CSV와 같음). '_' 키는 송신 때 replay가 뺀다.
+                    '_received_at': str(row.get('received_at') or '').strip(),
+                    '_packet_no': str(row.get('packet_no') or '').strip(),
                 }
                 if str(row.get('tick') or '').strip():
                     obj['tick'] = str(row['tick']).strip()

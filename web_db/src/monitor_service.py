@@ -305,7 +305,7 @@ class MonitorService:
             return {
                 "kind": "spectrum",
                 "axis": record["axis"],
-                "x": _take(record["x"], index),
+                "x": _take(record["x"], index, x_axis=True),
                 "y": _take(record["y"], index),
                 "x_label": "Frequency (kHz)",
                 "y_label": "H spectrum",
@@ -339,9 +339,9 @@ class MonitorService:
         return {
             "kind": "waveform",
             "axis": record["axis"],
-            "t": _take(t, time_index),
+            "t": _take(t, time_index, x_axis=True),
             "y": _take(y, time_index),
-            "rms_t": _take(t, rms_index),
+            "rms_t": _take(t, rms_index, x_axis=True),
             "rms": _take(rms, rms_index),
             "fft_f": fft_x,
             "fft_y": fft_y,
@@ -351,14 +351,16 @@ class MonitorService:
             "fs": record["fs"],
             "unit": shown["unit"],
             "fft_unit": shown["fft_unit"],
-            "x_label": "Time (s)",
-            "fft_x_label": "Frequency (Hz)",
+            # 값은 s·Hz 그대로 보내고 화면이 ms·kHz로 바꿔 보인다(수신기 V063). 이름표는 화면이 정한다.
+            "x_label": "Time (ms)",
+            "fft_x_label": "Frequency (kHz)",
             "formula": shown["formula"],
             "window_factor": shown.get("window_factor") or "",
             "info": shown["info"],
             "fft_log_x": shown["fft_log_x"],
             "fft_log_y": shown["fft_log_y"],
             "received_at": record["received_at"],
+            "psd": shown.get("psd"),
         }
 
     def _pack_shown(self, record, shown, window):
@@ -372,7 +374,7 @@ class MonitorService:
         return {
             "kind": "waveform",
             "axis": record["axis"],
-            "t": _take(t, time_index),
+            "t": _take(t, time_index, x_axis=True),
             "y": _take(y, time_index),
             "fft_f": fft_x,
             "fft_y": fft_y,
@@ -382,8 +384,9 @@ class MonitorService:
             "fs": record["fs"],
             "unit": shown["unit"],
             "fft_unit": shown["fft_unit"],
-            "x_label": "Time (s)",
-            "fft_x_label": "Frequency (Hz)",
+            # 값은 s·Hz 그대로 보내고 화면이 ms·kHz로 바꿔 보인다(수신기 V063). 이름표는 화면이 정한다.
+            "x_label": "Time (ms)",
+            "fft_x_label": "Frequency (kHz)",
             "formula": shown["formula"],
             "window_factor": shown.get("window_factor") or "",
             "info": shown["info"],
@@ -408,13 +411,21 @@ class MonitorService:
             if axis in shared:
                 views[axis] = self._pack_shown(record, shared[axis], window)
             else:
-                views[axis] = self._view(record, window, options)
+                views[axis] = self._view(record, window, opts)
         if "_srss" in shared:
             views["_srss"] = shared["_srss"]
         if "_gn" in shared:
             views["_gn"] = shared["_gn"]
         if "_srss_limit" in shared:
             views["_srss_limit"] = shared["_srss_limit"]
+        # 실시간 PSD 요약(판정·계산 단계·경고). ADXL은 세트 하나, PIEZO는 그 축 view에 들어 있다.
+        if "_psd" in shared:
+            views["_psd"] = shared["_psd"]
+        else:
+            for view in views.values():
+                if isinstance(view, dict) and view.get("psd"):
+                    views["_psd"] = view.pop("psd")
+                    break
         return views
 
     def fft_check(self, device=""):

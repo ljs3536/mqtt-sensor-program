@@ -9,7 +9,7 @@
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=28" />
+    <link rel="stylesheet" href="/static/style.css?v=31" />
     <link rel="stylesheet" href="/static/theme.css?v=14" />
     <style>
       .settings-table {
@@ -28,6 +28,22 @@
       }
       .settings-table input.w-limit {
         width: 110px;
+      }
+      /* 센서 사진 칸: 작은 미리보기 + 올리기/바꾸기 + 삭제 */
+      .settings-photo {
+        white-space: nowrap;
+      }
+      .settings-photo img {
+        width: 48px;
+        height: 36px;
+        object-fit: cover;
+        border-radius: 4px;
+        vertical-align: middle;
+        margin-right: 6px;
+        border: 1px solid #d3dee8;
+      }
+      .settings-photo button + button {
+        margin-left: 4px;
       }
       .settings-mac {
         font-weight: 800;
@@ -143,8 +159,61 @@
       html[data-theme="dark"] .csv-progress {
         background: #333;
       }
+      /* 통계 계산 기준 칸: 환산 / 필터 / Welch 세 묶음을 나란히(좁으면 아래로). */
+      .sp-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 10px;
+        margin: 10px 0;
+      }
+      .sp-grid fieldset {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 4px;
+        margin: 0;
+        font-size: 13px;
+      }
+      /* 공통 label은 세로(flex-direction: column)라서, 이 칸에서는 '이름 … 입력칸'을 한 줄로 둔다. */
+      .sp-grid label:not(.check) {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+        min-height: 30px;
+      }
+      .sp-grid label.check {
+        min-height: 26px;
+      }
+      .sp-grid input[type="number"],
+      .sp-grid select {
+        width: 110px;
+      }
+      .sp-history {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+        margin-top: 6px;
+      }
+      .sp-history th,
+      .sp-history td {
+        text-align: left;
+        padding: 4px 6px;
+        border-bottom: 1px solid rgba(127, 147, 168, 0.3);
+        vertical-align: top;
+      }
+      .sp-history tr.active td {
+        font-weight: 700;
+      }
+      .file-button {
+        cursor: pointer;
+        border: 1px solid #7f93a8;
+        border-radius: 5px;
+        padding: 3px 10px;
+        font-size: 13px;
+      }
     </style>
-    <link rel="stylesheet" href="/static/site.css?v=8" />
+    <link rel="stylesheet" href="/static/site.css?v=12" />
   </head>
   <body data-site-mode="edit">
     <header>
@@ -170,7 +239,8 @@
           <p class="hint">
             표시 이름은 통계와 분석 MAC 목록에 붙습니다. SRSS 한계(mm/s RMS)는
             통계 막대의 기준선이고, 그래프의 SRSS 한계선과 같은 값입니다. 비어
-            있으면 4.5입니다.
+            있으면 4.5입니다. 사진(MAC마다 한 장)은 센서 현황에서 센서를 누르면
+            정보 카드 위쪽에 보입니다.
           </p>
           <div class="row add-row">
             <label>MAC<input id="newMac" placeholder="장치 MAC" /></label>
@@ -187,6 +257,7 @@
                 <th>MAC</th>
                 <th>이름</th>
                 <th>SRSS 한계</th>
+                <th>사진</th>
                 <th>패킷</th>
                 <th>마지막 수신</th>
                 <th></th>
@@ -319,15 +390,86 @@
       </div>
 
       <!--
-      통계 데이터: data_csv_web의 누적 CSV로 일자별 통계를 다시 만든다(관리용, /api/db/csv-stats, csv_stats.py).
+      통계 데이터: 통계 계산 기준(버전) + data_csv_web의 누적 CSV로 시간별 통계 다시 만들기(관리용, csv_stats.py).
       운영 서버처럼 DB 없이 CSV만 쌓인 곳에서 통계 화면·대문 알람을 채울 때 쓴다.
     -->
       <div data-panel="stats" hidden>
-        <section class="card">
-          <h2>CSV로 일자별 통계 만들기</h2>
+        <!--
+          통계 계산 기준(2026-11-23, static/stat-profile.js, /api/db/stat-profile, src/stat_profile.py).
+          매시간 통계·센서 현황 경보가 쓰는 계산 기준이다. 저장하면 새 버전이 되고 그 버전으로 packet 전체를
+          다시 계산한다. 끝나기 전까지 화면·경보는 이전 통계를 본다. 그래프 화면의 서랍 설정과는 따로다.
+        -->
+        <section class="card" id="statProfileCard">
+          <h2>통계 계산 기준 <small id="spActive" class="hint"></small></h2>
           <p class="hint">
-            수신 CSV 폴더의 MEMS(ADXL) X/Y/Z 데이터로 하루마다 통계를 다시
-            계산합니다. 통계 화면과 센서 현황의 진동 값이 이 결과로 바뀝니다.
+            매시간 통계와 센서 현황 경보가 쓰는 기준입니다. 저장하면 새 버전으로 남고, 그 기준으로 지금까지
+            받은 데이터를 다시 계산합니다(계산하는 동안에도 수신 저장은 그대로 됩니다). 분석 화면 그래프의
+            서랍 설정과는 따로입니다.
+          </p>
+          <div class="sp-grid">
+            <fieldset>
+              <legend>환산</legend>
+              <label>1 LSB당 g <input id="spLsb" type="number" step="any" /></label>
+              <label class="check"><input id="spFreqOn" type="checkbox" /><span>주파수 보정</span></label>
+              <label>주파수 나눗수 <input id="spDivisor" type="number" step="any" /></label>
+              <label class="check"><input id="spSensOn" type="checkbox" /><span>감도 보정</span></label>
+              <label>저주파 경계 Hz <input id="spLowHz" type="number" step="any" /></label>
+              <label>고주파 경계 Hz <input id="spHighHz" type="number" step="any" /></label>
+              <label>저주파 감도 <input id="spLowSens" type="number" step="any" /></label>
+              <label>중간 절편 <input id="spMidIntercept" type="number" step="any" /></label>
+              <label>중간 기울기 <input id="spMidSlope" type="number" step="any" /></label>
+              <label>고주파 감도 <input id="spHighSens" type="number" step="any" /></label>
+            </fieldset>
+            <fieldset>
+              <legend>필터 (FFT·PSD 계산 전)</legend>
+              <label class="check"><input id="spHpfOn" type="checkbox" /><span>HPF</span></label>
+              <label>HPF Hz <input id="spHpfHz" type="number" step="any" /></label>
+              <label>HPF 차수 <input id="spHpfOrder" type="number" min="1" max="12" /></label>
+              <label class="check"><input id="spLpfOn" type="checkbox" /><span>LPF</span></label>
+              <label>LPF Hz <input id="spLpfHz" type="number" step="any" /></label>
+              <label>LPF 차수 <input id="spLpfOrder" type="number" min="1" max="12" /></label>
+              <label class="check"><input id="spNotchOn" type="checkbox" /><span>Notch</span></label>
+              <label>Notch Hz <input id="spNotchHz" type="number" step="any" /></label>
+              <label>Notch 폭 Hz <input id="spNotchWidth" type="number" step="any" /></label>
+              <p class="hint">세트의 Fs/2 이상인 필터는 그 세트에서만 빠집니다(계산 메모에 남음).</p>
+            </fieldset>
+            <fieldset>
+              <legend>Welch PSD</legend>
+              <label>Window <select id="spWindow"></select></label>
+              <label>Kaiser β <input id="spBeta" type="number" step="any" /></label>
+              <label>구간 N <select id="spSegment"></select></label>
+              <label>Overlap % <input id="spOverlap" type="number" min="0" max="95" step="any" /></label>
+              <label>평균 목표 구간 <input id="spTarget" type="number" min="1" /></label>
+              <p class="hint">속도 RMS = √(Σ 속도 PSD × Δf), SRSS = √(X² + Y² + Z²). 분석 데이터 저장(ZIP)과 같은 계산입니다.</p>
+            </fieldset>
+          </div>
+          <div class="row">
+            <label>메모 <input id="spNote" type="text" maxlength="200" placeholder="바꾼 이유(선택)" /></label>
+          </div>
+          <div class="row">
+            <button type="button" id="spSave" class="primary">저장하고 다시 계산</button>
+            <button type="button" id="spRebuild">지금 기준으로 다시 계산</button>
+            <button type="button" id="spFromFiles" title="그래프가 쓰는 mems_lsb_scale.json · mems_frequency_sensitivity.json 값으로 환산 칸을 채웁니다">그래프 설정 파일 값 가져오기</button>
+            <button type="button" id="spDefaults">기본값으로 채우기</button>
+            <button type="button" id="spExport">JSON 내보내기</button>
+            <label class="file-button">JSON 가져오기<input id="spImport" type="file" accept=".json,application/json" hidden /></label>
+            <span id="spPhase" class="hint"></span>
+          </div>
+          <div class="csv-progress" id="spProgress" hidden><div></div></div>
+          <p id="spResult" class="csv-result"></p>
+          <details>
+            <summary>기준 버전 기록</summary>
+            <table class="sp-history">
+              <thead><tr><th>버전</th><th>저장 시각</th><th>기준</th><th>메모</th><th></th></tr></thead>
+              <tbody id="spHistory"></tbody>
+            </table>
+          </details>
+        </section>
+        <section class="card">
+          <h2>CSV로 시간별 통계 만들기</h2>
+          <p class="hint">
+            수신 CSV 폴더의 MEMS(ADXL) X/Y/Z 데이터로 한 시간마다 통계를 다시
+            계산합니다(위 통계 계산 기준의 가장 최근 버전). 통계 화면과 센서 현황의 진동 값이 이 결과로 바뀝니다.
           </p>
           <dl class="csv-stats-info">
             <dt>CSV 폴더</dt>
@@ -339,7 +481,7 @@
           </dl>
           <div class="row">
             <button type="button" id="csvStatsRun">
-              CSV로 일자별 통계 다시 만들기
+              CSV로 시간별 통계 다시 만들기
             </button>
             <span id="csvPhase" class="hint"></span>
           </div>
@@ -348,14 +490,15 @@
           <p class="hint">
             주의: 기존 통계를 모두 지우고 CSV 결과로 바꿉니다. CSV 저장을 꺼
             두었던 기간의 데이터는 통계에서 빠집니다. 그 뒤 새로 받는 데이터는
-            매일 자정 뒤 자동 통계에 더해집니다.
+            매시 정각 뒤 자동 통계에 더해집니다.
           </p>
         </section>
       </div>
     </main>
     <script src="/static/api.js?v=1"></script>
-    <script src="/static/settings.js?v=6"></script>
-    <script src="/static/site.js?v=12"></script>
+    <script src="/static/settings.js?v=8"></script>
+    <script src="/static/stat-profile.js?v=2"></script>
+    <script src="/static/site.js?v=18"></script>
     <script src="/static/theme.js?v=4"></script>
   </body>
 </html>

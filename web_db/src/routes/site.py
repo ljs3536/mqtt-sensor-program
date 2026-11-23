@@ -11,6 +11,10 @@
 - PATCH  /api/site/plans/{id}          이름 바꾸기 {"name"} / 탭 순서 {"move": -1|1}.
 - DELETE /api/site/plans/{id}          평면도 한 장과 그 위치 삭제.
 - POST   /api/site/placements          편집 화면 '저장'. 모든 평면도의 위치 통째로 바꾸기 [{plan_id, mac, x, y}].
+센서 사진(MAC마다 한 장, 설정 '장치' 표에서 올리고 대문 정보 카드에 보인다):
+- GET    /api/site/sensors/{mac}/photo  사진 파일(없으면 404).
+- POST   /api/site/sensors/{mac}/photo  사진 올리기·바꾸기(multipart: file). PNG·JPG·WEBP, 15MB 이하.
+- DELETE /api/site/sensors/{mac}/photo  사진 지우기.
 - GET  /api/site/mqtt          마지막 수신 연결 값(수신 모니터 '연결' 때 저장, 서버 재시작 때 다시 연결).
 """
 
@@ -43,6 +47,11 @@ def site_status_get():
         saved = since.get(item["mac"])
         item["since"] = saved[1] if saved and saved[0] == item["state"] else None
     # 최근 기록(확인한 것 포함, 화면이 '확인한 것도 보기'로 거른다)과 확인 안 한 문제 수(탭 배지).
+    # 센서 사진 주소(없으면 ""). ?v=파일 수정 시각이라 사진을 바꾸면 브라우저가 새로 받는다.
+    photos = store.sensor_photos()
+    for item in result["sensors"]:
+        version = photos.get(str(item["mac"]).upper())
+        item["photo"] = f"/api/site/sensors/{item['mac']}/photo?v={version}" if version else ""
     result["events"] = store.state_events(30)
     result["unacked"] = store.unacked_problems()
     return result
@@ -79,6 +88,37 @@ def _plan_info(plan):
 def _plans_body():
     """평면도 전체(탭 순서)와 모든 센서 위치. 대문은 이것 하나로 탭과 아이콘을 다 그린다."""
     return {"plans": [_plan_info(p) for p in store.floor_plans()], "placements": store.placements()}
+
+
+@router.get("/api/site/sensors/{mac}/photo")
+def sensor_photo_get(mac: str):
+    """센서 사진. 없으면 404. 주소 끝 ?v=가 바뀌면 새 파일이라 오래 캐시해도 된다."""
+    found = store.sensor_photo_file(mac)
+    if found is None:
+        raise HTTPException(404, "사진이 없습니다")
+    path, media = found
+    return FileResponse(path, media_type=media, headers={"Cache-Control": "max-age=86400", "X-Content-Type-Options": "nosniff"})
+
+
+@router.post("/api/site/sensors/{mac}/photo")
+async def sensor_photo_put(mac: str, file: UploadFile = File(...)):
+    """센서 사진 올리기(있으면 바꾸기). 돌려주는 photo는 대문이 쓰는 주소와 같다."""
+    data = await file.read()
+    try:
+        version = store.save_sensor_photo(mac, file.filename, data)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"mac": mac, "photo": f"/api/site/sensors/{mac}/photo?v={version}"}
+
+
+@router.delete("/api/site/sensors/{mac}/photo")
+def sensor_photo_delete(mac: str):
+    """센서 사진 지우기. 없던 사진이면 removed=false."""
+    try:
+        removed = store.delete_sensor_photo(mac)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"mac": mac, "removed": removed}
 
 
 @router.get("/api/site/plans")

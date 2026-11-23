@@ -105,7 +105,8 @@ def monitor_command(body: dict):
             if len(macs) != 1:
                 raise ValueError("현재 설정 조회는 센서 MAC 1개만 선택하세요")
             payload = monitor.publish_config(macs, {"CONFIG": "?"}, "현재 설정 조회", retain=False)
-        elif action == "stop":
+        elif action == "stop" or (action == "apply" and str(body.get("sensor_type") or "").strip() == "0"):
+            # 수신기 V063: '설정 적용'에서 센서 타입 0을 고르면 STOP과 같은 절차를 밟는다.
             # 수신기 V057 STOP: SENSORTYPE 0 → retain 삭제 → normal(종류가 PIEZO면 1, 아니면 2).
             # normal 설정은 지금 화면 칸(주기, Fs+N, G Range, 게인)으로 만든다. 칸 값이 잘못되면 아무것도 보내지 않는다.
             normal = _sensor_config(
@@ -119,13 +120,16 @@ def monitor_command(body: dict):
             payload = monitor.stop_to_normal(macs, normal, "STOP")
         elif action in ("start", "apply"):
             label = "START" if action == "start" else "설정 적용"
+            # 수신기 V063(2026-11-23 결정): START는 센서 타입 칸과 상관없이 collection으로 보낸다(PIEZO 3, MEMS 4).
+            # 설정 적용은 고른 값(1~4) 그대로. 0은 위 STOP 절차로 갔다.
+            sensor_type = ("3" if sensor == "PIEZO" else "4") if action == "start" else body.get("sensor_type")
             payload = monitor.publish_config(
                 macs,
                 _sensor_config(
                     sensor,
                     period,
                     profile,
-                    sensor_type=body.get("sensor_type"),
+                    sensor_type=sensor_type,
                     g_range=g_range,
                     piezo_gain=piezo_gain,
                 ),

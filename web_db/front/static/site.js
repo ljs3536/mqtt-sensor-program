@@ -11,7 +11,7 @@
  * - GET /api/site/plans → {plans:[{id,name,width,height,image}], placements:[{plan_id,mac,x,y}]}
  *   평면도 한 장에 센서 여러 개, 센서 하나는 평면도 한 장에만(서버가 지킨다). x·y는 0~1 비율.
  * - GET /api/site/status → {receiver, sensors:[{state, state_text, link, alarm, ...}], counts, rules}
- *   state = 하나의 상태(경보 alarm > 끊김 lost > 주의 warn > 정상 ok > 대기 idle). 아이콘 색은 이것 하나다.
+ *   state = 하나의 상태(위험 alarm > 미수신 lost > 경보 warn > 지연 late > 정상 ok > 확인 불가 idle). 아이콘 색은 이것 하나다.
  * - 고른 평면도 탭은 이 브라우저에만 기억한다(localStorage 'site-plan').
  */
 (() => {
@@ -33,18 +33,26 @@
   let draft = null;           // 편집 중 위치(edit 모드에서만)
   let dirty = false;          // draft가 서버 값과 다른지
   let status = null;          // 마지막 상태 응답
-  let focus = "";             // view: 상태 타일로 고른 상태(그 상태만 강조·목록 거르기)
+  let focus = "";             // view: 위쪽 요약에서 고른 거르기 "묶음:항목"(예: "vib:alarm"). 빈 값이면 전체
   let openMac = "";           // 정보 카드가 열린 MAC
   let timer = null;
 
+  // 하나의 상태(아이콘 색). 서버 site_status.STATE_TEXT와 같다(2026-11-23: 끊김 → 미수신, 대기 → 확인 불가,
+  // 측정 이상은 경보/위험 두 단계, 수신 지연은 따로).
   const STATES = [
-    ["alarm", "경보"],
-    ["lost", "끊김"],
-    ["warn", "주의"],
+    ["alarm", "위험"],
+    ["lost", "미수신"],
+    ["warn", "경보"],
+    ["late", "지연"],
     ["ok", "정상"],
-    ["idle", "대기"],
+    ["idle", "확인 불가"],
   ];
-  const KIND_LABEL = { ADXL: "MEMS 진동", PIEZO: "PIEZO", ULTRASONIC: "초음파", "": "-" };
+  // 종류 이름(2026-11-23 피드백): MEMS/PIEZO 대신 Type1/2/3.
+  // 번호는 센서 설정 SENSORTYPE(1 = PIEZO, 2 = MEMS)과 맞췄다. 수신 모니터의 '센서 타입 1/2'와 같은 번호라 헷갈리지 않는다.
+  const KIND_TYPE = { PIEZO: "Type1", ADXL: "Type2", ULTRASONIC: "Type3", "": "-" };
+  const KIND_LABEL = { PIEZO: "Type1 진동", ADXL: "Type2 진동", ULTRASONIC: "Type3 초음파", "": "종류 미상" };
+  // 위쪽 요약 묶음: 진동(Type1·Type2, 종류 미상 포함) / 초음파(Type3).
+  const groupOf = (s) => (s.kind === "ULTRASONIC" ? "ult" : "vib");
   // 센서 종류 기호(아이콘 안). 선 그림이라 글자색(currentColor)을 따른다.
   const KIND_ICON = {
     ADXL: '<path d="M4 12h3l2-6 3 12 3-9 2 3h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
@@ -76,7 +84,7 @@
     return `${(seconds / 3600).toFixed(1)}시간`;
   }
   /** 목록·카드의 한 줄 글. 수신 정보만 쓴다(2026-11-18 결정).
-   *  진동 수치는 대문에 글로 내지 않는다. 문제가 있으면 색(경보 빨강·주의 주황)으로 알리고,
+   *  진동 수치는 대문에 글로 내지 않는다. 문제가 있으면 색(위험 빨강·경보 주황)으로 알리고,
    *  정확한 값은 통계 화면에서 본다. */
   function reason(s) {
     switch (s.link) {
@@ -278,43 +286,101 @@
     paintList();
   }
 
-  /** view: 위쪽 상태 타일(상태별 개수, 누르면 그 상태만 강조)과 수신 꺼짐 안내. */
+  /** 위쪽 요약에서 고른 거르기(focus)에 이 센서가 맞는지. */
+  function matchesFocus(s) {
+    if (!focus) return true;
+    const [group, key] = focus.split(":");
+    if (groupOf(s) !== group) return false;
+    if (key === "alarm") return s.alarm === "over";
+    if (key === "warn") return s.alarm === "warn";
+    if (key === "ok" || key === "bad" || key === "unknown") return s.link_group === key;
+    return true; // "all"
+  }
+
+  /** 요약 숫자 칩 하나. 누르면 그 조건으로 거르고, 다시 누르면 풀린다. */
+  function chip(key, text, count, tone, hint) {
+    const active = focus === key;
+    return `<button type="button" class="sum-chip state-${tone}${active ? " active" : ""}${count ? "" : " zero"}" data-focus-key="${key}"
+      aria-pressed="${active}"${hint ? ` title="${esc(hint)}"` : ""}><i></i>${text} <b>${count}</b></button>`;
+  }
+
+  /**
+   * view: 위쪽 요약(2026-11-23 피드백 3번). 진동 / 초음파로 나눠
+   *   [총 N개]  상태 [경보 n · 위험 n]  수신 [정상 n · 이상 n · 확인 불가 n]
+   * - 상태(측정 이상): 진동은 Type2(MEMS)만 판정한다. Type1(PIEZO)·초음파는 기준이 없어 '기준 없음'만 표시.
+   * - 수신: 정상 = 제때 받음, 이상 = 지연 + 미수신, 확인 불가 = 수신 꺼짐·측정 중지·데이터 없음·주기 미상.
+   * 수신 꺼짐 안내 줄도 여기서 그린다.
+   */
   function paintSummary() {
     if (EDIT || !status) return;
     const receiver = status.receiver || {};
     const banner = $("receiverBanner");
     banner.hidden = !!receiver.connected;
     banner.innerHTML = receiver.active
-      ? "수신 서버에 연결하는 중입니다. 연결되기 전까지 센서 연결 상태는 '대기'로 보입니다."
+      ? "수신 서버에 연결하는 중입니다. 연결되기 전까지 센서 수신 상태는 '확인 불가'로 보입니다."
       : '센서 데이터 수신이 꺼져 있어 연결 상태를 판단할 수 없습니다. <a href="/receiver">센서 수신 모니터</a>에서 연결해 주세요.';
     $("liveDot").className = "live-dot" + (receiver.connected ? " on" : "");
     $("liveDot").title = receiver.connected ? `수신 중 (${receiver.host}:${receiver.port})` : "수신 꺼짐";
-    const counts = (status.counts && status.counts.state) || {};
-    $("statusTiles").innerHTML = STATES
-      .filter(([key]) => key !== "idle" || counts.idle) // 대기는 있을 때만
-      .map(([key, text]) => {
-        const count = counts[key] || 0;
-        const cls = `status-tile state-${key}${focus === key ? " active" : ""}${count ? "" : " zero"}`;
-        return `<button type="button" class="${cls}" data-state="${key}" aria-pressed="${focus === key}">
-          <span class="tile-count">${count}</span><span class="tile-text">${text}</span></button>`;
+    const groups = [
+      ["vib", "진동", "Type1·Type2"],
+      ["ult", "초음파", "Type3"],
+    ];
+    $("statusTiles").innerHTML = groups
+      .map(([key, name, types]) => {
+        const list = sensors().filter((s) => groupOf(s) === key);
+        if (!list.length) return "";
+        const count = (test) => list.filter(test).length;
+        // 상태(측정 판정): 경보·위험 개수만 보인다. 기준이 없는 종류(Type1·Type3)는 판정이 없어 0으로 세지고,
+        // 기준이 생기면 서버 alarm 값이 채워져 같은 자리에 그대로 더해진다('기준 없음' 글씨는 2026-11-23 뺌).
+        const measure =
+          chip(`${key}:warn`, "경보", count((s) => s.alarm === "warn"), "warn", "측정값 ≥ 한계의 80%") +
+          chip(`${key}:alarm`, "위험", count((s) => s.alarm === "over"), "alarm", "측정값 ≥ 한계");
+        const unknown = count((s) => s.link_group === "unknown");
+        const link =
+          chip(`${key}:ok`, "정상", count((s) => s.link_group === "ok"), "ok", "제때 수신") +
+          chip(`${key}:bad`, "이상", count((s) => s.link_group === "bad"), "lost", "수신 지연 또는 미수신") +
+          (unknown ? chip(`${key}:unknown`, "확인 불가", unknown, "idle", "수신 꺼짐·측정 중지·데이터 없음·주기 미상") : "");
+        const allActive = focus === `${key}:all`;
+        // 한 줄: [진동 Type1·Type2 총 N개] | 상태 [경보][위험] | 수신 [정상][이상][확인 불가]
+        return `<div class="sum-card${focus.startsWith(key + ":") ? " focused" : ""}">
+          <button type="button" class="sum-head${allActive ? " active" : ""}" data-focus-key="${key}:all" aria-pressed="${allActive}">
+            <strong>${name}</strong><small>${types}</small><span class="sum-total">총 <b>${list.length}</b>개</span></button>
+          <div class="sum-row"><span class="sum-label">상태</span>${measure}</div>
+          <div class="sum-row"><span class="sum-label">수신</span>${link}</div>
+        </div>`;
       })
       .join("");
     const rules = status.rules || {};
     $("legendInfo").title =
-      `경보: 진동(SRSS 전체 평균) ≥ 한계\n주의: 진동 ≥ 한계의 ${Math.round((rules.warn_ratio || 0.8) * 100)}%, 또는 수신이 늦음\n` +
-      `끊김: 원래 수신 간격×${rules.late_factor}+${rules.grace_s}초보다 오래 수신 없음\n` +
-      `대기: 수신 꺼짐·측정 중지·데이터 없음 등 판단할 수 없음\n` +
-      "진동 값은 매일 자정 뒤 자동으로 계산되는 통계입니다.";
+      `위험: 진동(최근 통계 SRSS) ≥ 한계\n경보: 진동 ≥ 한계의 ${Math.round((rules.warn_ratio || 0.8) * 100)}%\n` +
+      `지연: 원래 수신 간격 + ${rules.grace_s}초를 넘김\n` +
+      `미수신: 원래 수신 간격 ×${rules.late_factor} + ${rules.grace_s}초보다 오래 수신 없음\n` +
+      "확인 불가: 수신 꺼짐·측정 중지·받은 데이터 없음·주기 미상\n" +
+      "Type1(PIEZO)·Type3(초음파)는 판정 기준이 아직 없다(표시만).\n" +
+      "진동 값은 매시 정각 뒤 자동으로 계산되는 통계(가장 최근 한 시간)입니다.";
   }
 
-  /** 평면도 탭. 탭마다 그 평면도의 문제 수(경보·끊김·주의) 배지. 보기 화면에서 한 장뿐이면 탭을 숨긴다. */
+  /** 평면도 아래 범례: 상태 색, 배터리 부족 표시, 센서 종류 기호. 한 번만 그린다. */
+  function paintLegend() {
+    const box = $("siteLegend");
+    if (!box || box.dataset.ready) return;
+    box.dataset.ready = "1";
+    const states = STATES.map(([key, text]) => `<span class="state-${key}"><i></i>${text}</span>`).join("");
+    const kinds = ["PIEZO", "ADXL", "ULTRASONIC"]
+      .map((kind) => `<span class="legend-kind"><svg viewBox="0 0 24 24" aria-hidden="true">${KIND_ICON[kind]}</svg>${KIND_LABEL[kind]}</span>`)
+      .join("");
+    box.insertAdjacentHTML("afterbegin",
+      `${states}<span class="legend-battery"><b>!</b>배터리 부족</span><span class="legend-sep"></span>${kinds}`);
+  }
+
+  /** 평면도 탭. 탭마다 그 평면도의 문제 수(위험·미수신·경보·지연) 배지. 보기 화면에서 한 장뿐이면 탭을 숨긴다. */
   function paintTabs() {
     const tabs = $("planTabs");
     tabs.hidden = plans.length === 0 || (!EDIT && plans.length === 1);
     tabs.innerHTML = plans
       .map((p) => {
         const here = current().filter((x) => x.plan_id === p.id).map((x) => sensorBy(x.mac)).filter(Boolean);
-        const badges = ["alarm", "lost", "warn"]
+        const badges = ["alarm", "lost", "warn", "late"]
           .map((key) => {
             const count = here.filter((s) => s.state === key).length;
             return count ? `<span class="tab-badge state-${key}" title="${STATES.find((x) => x[0] === key)[1]}">${count}</span>` : "";
@@ -331,14 +397,23 @@
     if (tab) selectPlan(Number(tab.dataset.plan));
   });
 
-  const blank = (mac) => ({ mac, name: "", kind: "", state: "idle", state_text: "대기", link: "none", alarm: "na", age_s: null });
+  const blank = (mac) => ({ mac, name: "", kind: "", state: "idle", state_text: "확인 불가", link: "none", link_group: "unknown", alarm: "na", age_s: null });
+
+  /**
+   * 센서 아이콘(평면도 아이콘·목록·카드 공통, 2026-11-23 피드백 6번).
+   * 동그라미 색 = 상태, 안의 기호 = 종류(Type1/2/3), 오른쪽 위 빨간 '!' = 배터리 부족.
+   */
+  function iconHtml(s, extraClass = "") {
+    return `<span class="sensor-icon state-${s.state}${extraClass}" title="${esc(s.state_text)}${s.battery_state === "low" ? " · 배터리 부족" : ""}">` +
+      `<span class="marker-dot"><svg viewBox="0 0 24 24" aria-hidden="true">${KIND_ICON[s.kind] || KIND_ICON[""]}</svg></span>` +
+      `${s.battery_state === "low" ? '<span class="marker-battery">!</span>' : ""}</span>`;
+  }
 
   function markerHtml(s, x, y) {
-    const dim = focus && s.state !== focus ? " dim" : "";
+    const dim = focus && !matchesFocus(s) ? " dim" : "";
     return `<div class="sensor-marker state-${s.state}${dim}${EDIT ? " editing" : ""}"
         data-mac="${esc(s.mac)}" style="left:${x * 100}%;top:${y * 100}%" title="${esc(label(s))} · ${esc(s.state_text)}">
-      <span class="marker-dot"><svg viewBox="0 0 24 24" aria-hidden="true">${KIND_ICON[s.kind] || KIND_ICON[""]}</svg></span>
-      ${s.battery_state === "low" ? '<span class="marker-battery" title="배터리 부족">!</span>' : ""}
+      ${iconHtml(s)}
       <span class="marker-label">${esc(label(s))}</span>
       ${EDIT ? `<button type="button" class="marker-remove" data-remove="${esc(s.mac)}" title="평면도에서 빼기">×</button>` : ""}
     </div>`;
@@ -366,7 +441,7 @@
         filter === "unplaced" ? !placed.has(s.mac) : filter === "here" ? placed.get(s.mac) === activeId : true,
       );
     } else if (focus) {
-      shown = all.filter((s) => s.state === focus);
+      shown = all.filter(matchesFocus);
     }
     // 검색: 이름·MAC에 글자가 들어 있으면 남긴다(대소문자·공백 무시). 상태 타일·편집 거르기와 함께 쓴다.
     const query = ($("listSearch") ? $("listSearch").value : "").replace(/\s+/g, "").toLowerCase();
@@ -380,10 +455,11 @@
               : where === activeId ? "" : `<span class="list-where other">${esc(planName(where))}</span>`;
             const draggable = EDIT && plan() && where !== activeId ? " draggable" : "";
             const sub = EDIT ? `${esc(s.mac)} · ${KIND_LABEL[s.kind] || "-"}` : esc(reason(s));
+            // 평면도와 같은 아이콘(색 = 상태, 기호 = 종류, ! = 배터리 부족)과 상태 글자를 함께 보인다.
             return `<li class="list-item state-${s.state}${draggable}" data-mac="${esc(s.mac)}">
-              <span class="list-dot" title="${esc(s.state_text)}"></span>
+              ${iconHtml(s, " list-icon")}
               <span class="list-main"><strong>${esc(label(s))}</strong><small>${sub}</small></span>
-              ${tag}${EDIT ? "" : `<span class="list-battery">${batteryHtml(s, false)}</span>`}
+              ${tag}${EDIT ? "" : `<span class="list-side"><span class="list-state state-${s.state}">${esc(s.state_text)}</span><span class="list-battery">${batteryHtml(s, false)}</span></span>`}
             </li>`;
           })
           .join("")
@@ -393,7 +469,7 @@
   function emptyText(total) {
     if (!total) return "센서가 없습니다.";
     if ($("listSearch") && $("listSearch").value.trim()) return "검색과 맞는 센서가 없습니다.";
-    if (focus) return "이 상태의 센서가 없습니다.";
+    if (focus) return "이 조건의 센서가 없습니다.";
     const filter = EDIT && $("listFilter") ? $("listFilter").value : "all";
     if (filter === "unplaced") return "모든 센서가 평면도에 놓여 있습니다. 위 선택을 '전체'로 바꾸면 옮길 수 있습니다.";
     if (filter === "here") return "이 평면도에 놓인 센서가 없습니다.";
@@ -403,7 +479,7 @@
   // ---------- 최근 알림(상태 변화 기록, site_watch가 1분마다 남김) ----------
   const events = () => (status && status.events) || [];
   // 알림 '확인'은 서버에 남긴다(POST /api/site/events/ack). 한 사람이 확인하면 모든 화면에서 사라진다.
-  // 기록은 지우지 않는다. '확인한 것도 보기'를 켜면 다시 보인다. 탭 배지 = 확인 안 한 경보·끊김·주의 수(서버 계산).
+  // 기록은 지우지 않는다. '확인한 것도 보기'를 켜면 다시 보인다. 탭 배지 = 확인 안 한 위험·미수신·경보·지연 수(서버 계산).
   let listTab = "sensors";
   let showAcked = false;
   const stamp = (text) => String(text || "").replace("T", " ").slice(5, 16);
@@ -485,19 +561,22 @@
       return;
     }
     openMac = mac;
-    // 진동 알람(경보·주의)이면 수치 대신 통계로 가는 안내만 둔다.
+    // 진동 측정 이상(경보·위험)이면 수치 대신 통계로 가는 안내만 둔다.
     // 통계 화면에서 이 MAC 줄을 강조해 연다. 주소에 MAC을 남기지 않으려고 링크에는 data-focus만 두고
     // 누를 때 sessionStorage('dashboard-focus')에 넣는다(아래 card click). 통계 화면이 한 번 읽고 지운다.
     const dashLink = "/dashboard";
-    const vibration = s.alarm === "over" ? "진동이 한계를 넘었습니다"
-      : s.alarm === "warn" ? "진동이 한계에 가깝습니다" : "";
+    const vibration = s.alarm === "over" ? "진동 위험 · 한계를 넘었습니다"
+      : s.alarm === "warn" ? "진동 경보 · 한계의 80%를 넘었습니다" : "";
     const interval = s.interval_s == null ? "모름" : `${span(s.interval_s)} (${esc(s.interval_source)})`;
     const config = s.config_type == null ? "-" : `SENSORTYPE ${esc(s.config_type)}${s.config_period != null ? ` · 주기 ${esc(s.config_period)}초` : ""}`;
     card.innerHTML = `
       <div class="card-head">
+        ${iconHtml(s, " card-icon")}
         <strong>${esc(label(s))}</strong>
+        <span class="card-type">${KIND_TYPE[s.kind] || "-"}</span>
         <button type="button" class="card-close" aria-label="닫기">×</button>
       </div>
+      ${photoHtml(s)}
       <div class="card-state state-${s.state}"><span class="state-chip">${esc(s.state_text)}${lasting(s) ? ` · ${lasting(s)}` : ""}</span>${esc(reason(s))}</div>
       ${vibration ? `<a class="card-alert state-${s.state}" href="${dashLink}" data-focus="${esc(s.mac)}">${vibration} · 통계에서 확인 →</a>` : ""}
       <dl>
@@ -514,7 +593,10 @@
         </dl>
       </details>
       ${historyHtml(s.mac)}
-      <div class="card-links"><a href="${dashLink}" data-focus="${esc(s.mac)}">통계 보기</a><a href="/studio">데이터 분석</a></div>`;
+      <div class="card-links">
+        <a class="card-analyze" href="/studio" data-analyze="${esc(s.mac)}" data-kind="${esc(s.kind)}">자세히 보기 →</a>
+        <a href="${dashLink}" data-focus="${esc(s.mac)}">통계 보기</a>
+      </div>`;
     card.hidden = false;
     // 아이콘 옆에 띄운다. 화면 밖으로 나가면 안쪽으로 당긴다.
     const box = (anchor || document.querySelector(`.sensor-marker[data-mac="${CSS.escape(mac)}"]`) || sensorList).getBoundingClientRect();
@@ -525,6 +607,13 @@
     const top = Math.min(window.innerHeight - height - 8, Math.max(8, box.top - 10));
     card.style.left = `${left}px`;
     card.style.top = `${top}px`;
+  }
+  /** 정보 카드 위쪽 센서 사진(설정 '장치' 표에서 MAC마다 올린 것). 없으면 빈 문자열.
+   *  높이를 CSS로 고정해(이미지가 늦게 와도) 카드 위치 계산(offsetHeight)이 바뀌지 않게 한다. 누르면 원본을 새 탭에. */
+  function photoHtml(s) {
+    if (!s.photo) return "";
+    return `<a class="card-photo" href="${esc(s.photo)}" target="_blank" rel="noopener" title="크게 보기">
+      <img src="${esc(s.photo)}" alt="${esc(label(s))} 사진"></a>`;
   }
   function hideCard() {
     openMac = "";
@@ -541,6 +630,16 @@
           /* 저장이 막혀도 통계 화면은 열린다(강조만 빠짐) */
         }
       }
+      // '자세히 보기'(2026-11-23 피드백): 센서 데이터 분석(/studio)으로 가서 그 센서 종류·MAC을 고르고
+      // 조회까지 자동으로 한다. 주소에 MAC을 남기지 않게 sessionStorage('studio-focus')로 한 번만 넘긴다(db.js가 읽고 지움).
+      const analyze = event.target.closest("[data-analyze]");
+      if (analyze) {
+        try {
+          sessionStorage.setItem("studio-focus", JSON.stringify({ mac: analyze.dataset.analyze, kind: analyze.dataset.kind }));
+        } catch (_) {
+          /* 저장이 막히면 분석 화면은 열리고 자동 조회만 빠진다 */
+        }
+      }
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape") hideCard();
@@ -550,9 +649,9 @@
 
   // ---------- view: 타일·목록 누르기 ----------
   on("statusTiles", "click", (event) => {
-    const tile = event.target.closest(".status-tile");
+    const tile = event.target.closest("[data-focus-key]");
     if (!tile) return;
-    focus = focus === tile.dataset.state ? "" : tile.dataset.state;
+    focus = focus === tile.dataset.focusKey ? "" : tile.dataset.focusKey;
     paintSummary();
     paintMarkers();
     paintList();
@@ -782,6 +881,36 @@
     }
     applyPlans(data, null, false);
   });
+
+  // ---------- 오른쪽 센서 목록 숨기기/펴기 (2026-11-23 피드백) ----------
+  // 숨기면 평면도가 화면 폭을 다 쓴다. 상태는 이 브라우저에 기억한다(localStorage 'site-list-hidden').
+  // 평면도 확대 상태는 상자 크기가 바뀌므로 다시 맞춘다(applyView는 resize 때 범위를 자른다).
+  const layout = document.querySelector(".site-layout");
+  function setListHidden(hidden) {
+    if (!layout || !$("listToggle")) return;
+    layout.classList.toggle("list-hidden", hidden);
+    $("listToggle").setAttribute("aria-pressed", String(!hidden));
+    $("listToggle").title = hidden ? "센서 목록 보이기" : "센서 목록 숨기기";
+    try {
+      localStorage.setItem("site-list-hidden", hidden ? "1" : "0");
+    } catch (_) {
+      /* 기억 못 해도 지금 화면은 바뀐다 */
+    }
+    requestAnimationFrame(() => window.dispatchEvent(new Event("resize")));
+  }
+  on("listToggle", "click", () => setListHidden(!layout.classList.contains("list-hidden")));
+  on("listClose", "click", () => setListHidden(true));
+  if (!EDIT) {
+    let hidden = false;
+    try {
+      hidden = localStorage.getItem("site-list-hidden") === "1";
+    } catch (_) {
+      hidden = false;
+    }
+    setListHidden(hidden);
+  }
+
+  paintLegend();
 
   // ---------- 시작 ----------
   loadPlans().catch((error) => alert("평면도를 읽지 못했습니다: " + error.message));

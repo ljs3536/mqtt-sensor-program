@@ -121,6 +121,38 @@ dbMode.addEventListener("change", () => {
     : "최근 개수만큼 세트를 엽니다.";
 });
 
-loadDbMacs().catch((error) => {
+/*
+ * 센서 현황 팝업의 '자세히 보기'로 왔으면 그 센서를 바로 연다(2026-11-23 피드백).
+ * site.js가 sessionStorage('studio-focus')에 {mac, kind}를 넣고 이 화면으로 온다. 한 번 읽고 바로 지운다
+ * (주소에 MAC을 남기지 않고, 새로고침하면 다시 열지 않는다).
+ * 1. 센서 종류 탭(PIEZO / MEMS / 초음파)을 고른다.  2. MAC 목록을 읽어 그 MAC을 고른다.  3. 조회를 누른다.
+ */
+function takeStudioFocus() {
+  try {
+    const focus = JSON.parse(sessionStorage.getItem("studio-focus") || "null");
+    sessionStorage.removeItem("studio-focus");
+    return focus && focus.mac ? focus : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function openFocusedSensor(focus) {
+  // 센서 현황의 종류(kind) → 분석 화면의 센서 탭. 종류를 모르면(패킷 없이 설정만 있는 장치) MEMS.
+  const pick = { ADXL: "ADXL", PIEZO: "PIEZO", ULTRASONIC: "초음파" }[focus.kind] || "ADXL";
+  const tab = document.querySelector(`[data-sensor-pick="${pick}"]`);
+  if (tab) tab.click();
+  await loadDbMacs();
+  if (![...dbMac.options].some((option) => option.value === focus.mac)) {
+    dbStatus.textContent = `${focus.mac}는 저장된 수신 기록이 없어 열 수 없습니다.`;
+    return;
+  }
+  dbMac.value = focus.mac;
+  await showDbStats();
+  document.querySelector("#dbLoad").click();
+}
+
+const studioFocus = takeStudioFocus();
+(studioFocus ? openFocusedSensor(studioFocus) : loadDbMacs()).catch((error) => {
   dbStatus.textContent = error.message;
 });

@@ -16,12 +16,14 @@ refreshFilterNotes();
 function chart(id, title) {
   const plot = GraphView.chart(id);
   plot.options.plugins.title = { display: true, text: title, color: "#17324d", font: { size: 13, weight: "bold" } };
+  // 범례는 오른쪽 위(수신기 V063, 발생기와 같은 자리).
+  plot.options.plugins.legend.align = "end";
   return plot;
 }
 const rawChart = chart("raw", "파형");
 const fftChart = chart("fft", "FFT");
-GraphView.axes(rawChart, "Time (s)", "값");
-GraphView.axes(fftChart, "Frequency (Hz)", "크기");
+GraphView.axes(rawChart, "Time (ms)", "값");
+GraphView.axes(fftChart, "Frequency (kHz)", "크기");
 GraphView.bindAxisBar({ raw: rawChart, fft: fftChart });
 
 /** 숫자로 바꿀 수 없으면 기본값을 쓴다. */
@@ -61,7 +63,47 @@ function viewOptions() {
         sensitivity_enabled: sensOn.checked,
       },
     },
+    // 실시간 Welch PSD(수신기 V063). 서버 graph_curves._monitor_psd가 쓴다.
+    psd: {
+      on: monPsdOn.checked,
+      segment: monPsdSegment.value,
+      overlap: Math.min(95, Math.max(0, num(monPsdOverlap.value, 50))),
+      target: String(Math.max(1, Math.round(num(monPsdTarget.value, 30)))),
+    },
   };
+}
+
+/**
+ * PSD 결과 칸(그래프 아래)을 채운다. psd가 없으면(PSD OFF) 숨긴다.
+ * 판정 색은 분석 화면과 같다(data-state = ok / over / none).
+ */
+function showPsd(psd) {
+  const box = document.getElementById("monPsdResult");
+  const title = document.getElementById("fftCardTitle");
+  if (title) title.textContent = monPsdOn.checked ? "PSD" : "FFT";
+  if (!box) return;
+  box.hidden = !monPsdOn.checked;
+  if (!monPsdOn.checked) return;
+  if (!psd) {
+    document.getElementById("monPsdSrss").textContent = "XYZ 합성 SRSS: 분석 대기";
+    document.getElementById("monPsdLimit").textContent = "한계값: -";
+    const waiting = document.getElementById("monPsdJudge");
+    waiting.textContent = "판정: PSD ON · 유효한 패킷을 기다리는 중";
+    waiting.dataset.state = "none";
+    document.getElementById("monPsdWarning").hidden = true;
+    document.getElementById("monPsdSteps").textContent = "";
+    return;
+  }
+  document.getElementById("monPsdSrss").textContent = psd.srss || "";
+  document.getElementById("monPsdLimit").textContent = psd.limit || "";
+  const judge = document.getElementById("monPsdJudge");
+  judge.textContent = psd.judgement || "";
+  judge.dataset.state = psd.state || "none";
+  const warning = document.getElementById("monPsdWarning");
+  const lines = psd.warnings || [];
+  warning.textContent = lines.join("\n");
+  warning.hidden = !lines.length;
+  document.getElementById("monPsdSteps").textContent = psd.error ? "PSD 오류: " + psd.error : psd.steps || "";
 }
 
 const fftUnitHint = {
@@ -80,11 +122,19 @@ function showFftUnitHint() {
 adxlFft.addEventListener("change", showFftUnitHint);
 showFftUnitHint();
 
-/** 서버 배열을 Chart.js {x,y} 점으로 바꾼다. 로그 축이면 0 이하는 뺀다. */
-function pairs(xs, ys, logX, logY) {
+/**
+ * 서버 배열을 Chart.js {x,y} 점으로 바꾼다. 로그 축이면 0 이하는 뺀다.
+ * scale: x에 곱할 표시 배율. 수신기 V063처럼 서버 값(s, Hz)은 그대로 두고 눈금만 ms·kHz로 보인다
+ * (시간 ×1000, 주파수 ×0.001). FFT 로그 x축은 V063과 같이 Hz 그대로(scale 1).
+ */
+const TIME_SCALE = 1000;
+function freqScale(logX) {
+  return logX ? 1 : 0.001;
+}
+function pairs(xs, ys, logX, logY, scale = 1) {
   const data = [];
   for (let i = 0; i < (xs || []).length; i += 1) {
-    const x = xs[i];
+    const x = xs[i] * scale;
     const y = ys[i];
     if (logX && !(x > 0)) continue;
     if (logY && !(y > 0)) continue;
@@ -198,7 +248,7 @@ function srssDataset(srss, logX, logY) {
     borderColor: "#9467BD",
     borderDash: [5, 3],
     borderWidth: 1.7,
-    data: pairs(srss.f, srss.y, logX, logY),
+    data: pairs(srss.f, srss.y, logX, logY, freqScale(logX)),
   };
 }
 
@@ -209,10 +259,11 @@ function draw(device) {
   const notes = [];
   let logX = fftLogX.checked;
   let logY = fftLogY.checked;
-  let timeLabel = "Time (s)";
+  // 수신기 V063: 시간 ms, 주파수 kHz(로그 x축이면 Hz). 분석 화면(/studio)과 같은 단위.
+  let timeLabel = "Time (ms)";
   let rawY = "값";
   let fftLabel = "크기";
-  let fftX = "Frequency (Hz)";
+  let fftX = logX ? "Frequency (Hz)" : "Frequency (kHz)";
   const srss = device && device._srss;
   // 서버는 축을 도착 순서로 준다. 그래프 범례와 수신 정보가 늘 같은 순서가 되게 X, Y, Z, PIEZO, H 순으로 그린다.
   const axisOrder = ["X", "Y", "Z", "PIEZO", "H"];
@@ -234,17 +285,16 @@ function draw(device) {
       timeLabel = item.x_label || "Frequency (kHz)";
       rawY = item.y_label || rawY;
     } else {
-      timeLabel = item.x_label || timeLabel;
+      // 파형 x축 이름표는 서버 값 대신 화면 배율(TIME_SCALE, freqScale)에 맞춘 이름을 쓴다.
       rawY = item.unit || rawY;
       fftLabel = item.fft_unit || fftLabel;
-      fftX = item.fft_x_label || fftX;
       rawChart.data.datasets.push({
         label: `${axis} (${item.unit || ""})`, borderColor: color,
-        data: pairs(item.t, item.y, false, false),
+        data: pairs(item.t, item.y, false, false, TIME_SCALE),
       });
       fftChart.data.datasets.push({
         label: axis, borderColor: color,
-        data: pairs(item.fft_f, item.fft_y, logX, logY),
+        data: pairs(item.fft_f, item.fft_y, logX, logY, freqScale(logX)),
       });
       notes.push(`${axis} ${item.unit || ""} AC RMS=${item.rms_value} N=${item.n} Window=${item.window} Fs=${item.fs}`);
       // 서버가 계산한 Window 보정계수를 그 센서의 'Window 보정' 칸 옆에 보여 준다.
@@ -259,7 +309,7 @@ function draw(device) {
   if (gn && gn.ok && gnOn.checked) {
     fftChart.data.datasets.push({
       label: "gN", borderColor: "#17a2b8", borderWidth: 1.4,
-      data: pairs(gn.f, gn.y, logX, logY),
+      data: pairs(gn.f, gn.y, logX, logY, freqScale(logX)),
     });
   }
   const srssLine = srssDataset(srss, logX, logY);
@@ -268,32 +318,37 @@ function draw(device) {
   if (limit && limit.ok) {
     fftChart.data.datasets.push({
       label: limit.text || "SRSS 한계", borderColor: "#b45309", borderDash: [5, 3], borderWidth: 1.5,
-      data: pairs(limit.f, limit.y, logX, logY),
+      data: pairs(limit.f, limit.y, logX, logY, freqScale(logX)),
     });
     if (limit.value != null && document.activeElement !== srssLimit) srssLimit.value = limit.value;
   }
   notes.push(...formulas);
   if (srss && srss.text) notes.push(srss.text);
-  if (!lockX.checked) {
-    delete rawChart.options.scales.x.min;
-    delete rawChart.options.scales.x.max;
-    delete fftChart.options.scales.x.min;
-    delete fftChart.options.scales.x.max;
-  }
-  if (!lockY.checked) {
-    delete rawChart.options.scales.y.min;
-    delete rawChart.options.scales.y.max;
-    delete fftChart.options.scales.y.min;
-    delete fftChart.options.scales.y.max;
-  }
+  // 새 파형마다 자동 범위로 되돌리되, 고정한 축은 둔다. 그래프마다 자기 고정 상태($lockX/$lockY, graph.js)를 본다.
+  // 예전에는 화면 체크박스(지금 고른 대상 그래프 하나의 상태)로 두 그래프를 함께 풀어서,
+  // RAW를 고정하고 대상을 FFT로 바꾸면 다음 수신에서 RAW 고정이 풀렸다(2026-11-23 수정).
+  [rawChart, fftChart].forEach((plot) => {
+    if (!plot.$lockX) {
+      delete plot.options.scales.x.min;
+      delete plot.options.scales.x.max;
+    }
+    if (!plot.$lockY) {
+      delete plot.options.scales.y.min;
+      delete plot.options.scales.y.max;
+    }
+  });
   const info = document.querySelector("#info");
   const lines = notes.filter((line, index, all) => all.indexOf(line) === index);
   info.innerHTML = lines.length
     ? lines.map((line) => `<span class="info-chip">${line.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[ch]))}</span>`).join("")
     : `<span class="info-chip">수신 대기</span>`;
+  const psd = device && device._psd;
+  showPsd(psd);
+  if (psd && psd.formula) notes.push(psd.formula);
   fftChart.options.plugins.title = {
     display: true,
-    text: (srss && srss.text) || fftLabel,
+    // PSD일 때는 V060처럼 분석 조건(Window·구간 N·Δf)을 제목에 둔다.
+    text: (monPsdOn.checked && psd && psd.title) || (srss && srss.text) || fftLabel,
     color: "#17324d",
     font: { size: 13, weight: "bold" },
   };

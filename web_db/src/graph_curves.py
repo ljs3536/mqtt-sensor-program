@@ -18,6 +18,7 @@ from web_db.src.graph_options import (
     _merge,
     _num,
     _window_n,
+    avg_window,
     decode_wave,
     resolve_options,
 )
@@ -94,14 +95,16 @@ def _factor_text(labels):
 
 
 def _average(sensor, packets, index, options):
-    """선택한 개수만큼 FFT를 평균한다."""
+    """선택한 개수만큼 FFT를 평균한다. 발생기 v021~v073의 'FFT Linear Averaging'과 같다.
+
+    A_avg(f_k) = (1/M) × Σ A_i(f_k): 패킷마다 필터 → FFT → 단위 환산·보정까지 끝낸 진폭을
+    같은 주파수 칸끼리 더해 실제로 쓴 패킷 수 M으로 나눈다. RAW·MQTT 송신 원본은 바꾸지 않는다.
+    Fs·샘플 수·주파수 칸이 첫 패킷과 다른 패킷은 빼고, ADXL은 X/Y/Z를 따로 센다.
+    """
     if not _flag(options.get("fft_avg")):
         return {}, "평균 OFF — 현재 패킷 FFT 표시"
-    choice = str(options.get("fft_avg_count") or "16").strip()
-    amount = (len(packets) - index) if choice == "전체" else int(float(choice))
-    if amount < 1:
-        raise ValueError("FFT 평균 개수는 1 이상이어야 합니다")
-    chosen = packets[index:min(len(packets), index + amount)]
+    # 지금 패킷부터 뒤로, 파일 끝이면 앞쪽으로 채운다(graph_options.avg_window).
+    chosen, amount, fill_note = avg_window(packets, index, options)
     piezo = options["piezo"]
     adxl = options["adxl"]
     axes = ("PIEZO",) if sensor == "PIEZO" else ("X", "Y", "Z")
@@ -170,8 +173,14 @@ def _average(sensor, packets, index, options):
         if skipped:
             note += f" (제외 {skipped})"
         messages.append(note)
-    trailing = "" if len(chosen) == amount else f" | 파일 끝: 요청 {amount}회 중 {len(chosen)}회 검색"
-    return result, " | ".join(messages) + trailing
+    trailing = "" if len(chosen) == amount else f" | 파일 전체가 {len(chosen)}개라 요청 {amount}회 중 {len(chosen)}회 사용"
+    if fill_note:
+        trailing += " | " + fill_note
+    # v073처럼 계산식 칸에 평균 식과 축별 M을 한 줄 더 보인다.
+    formula = ("Linear Averaging: A_avg(f_k) = [A₁(f_k)+...+Aₘ(f_k)]/M | M=실제 유효 패킷 수 | "
+               + " / ".join(f"{axis} M={item[2]}" for axis, item in result.items())
+               + " | 각 패킷 필터·FFT·단위 환산·보정 완료 후 평균 (RAW/MQTT 변경 없음)")
+    return result, " | ".join(messages) + trailing + "\n" + formula
 
 
 def _piezo_curves(packet, averaged, options):
@@ -287,14 +296,8 @@ def _srss_from_packets(packets, index, options):
         return [], None, 0, False
     index = max(0, min(len(packets) - 1, int(index)))
     averaging = _flag(options.get("fft_avg"))
-    if averaging:
-        choice = str(options.get("fft_avg_count") or "16").strip()
-        amount = (len(packets) - index) if choice == "전체" else int(float(choice))
-        if amount < 1:
-            raise ValueError("FFT 평균 개수는 1 이상이어야 합니다")
-        chosen = packets[index:index + amount]
-    else:
-        chosen = [packets[index]]
+    # FFT 평균과 같은 패킷 범위(파일 끝이면 앞쪽으로 채움).
+    chosen = avg_window(packets, index, options)[0]
     levels = []
     reference = None
     line_freq = None
@@ -497,9 +500,8 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
         gn_hz = None
         chosen = [packet]
         if _flag(options.get("fft_avg")) and packets:
-            choice = str(options.get("fft_avg_count") or "16").strip()
-            amount = (len(packets) - int(index)) if choice == "전체" else int(float(choice))
-            chosen = list(packets)[int(index):int(index) + max(1, amount)]
+            # FFT 평균과 같은 패킷 범위(파일 끝이면 앞쪽으로 채움).
+            chosen = avg_window(packets, index, options)[0]
         for item in chosen:
             if not isinstance(item, dict) or any(item.get(name) is None for name in ("X", "Y", "Z")):
                 continue
@@ -614,7 +616,7 @@ def generator_curves(sensor, packet, packets, index, options):
 
     PSD 모드(options.psd.on, PIEZO·ADXL만): RAW는 그대로 두고 FFT 칸만 graph_psd.packet_psd의
     Welch PSD로 바꾼다. 발생기 v070처럼 이때는 FFT 평균(Linear Averaging)을 하지 않고,
-    'FFT 평균 적용'과 평균 개수는 PSD에 넣을 패킷 범위로만 쓴다. SRSS 가로선도 그리지 않는다
+    'FFT 평균 (Linear Averaging)'과 평균 개수는 PSD에 넣을 패킷 범위로만 쓴다. SRSS 가로선도 그리지 않는다
     (PSD 합성 SRSS는 밀도 단위가 아니라서 결과 칸에 숫자로 보여 준다).
     PSD 계산이 실패해도 RAW는 보여 주고, FFT 칸은 비운 채 psd.error에 이유를 담는다.
     """
@@ -658,12 +660,79 @@ def generator_curves(sensor, packet, packets, index, options):
     return curves
 
 
+# ---------- 수신 모니터 실시간 PSD (수신기 V063, 2026-11-23) ----------
+# 'PSD ON'이면 아래 그래프를 FFT 대신 Welch PSD로 바꾼다. 계산은 분석 화면과 같은 graph_psd.packet_psd이고,
+# 모니터는 지금 받은 패킷 하나(ADXL은 X/Y/Z 한 세트)만 쓴다(FFT 평균 끔).
+# - 단위: FFT 단위 칸이 mm/s RMS면 속도 PSD (mm/s)²/Hz, Count면 Count²/Hz, 나머지는 가속도 g²/Hz(PIEZO는 mV/g 칸 따름).
+# - V063처럼 PSD일 때는 gN·SRSS·한계 가로선을 그리지 않는다(밀도 단위라 RMS 선과 비교할 수 없음).
+# - 판정·계산 단계·경고는 '_psd'로 화면에 넘긴다.
+def _psd_on(options):
+    return _flag((options.get("psd") or {}).get("on"))
+
+
+def _psd_warnings(psd):
+    """V061 경고 줄: 단위 불일치, 평균 목표 미달/충족, 한계 수평선 안내."""
+    lines = []
+    if psd.get("unit") != "mm/s":
+        lines.append("⚠ 단위 불일치: 사용자 한계값은 mm/s RMS 기준입니다. "
+                     "현재 표시 단위와 비교할 수 없어 정상/초과 판정을 하지 않습니다.")
+    target = int(psd.get("target") or 0)
+    segments = psd.get("segments") or {}
+    if not segments:
+        lines.append("PSD 평균 상태: 아직 계산 가능한 패킷이 없습니다.")
+    else:
+        short = [(a, int(k)) for a, k in sorted(segments.items()) if int(k) < target]
+        if short:
+            lines.append("⚠ PSD 평균 목표 미달: " + ", ".join(
+                f"{a} {k}/{target}구간 (부족 {target - k})" for a, k in short) + " · 확보된 구간만 평균했습니다.")
+        else:
+            lines.append("✓ PSD 평균 목표 충족: " + ", ".join(f"{a} {int(k)}/{target}구간" for a, k in sorted(segments.items())))
+    if psd.get("unit") == "mm/s":
+        lines.append("ℹ PSD 그래프 Y축은 (mm/s)²/Hz이므로 SRSS·한계값 수평선은 표시하지 않습니다. "
+                     "RMS 판정은 계산 결과 영역에서 확인합니다.")
+    return lines
+
+
+def _monitor_psd(sensor, packet, options, device):
+    """모니터 패킷 하나의 PSD. (축별 {f[Hz], y}, 밀도 단위, 화면 요약 dict). 실패하면 축은 비우고 error를 담는다."""
+    opts = dict(options)
+    opts["fft_avg"] = False          # 모니터는 지금 패킷 하나만
+    clamped = ""
+    try:
+        try:
+            psd = graph_psd.packet_psd(sensor, [packet], 0, opts, device=device)
+        except ValueError as exc:
+            # 수신기 V063: 구간 N이 패킷 샘플 수보다 크면 N=샘플 수(패킷 전체 한 구간)로 계산한다.
+            if not str(exc).startswith("PSD 구간 N="):
+                raise
+            opts["psd"] = dict(opts.get("psd") or {}, segment="전체")
+            psd = graph_psd.packet_psd(sensor, [packet], 0, opts, device=device)
+            clamped = f"ℹ {exc} → 구간 N을 패킷 전체로 줄여 계산했습니다."
+    except (ValueError, TypeError, KeyError, OverflowError, ZeroDivisionError) as exc:
+        info = {"on": True, "error": str(exc), "srss": "XYZ 합성 SRSS: 계산 오류", "limit": "한계값: -",
+                "judgement": f"판정: PSD 오류 ({exc})", "state": "none", "steps": "", "title": "PSD | 계산 오류",
+                "warnings": [f"PSD 계산 오류: {exc}"]}
+        return {}, "", info
+    summary = dict(psd["psd"])
+    summary["warnings"] = ([clamped] if clamped else []) + _psd_warnings(summary)
+    summary["avg_status"] = psd.get("avg_status") or ""
+    summary["formula"] = psd.get("psd_formula") or ""
+    curves = {axis: {"f": np.asarray(item["f"], dtype=np.float64) * 1000.0, "y": np.asarray(item["y"], dtype=np.float64)}
+              for axis, item in (psd.get("fft") or {}).items()}
+    return curves, psd.get("fft_label") or "", summary
+
+
+def _empty_trace(device=""):
+    return {"ok": False, "text": "", "unit": "", "value": None, "device": device, "level": None, "f": [], "y": []}
+
+
 def monitor_adxl_set(axis_samples, options):
     """X/Y/Z를 한 번에 환산해 RAW·FFT 눈금을 공유한다.
 
     축마다 따로 자동 단위를 고르면 Z(중력, 약 1g)는 g, X/Y는 mg가 되어
     같은 그래프에서 작은 축이 바닥에 붙는다.
     """
+    device = str((options or {}).get("device") or "")
     options = resolve_options(options)
     packet = {}
     for axis, (samples, fs) in axis_samples.items():
@@ -719,11 +788,31 @@ def monitor_adxl_set(axis_samples, options):
     shown["_srss"] = _hz_trace(curves.get("srss") or {})
     shown["_gn"] = _hz_trace(curves.get("gn") or {})
     shown["_srss_limit"] = _hz_trace(curves.get("srss_limit") or {})
+    if _psd_on(options):
+        # PSD ON: FFT 칸만 PSD로 바꾸고, gN·SRSS·한계선은 비운다(V063). 한계 입력칸 맞춤용 값은 남긴다.
+        psd_curves, label, summary = _monitor_psd("ADXL", packet, options, device)
+        for axis in list(shown):
+            if axis.startswith("_"):
+                continue
+            item = psd_curves.get(axis) or {"f": np.zeros(0), "y": np.zeros(0)}
+            shown[axis]["fft_f"] = item["f"]
+            shown[axis]["fft_y"] = item["y"]
+            shown[axis]["fft_unit"] = label
+        limit_value = shown["_srss_limit"].get("value")
+        shown["_srss"] = _empty_trace(device)
+        shown["_gn"] = _empty_trace(device)
+        shown["_srss_limit"] = dict(_empty_trace(device), value=limit_value)
+        shown["_psd"] = summary
     return shown
 
 
 def monitor_curves(samples, fs, sensor_kind, options, axis="X"):
-    """발생기와 같은 g·g RMS 환산. 시간만 ms→s, FFT 주파수만 kHz→Hz로 되돌린다."""
+    """발생기와 같은 g·g RMS 환산. 시간만 ms→s, FFT 주파수만 kHz→Hz로 되돌린다.
+
+    화면(monitor-draw.js)은 이 s·Hz 값을 눈금에서만 ms·kHz로 바꿔 보인다(수신기 V063).
+    options.psd.on이면 PIEZO FFT 칸을 Welch PSD로 바꾸고 요약을 'psd'에 담는다.
+    """
+    device = str((options or {}).get("device") or "")
     samples = np.asarray(samples, dtype=np.float64)
     fs = float(fs or 0)
     if samples.size < 2 or fs <= 0:
@@ -740,7 +829,7 @@ def monitor_curves(samples, fs, sensor_kind, options, axis="X"):
         chosen = "PIEZO"
     wave = curves["series"][chosen]
     spectrum = curves["fft"][chosen]
-    return {
+    result = {
         "t": wave["t"] / 1000.0,
         "y": wave["y"],
         "fft_f": spectrum["f"] * 1000.0,
@@ -753,6 +842,12 @@ def monitor_curves(samples, fs, sensor_kind, options, axis="X"):
         "fft_log_x": _flag(options.get("fft_log_x")),
         "fft_log_y": _flag(options.get("fft_log_y")),
     }
+    if _psd_on(options) and sensor_kind != "ADXL":
+        # PIEZO 실시간 PSD(수신기 V063). ADXL은 monitor_adxl_set이 X/Y/Z를 함께 계산한다.
+        psd_curves, label, summary = _monitor_psd("PIEZO", fake, options, device)
+        item = psd_curves.get("PIEZO") or {"f": np.zeros(0), "y": np.zeros(0)}
+        result.update(fft_f=item["f"], fft_y=item["y"], fft_unit=label, psd=summary)
+    return result
 
 
 def _counts_to_hex(samples):

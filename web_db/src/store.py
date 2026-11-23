@@ -31,7 +31,7 @@ class Store(QueryMixin, SiteMixin):
     """sensor.sqlite 하나를 프로세스 전체가 같이 쓰는 저장소.
 
     연결은 하나다(check_same_thread=False). MQTT 수신 스레드, HTTP 요청 스레드,
-    하루 통계 스레드가 모두 이 연결을 쓰므로, 쿼리와 commit은 반드시 self.lock 안에서 한다.
+    매시간 통계·재계산 스레드가 모두 이 연결을 쓰므로, 쿼리와 commit은 반드시 self.lock 안에서 한다.
     lock 없이 두 스레드가 쓰면 한쪽 commit이 다른 쪽의 반쯤 한 작업까지 확정할 수 있다.
 
     self.stats_lock은 통계 최신화(update_statistics) 전체를 한 번에 하나만 돌리는 잠금이다.
@@ -198,6 +198,33 @@ class Store(QueryMixin, SiteMixin):
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(site_state_history)")}
         if "acked_at" not in columns:
             self._conn.execute("ALTER TABLE site_state_history ADD COLUMN acked_at TEXT NOT NULL DEFAULT ''")
+        # 통계 계산 기준 버전(2026-11-23, stat_profile.py). 버전은 지우지 않고 쌓는다. 지금 쓰는 버전은
+        # app_setting 'stat_profile_active'({"id": n}). 없으면(업그레이드 직후) 옛 하루 통계(profile_id 없음)를 보인다.
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stat_profile (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                settings TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        # 한 시간 한 줄 통계(2026-11-23)에 쓰는 칸. 옛 하루 통계 줄은 이 칸이 비어 있다(profile_id NULL).
+        # - profile_id: 계산에 쓴 stat_profile.id. 화면·경보는 지금 버전 줄만 본다.
+        # - hour: 묶음 키 'YYYY-MM-DDTHH:00:00'(세트 마지막 축 수신 시각의 시).
+        # - x_mms/y_mms/z_mms: 축별 속도 RMS 평균, srss_mms_max: 그 시간 세트 중 SRSS 최대.
+        # - first_id: 그 시간 첫 세트의 가장 작은 packet id(through_id와 함께 원본 범위).
+        # - notes: 그 Fs에서 쓸 수 없어 끈 필터 등 계산 메모(JSON 목록).
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(measurement)")}
+        for name, kind in (("profile_id", "INTEGER"), ("hour", "TEXT"), ("x_mms", "REAL"), ("y_mms", "REAL"),
+                           ("z_mms", "REAL"), ("srss_mms_max", "REAL"), ("first_id", "INTEGER"),
+                           ("notes", "TEXT NOT NULL DEFAULT ''")):
+            if name not in columns:
+                self._conn.execute(f"ALTER TABLE measurement ADD COLUMN {name} {kind}")
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_measurement_profile ON measurement(profile_id, mac, hour)"
+        )
         # 옛 스키마에서 남은 MAC 빈 device 줄(mac이 NULL)은 화면 목록을 어지럽히므로 지운다.
         # 있을 때만 지운다. 늘 DELETE를 하면 다른 프로그램(DB Browser 등)이 쓰기 잠금을 잡고 있을 때
         # 서버가 시작조차 못 한다(읽기는 WAL이라 잠금과 상관없이 된다).
@@ -386,7 +413,7 @@ class Store(QueryMixin, SiteMixin):
         MonitorService._save_csv가 MQTT 수신 스레드에서 패킷마다 부른다.
         - 센서 종류: kind가 ULTRASONIC이면 초음파(축 H), ADXL-로 시작하면 ADXL, 나머지는 PIEZO.
         - sample_rate: 수신 JSON 값을 그대로 둔다(_rate). 장비 코드 `0x0F`도 글자로 남고,
-          Hz로 읽는 것은 쓰는 쪽(stats_calc, 그래프)이 normalize_sample_rate로 한다.
+          Hz로 읽는 것은 쓰는 쪽(통계 stat_profile, 그래프)이 normalize_sample_rate로 한다.
         - decoded_samples: 디코드한 샘플을 쉼표 문자열로. 통계가 HEX를 다시 풀지 않게 한다.
         - set_key / set_no: assign_set이 직전 패킷과 seq를 비교해 정한다. 같은 lock 안에서
           '직전 패킷 조회 → INSERT'를 하므로, 두 패킷이 같은 직전 값을 보고 번호가 꼬이지 않는다.

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import functools
+
 import numpy as np
 
 
@@ -33,7 +35,17 @@ def spectral_filter(x, fs, *, hpf=False, hp_cutoff=10.0, hp_order=4,
 FFT_WINDOWS=('Rectangular','Hann','Hamming','Blackman','Blackman-Harris','Flat Top','Bartlett','Kaiser')
 
 def fft_window(n, name='Blackman', beta=8.6):
-    """FFT에 쓸 창 계수를 만든다."""
+    """FFT에 쓸 창 계수. 같은 (n, 이름, beta)는 한 번만 만들고 복사본을 준다(2026-11-23).
+
+    FFT 평균 380세트에서 같은 Blackman 8192점을 4566번 새로 만들어 약 0.7초가 들었다.
+    복사본을 주므로 호출 쪽이 배열을 고쳐도 캐시는 그대로다.
+    """
+    return _fft_window_cached(int(n), str(name), float(beta)).copy()
+
+
+@functools.lru_cache(maxsize=64)
+def _fft_window_cached(n, name, beta):
+    """창 계수를 실제로 만든다(캐시 대상, 고치지 말 것)."""
     if name=='Rectangular': return np.ones(n)
     if name=='Hamming': return np.hamming(n)
     if name=='Blackman': return np.blackman(n)
@@ -117,7 +129,7 @@ def fft_peak(x,fs,window='Blackman',window_size=None,beta=8.6,correction=DEFAULT
     """평균을 뺀 뒤 창을 곱한 단측 peak. DC와 짝수 N Nyquist는 2배하지 않는다.
 
     correction은 Window 보정 모드다. 기본 '진폭 보정'은 예전과 같은 값(Σw로 나눔)이라,
-    인자를 넘기지 않는 통계 계산(stats_calc)과 SRSS는 결과가 바뀌지 않는다.
+    인자를 넘기지 않는 SRSS는 결과가 바뀌지 않는다(통계는 2026-11-23부터 stat_profile의 Welch PSD).
     """
     x=np.asarray(x,dtype=np.float64)
     n=len(x) if window_size is None else min(len(x),max(2,int(window_size)))

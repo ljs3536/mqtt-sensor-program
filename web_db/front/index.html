@@ -10,7 +10,7 @@
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=28" />
+    <link rel="stylesheet" href="/static/style.css?v=31" />
     <link rel="stylesheet" href="/static/theme.css?v=14" />
   </head>
   <body>
@@ -310,6 +310,27 @@
             <div id="adxlFilters"></div>
           </fieldset>
         </div>
+        <!--
+          실시간 Welch PSD(수신기 V063). 센서별 표시·보정·필터 칸 뒤에 둔다(V062 순서).
+          켜면 아래 그래프가 FFT 대신 PSD가 되고, 계산은 FFT측 필터·Window를 그대로 쓴다.
+          단위: MEMS FFT 단위가 mm/s RMS면 속도 PSD, 그 밖은 가속도 PSD. 판정·단계·경고는 그래프 아래 'PSD 결과'.
+          수신기의 '연산 결과 CSV 자동 저장'은 아직 넣지 않았다(DB 저장 방식 논의 중, docs/V073-V063-반영-검토.md).
+        -->
+        <fieldset class="psd-live">
+          <legend>실시간 Welch PSD · 새 패킷 자동 분석</legend>
+          <div class="row">
+            <label class="check"><input id="monPsdOn" type="checkbox" /><span>PSD ON (FFT 대신 표시)</span></label>
+            <label>구간 N
+              <select id="monPsdSegment">
+                <option>8192</option><option>4096</option><option>2048</option><option>1024</option>
+                <option selected>512</option><option>256</option><option>128</option><option>전체</option>
+              </select>
+            </label>
+            <label>Overlap %<input id="monPsdOverlap" class="w-num" type="number" min="0" max="95" value="50" /></label>
+            <label>평균 목표<input id="monPsdTarget" class="w-num" type="number" min="1" value="30" /></label>
+          </div>
+          <p class="hint">구간 N이 패킷 샘플 수보다 크면 패킷 전체를 한 구간으로 씁니다. 저장 CSV와 수신 HEX는 그대로입니다.</p>
+        </fieldset>
         <p id="formula" class="formula"></p>
       </details>
       <div id="fftCheckBox" class="fft-check" hidden>
@@ -376,10 +397,24 @@
             <div class="plot"><canvas id="raw"></canvas></div>
           </div>
           <div class="chart-card">
-            <h2>FFT</h2>
+            <h2 id="fftCardTitle">FFT</h2>
             <div class="plot"><canvas id="fft"></canvas></div>
           </div>
         </div>
+        <!-- PSD 결과(PSD ON일 때만): 판정, 경고(V061), 연산 단계 ①~⑥(V059). monitor-draw.js의 showPsd가 채운다. -->
+        <section id="monPsdResult" class="psd-result" hidden>
+          <div class="psd-summary">
+            <strong class="psd-title">PSD 결과</strong>
+            <span id="monPsdSrss" class="info-chip">XYZ 합성 SRSS: 분석 대기</span>
+            <span id="monPsdLimit" class="info-chip">한계값: -</span>
+            <span id="monPsdJudge" class="psd-judge">판정: 분석 대기</span>
+          </div>
+          <p id="monPsdWarning" class="psd-warning" hidden></p>
+          <details class="psd-steps-fold">
+            <summary>PSD 연산 단계 · 현재 설정과 계산 결과</summary>
+            <pre id="monPsdSteps"></pre>
+          </details>
+        </section>
       </section>
 
       <section class="card">
@@ -399,11 +434,11 @@
     <script src="/static/hammer.min.js"></script>
     <script src="/static/chartjs-plugin-zoom.min.js"></script>
     <script src="/static/api.js?v=1"></script>
-    <script src="/static/graph.js?v=13"></script>
+    <script src="/static/graph.js?v=18"></script>
     <script src="/static/filters.js?v=1"></script>
-    <script src="/static/monitor-draw.js?v=4"></script>
-    <script src="/static/monitor-api.js?v=8"></script>
-    <script src="/static/monitor.js?v=21"></script>
+    <script src="/static/monitor-draw.js?v=8"></script>
+    <script src="/static/monitor-api.js?v=9"></script>
+    <script src="/static/monitor.js?v=22"></script>
     <script src="/static/monitor-db.js?v=4"></script>
     <script src="/static/theme.js?v=4"></script>
   </body>

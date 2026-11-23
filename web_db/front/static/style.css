@@ -817,3 +817,25 @@ html[data-theme="gray"] .card-legend .legend-item { color: #2c3338; background: 
 input:disabled, select:disabled { background: #eef2f6; color: #5d6e80; cursor: not-allowed; }
 button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
+
+/* 분석 화면 아래 초록 패킷 정보 줄: 시각까지 한 줄로(2026-11-23). 넘치면 줄바꿈 대신 가로로 밀어 본다. */
+body.layout-pin .packet-info { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; }
+body.layout-pin .packet-info .info-chip { flex: 0 0 auto; white-space: nowrap; }
+
+/* 속도 RMS 시간 이력 창의 축별 허용치 줄(발생기 v073, velocity-history.js) */
+.history-axis-limits {
+  display: flex; flex-wrap: wrap; align-items: end; gap: 6px 10px; margin: 0;
+  padding: 6px 10px 8px; border: 1px solid #d5dee8; border-radius: 6px;
+}
+.history-axis-limits legend { font-size: 12px; font-weight: 700; color: #365a78; padding: 0 4px; }
+.history-axis-limits label { display: grid; gap: 2px; font-size: 12px; }
+.history-axis-limits label.check { display: inline-flex; align-items: center; gap: 4px; margin-right: 8px; }
+.history-axis-limits .hint { align-self: center; }
+
+/* 수신 모니터 실시간 PSD(수신기 V063): 설정 칸과 그래프 아래 결과의 경고 줄 */
+.psd-live { margin-top: 8px; }
+.psd-warning {
+  margin: 6px 0 0; white-space: pre-line; font-size: 12px; font-weight: 700;
+  background: #fff4df; color: #7d3600; border: 1px solid #e4ad58; border-radius: 5px; padding: 6px 8px;
+}
+

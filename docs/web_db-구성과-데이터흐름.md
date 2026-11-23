@@ -12,7 +12,7 @@
 
 | 위치 | 역할 |
 | --- | --- |
-| `web_db/src/server.py` | FastAPI 앱. 정적 파일과 라우트를 붙이고 하루 통계 스레드를 켠다 |
+| `web_db/src/server.py` | FastAPI 앱. 정적 파일과 라우트를 붙이고 매시간 통계 스레드를 켠다 |
 | `web_db/src/routes` | 주소별 HTTP. `pages`, `monitor`, `generator`, `analysis`, `db`, `site` |
 | `web_db/src/monitor_service.py` | MQTT 수신, 최신 파형, CSV와 SQLite로 넘김 |
 | `web_db/src/save_csv.py` | 연결 동안 `data_csv_web/YYYYMMDD_HHMMSS`에 HEX·decoded CSV |
@@ -22,10 +22,11 @@
 | `web_db/src/store_site.py` | 앱 설정(`app_setting`), 평면도(`floor_plan`, 이미지는 `site_files/`), 센서 위치(`sensor_placement`), 대문 상태용 원자료 |
 | `web_db/src/site_status.py` | 대문의 센서 연결·알람 판정. 임시 기준값 상수가 맨 위에 있다 |
 | `web_db/src/paths.py` | 코드·데이터 경로. 수신 CSV는 어디서나 `data_csv_web`. 환경변수 `SENSOR_DATA_DIR`가 있으면 DB·평면도·MEMS JSON을 그 폴더에, CSV를 그 아래 `data_csv_web`에 둔다(Docker: `/data` = `./sensor_web_db`, `/data/data_csv_web` = `./data_csv_web`). 배포는 `docs/웹-기능상세.md` "실행" |
-| `web_db/src/csv_stats.py` | data_csv_web의 CSV로 일자별 통계(measurement) 다시 만들기. 설정 '통계 데이터' 탭 |
+| `web_db/src/csv_stats.py` | data_csv_web의 CSV로 시간별 통계(measurement) 다시 만들기. 설정 '통계 데이터' 탭 |
+| `web_db/src/stat_profile.py` | 통계 계산 기준(버전) 검사·기본값, 세트 하나 통계(`set_stats`), 한 시간 묶음·합치기 |
+| `web_db/src/stats_job.py` | 통계 재계산 백그라운드 작업(기준 저장·재계산 버튼·업그레이드 직후) |
 | `web_db/src/import_csv.py` | CSV 폴더를 SQLite `packet`에 다시 채우기(명령줄 전용). 아래 "CSV 폴더로 DB 채우기" |
 | `web_db/src/grouping.py` | ADXL seq로 X/Y/Z를 한 세트에 묶음 |
-| `web_db/src/stats_calc.py` | 완성된 XYZ 한 세트의 RMS, PEAK, SRSS |
 | `web_db/src/decode.py` | 패킷 분류와 sensorData HEX 디코드 |
 | `web_db/src/signal.py` | 필터, FFT(Window 보정), Welch PSD, SRSS 전력 |
 | `web_db/src/mems.py` | g/LSB, 주파수·감도 보정 JSON |
@@ -69,7 +70,8 @@
 | `generator.js` | 분석 화면 버튼을 위 함수에 연결. 전송 중일 때만 1초마다 송신 숫자와 로그를 갱신한다. 그 밖에는 버튼 동작 뒤에 한 번 읽는다 |
 | `studio.js` | DB 분석 서랍과 센서 탭. 계산 API는 `generator-*.js`를 그대로 쓴다 |
 | `db.js` | `/api/db/devices`, `/api/db/stats`, `/api/db/load`. 연 패킷은 `draw`로 넘긴다 |
-| `settings.js` | 설정 탭, 장치 이름과 SRSS 한계 저장, CSV 일자별 통계. `/api/db/device-name`, `/api/db/csv-stats` |
+| `settings.js` | 설정 탭, 장치 이름과 SRSS 한계 저장, CSV 시간별 통계. `/api/db/device-name`, `/api/db/csv-stats` |
+| `stat-profile.js` | 설정 > 통계 데이터의 '통계 계산 기준'(버전 저장·재계산·JSON 내보내기/가져오기). `/api/db/stat-profile`, `/api/db/stat-rebuild` |
 | `site.js` | 대문. 평면도 탭(여러 장, 탭마다 문제 수 배지), 아이콘 그리기, 정보 카드, 배치 편집(평면도 추가·교체·이름·순서·삭제, 끌어 놓기·이동·빼기·저장), 15초 상태 갱신 |
 
 수신 화면의 흐름은 `monitor.js` 버튼 → `monitor-api.js` → 서버 → `monitor-draw.js`다. 분석 화면은 `generator.js` 또는 `db.js` → `generator-api.js` → 서버 → `generator-draw.js`다. 통계와 설정 화면은 각자 `dashboard.html`, `settings.js` 안에서 같은 방식으로 서버 JSON만 읽고 쓴다.
@@ -84,7 +86,7 @@
    - `MonitorService(store)`는 CSV 기록 스레드를 켠다. MQTT에는 아직 붙지 않는다.
    - `ReplayService()`는 빈 재전송 목록으로 시작한다.
 2. FastAPI 앱에 `/static`과 라우터 다섯 개(`pages`, `generator`, `monitor`, `analysis`, `db`)를 붙인다.
-3. `start_daily_stats()`가 하루 통계 스레드를 켠다. 이미 살아 있으면 새로 만들지 않는다.
+3. `start_daily_stats()`가 매시간 통계 스레드를 켠다. 이미 살아 있으면 새로 만들지 않는다. 통계 기준 버전이 없으면 첫 버전을 만들고, 지금 버전이 없으면(하루 통계에서 업그레이드한 직후) 그 버전으로 재계산을 백그라운드로 시작한다.
 
 4. 수신 모니터에서 마지막으로 '연결'한 뒤 '연결 해제'를 하지 않았으면 `monitor.auto_connect()`가 기억한 주소·Topic·CSV 체크로 백그라운드 연결을 시작한다. 브로커가 꺼져 있어도 서버는 뜨고, paho가 1~30초 간격으로 다시 붙기를 시도한다.
 
@@ -99,7 +101,8 @@
 | uvicorn 요청 스레드 | HTTP 요청. `def` 라우트는 스레드 풀에서 돈다 | 요청에 따라 아래 잠금 |
 | 수신 paho 루프 (`loop_start`) | `_on_message` → 디코드 → CSV 큐 → `save_packet` | `MonitorService.lock` 안에서 `Store.lock` |
 | CSV 기록 (`CsvWriter._loop`) | 큐에서 꺼내 파일에 쓰고 flush | 큐만 쓴다 |
-| `daily-stats` | 10분마다 날짜를 보고 하루 한 번 최신화 | `Store.stats_lock`, `Store.lock` |
+| `hourly-stats` | 1분마다 시각을 보고 매시간 한 번 최신화 | `Store.stats_lock`, `Store.lock`(짧게) |
+| `stat-rebuild` | 통계 기준 버전으로 packet 전체 재계산(필요할 때만) | `Store.stats_lock`, `Store.lock`(짧게) |
 | 재전송 센서별 스레드 (`ReplayService._worker`) | 고른 패킷을 주기마다 publish | `ReplayService.lock` (카운터만) |
 | 재전송 paho 루프 | PUBACK을 받아 확인 수를 올린다 | `ReplayService.lock` |
 
@@ -135,8 +138,10 @@
 | `GET /api/analysis/defaults`, `GET·POST /srss-limit`, `POST /mems-scale`, `/mems-correction` | 그래프 기본값, SRSS 한계, 1 LSB, MEMS 보정 저장 |
 | `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON. 분석 화면 MAC 선택 상자는 `MAC · 이름`만 보이고 패킷 수는 보이지 않는다. 패킷 수는 설정 화면이 이름 삭제 때 목록에서 뺄지 정하는 데 쓴다 |
 | `POST /api/db/load` | DB 패킷을 골라 재전송 목록에 올리고 첫 미리보기를 준다 |
-| `GET /api/db/dashboard` | 저장된 통계 읽기(계산은 하루 스케줄러만 한다. 최신화 API는 없앴다) |
-| `GET·POST /api/db/csv-stats` | CSV 일자별 통계 작업 상태·찾은 CSV 묶음 수 / 백그라운드 시작(이미 돌면 409) |
+| `GET /api/db/dashboard` | 저장된 통계 읽기(지금 기준 버전 줄만, 계산 기준 요약 포함. 최신화 API는 없앴다) |
+| `GET·POST /api/db/stat-profile` | 통계 기준 버전 목록·기본값·그래프 설정 파일 값·재계산 진행 / 새 버전 저장 + 재계산 시작(돌고 있으면 409) |
+| `POST /api/db/stat-rebuild` | 지금 버전으로 재계산 시작(돌고 있으면 409) |
+| `GET·POST /api/db/csv-stats` | CSV 시간별 통계 작업 상태·찾은 CSV 묶음 수 / 백그라운드 시작(이미 돌면 409) |
 | `POST·DELETE /api/db/device-name` | 표시 이름 저장·삭제 |
 
 ## 수신해서 저장하기
@@ -238,7 +243,7 @@ PIEZO와 MEMS 그래프 옵션에 `Window 보정`이 있다. 세 화면(수신 �
 - 표시 FFT, FFT 평균, gN에 같은 모드를 적용한다.
 - SRSS는 원래 에너지 보정 값이라 `진폭 보정`, `에너지 보정`에서는 같다. `보정 없음`일 때만 `√mean(w²)`를 곱한다(`srss_window_ratio`). SRSS 문구 끝에 `SRSS 에너지 보정` 또는 `SRSS 보정 없음`이 붙는다.
 - 보정계수 문구(`window_factor`)는 서버가 만들어 선택 상자 옆에 보여 준다. 축마다 N이 같으면 한 번만 보인다.
-- 통계(`stats_calc`)는 인자를 넘기지 않으므로 늘 기본(진폭 보정 FFT, 에너지 보정 SRSS)이다. 화면 선택은 통계 값에 영향이 없다.
+- 통계는 FFT가 아니라 Welch PSD 적분이라 Window 보정 모드와 관계없다(2026-11-23부터 `stat_profile`). 화면 선택은 통계 값에 영향이 없다.
 - 계산식은 데스크톱 v070의 `window_correction_ratio`, `window_correction_label`, `srss_window_ratio`와 같다. 세 모드와 창 네 종류로 결과가 같은 것을 확인했다.
 
 ### PSD (Welch, 발생기 v070)
@@ -251,7 +256,7 @@ PIEZO와 MEMS 그래프 옵션에 `Window 보정`이 있다. 세 화면(수신 �
 | Overlap (%) | 구간 겹침. 이동 = N − int(N × overlap / 100) |
 | PSD 평균 목표 구간 | 축마다 평균할 구간 수. 채우면 더 읽지 않는다 |
 
-- 패킷 범위: PSD일 때 FFT 평균은 하지 않는다. `FFT 평균 적용`과 평균 개수는 PSD에 넣을 패킷 범위로만 쓰고, 꺼져 있으면 선택 패킷 하나다.
+- 패킷 범위: PSD일 때 FFT 평균은 하지 않는다. `FFT 평균 (Linear Averaging)`과 평균 개수는 PSD에 넣을 패킷 범위로만 쓰고, 꺼져 있으면 선택 패킷 하나다.
 - 축마다 ① 평균 제거와 FFT용 필터 → ② Welch(Count²/Hz) → ③ 단위 배율의 제곱(PIEZO K 또는 K/감도, ADXL g/LSB) → ④ ADXL 감도 S(f)와 주파수 보정. 주파수축을 f/나눗수로 줄이면 밀도에 나눗수를 곱한다 → ⑤ mm/s면 × (9806.65/2πf)² → ⑥ RMS = √(ΣP·Δf).
 - 단위: Count, mV, g(g RMS·g Peak·자동), mm/s 중 하나의 제곱/Hz. PSD는 창 에너지로 나누므로 Window 보정 모드와 무관하다.
 - ADXL은 gN 자리에 X+Y+Z 합성 PSD를 그리고, 합성 SRSS = √(Σ(Px+Py+Pz)·Δf)를 그래프 위 `PSD 결과` 칸에 숫자로 보여 준다. 밀도 단위가 아니라서 가로선으로 그리지 않는다. mm/s일 때만 장치 SRSS 한계와 비교해 정상·초과를 표시한다.
@@ -281,20 +286,20 @@ PIEZO와 MEMS 그래프 옵션에 `Window 보정`이 있다. 세 화면(수신 �
 
 LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같음). 켜져 있으면 차단 주파수가 Nyquist라서 LPF를 실제로 걸지 않는다(`lp_cutoff=None`). 직접 차단 주파수를 쓰려면 체크를 끈다. 계산식 줄의 필터 목록에는 `LPF(자동 Fs/2→우회)`로 나온다.
 
-## CSV 일자별 통계
+## CSV 시간별 통계
 
 설정 '통계 데이터' 탭의 버튼(`POST /api/db/csv-stats`) → `csv_stats.CsvStatsJob`. 운영 서버처럼 DB 없이 CSV만 있는 곳에서 통계를 채운다.
 
 1. `data_csv_web` 아래(하위 폴더 포함) `{MAC}_ADXL-X/Y/Z_sensorData_hex.csv` 세 파일 묶음을 모두 찾는다. 다른 곳의 CSV 폴더도 `data_csv_web` 안에 넣으면 같이 읽는다.
 2. 묶음마다 CSV 분석 화면과 같은 `load_adxl_csv_xyz`로 X/Y/Z 세트를 묶는다(packet_no → seq). 깨진 HEX는 복구하지 않고 그 세트를 뺀다.
-3. 세트마다 수신과 같은 디코드, 하루 통계와 같은 `adxl_set_stats`로 RMS·PEAK·SRSS를 낸다. 같은 데이터면 DB 통계와 값이 같다(2026-11-06 자료 7개 MAC 379세트에서 세트 수·SRSS 평균 일치 확인).
+3. 세트마다 매시간 통계와 같은 `stat_profile.set_stats`로 계산한다. 기준은 DB의 가장 최근 통계 기준 버전이다. 같은 데이터면 DB 통계와 값이 같다.
 4. 같은 세트(MAC + 세 축 수신 시각)가 여러 폴더에 있으면 한 번만 센다.
-5. 세트 날짜(세 축 중 마지막 수신 시각의 날짜)별로 MAC·날짜마다 `measurement` 한 줄(`set_key = CSV|MAC|날짜`).
+5. 세트 시(세 축 중 마지막 수신 시각의 시)별로 MAC·시간마다 `measurement` 한 줄(`set_key = CSV|버전|MAC|시`).
 6. 한 commit으로 `measurement`를 전부 지우고 이 줄들로 바꾼다. 세트를 하나도 못 찾으면 아무것도 지우지 않는다.
-7. `stat_cursor`를 시작 순간의 MAC별 마지막 packet id로 옮긴다. 그 패킷은 CSV에도 있으므로 하루 스케줄러가 다시 세지 않고, 그 뒤 수신분만 더한다.
+7. `stat_cursor`를 시작 순간의 MAC별 마지막 packet id로 옮긴다. 그 패킷은 CSV에도 있으므로 매시간 스케줄러가 다시 세지 않고, 그 뒤 수신분만 더한다. 그 기준 버전이 지금 버전이 된다.
 8. `device`에 없는 MAC은 등록한다(통계 화면 목록이 device 기준). 마지막 수신이 비어 있으면 CSV 마지막 시각을 넣는다.
 
-전제: CSV가 원본 전체다. CSV 저장을 꺼 둔 기간은 통계에서 빠진다(`docs/packet-보관-정리-예정.md`의 CSV 상시 저장과 같은 이유). `Store.stats_lock`을 처음부터 끝까지 잡으므로 하루 스케줄러와 겹치지 않는다. 로컬 `data_csv_web`(43묶음, 531세트)는 약 2초.
+전제: CSV가 원본 전체다. CSV 저장을 꺼 둔 기간은 통계에서 빠진다(`docs/packet-보관-정리-예정.md`의 CSV 상시 저장과 같은 이유). `Store.stats_lock`을 처음부터 끝까지 잡으므로 매시간 스케줄러·재계산과 겹치지 않는다. 로컬 `data_csv_web`(74묶음, 1279세트)는 약 8초(2026-11-23).
 
 ## CSV 폴더로 DB 채우기
 
@@ -332,21 +337,25 @@ python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 
 
 ## 통계
 
-통계는 패킷이 도착할 때 만들지 않는다. 서버가 켜진 동안 날짜가 바뀌면 하루 한 번(자정 뒤 10분 안) `update_statistics`가 돈다. 하루 확인 스레드는 `routes/db.start_daily_stats`가 프로세스에 하나만 켠다. 화면의 최신화 버튼은 없앴다(2026-11-18, 모두 같은 계산 시각을 보게). 명령줄 `import_csv`도 끝에 한 번 돌리며, 겹쳐도 `Store.stats_lock` 때문에 차례로 돈다.
+통계는 패킷이 도착할 때 만들지 않는다(수신 저장을 늦추지 않게). 2026-11-23부터 **매시간** 한 번 `update_statistics`가 돈다(정각 뒤 1분 안, `hourly-stats` 스레드). 화면의 최신화 버튼은 없다(2026-11-18, 모두 같은 계산 시각을 보게). 명령줄 `import_csv`도 끝에 한 번 돌린다. 겹쳐도 `Store.stats_lock` 때문에 차례로 돈다.
+
+통계는 MAC마다 한 시간 한 줄이고, 계산 기준은 DB `stat_profile` 버전이다(설정 > 통계 데이터 > '통계 계산 기준'). 자세한 열과 기준은 `docs/web_db-DB명세서.md` "measurement".
 
 최신화 한 번은 MAC마다 다음 순서로 돈다. 패킷 수신은 그동안에도 계속된다.
 
-1. `Store.lock` 안에서 읽기 위치(`stat_cursor`와 `measurement.through_id` 중 큰 값)를 보고, 그보다 id가 큰 ADXL 패킷을 읽는다. 이 순간까지 저장된 패킷이 이번 대상이다.
-2. 잠금을 풀고 `complete_sets`로 seq를 보며 X/Y/Z를 다시 묶는다. 세트마다 `adxl_set_stats`가 RMS, PEAK, SRSS를 계산한다. 이 사이에 도착한 패킷은 1에서 읽지 않았으므로 다음 최신화 대상이다.
+1. `Store.lock` 안에서 읽기 위치(`stat_cursor`) 뒤의 ADXL 줄을 300줄 읽는다(HEX만, `decoded_samples`는 안 읽음).
+2. 잠금을 풀고 `complete_sets`로 seq를 보며 X/Y/Z를 다시 묶는다. 세트마다 `stat_profile.set_stats`(필터 → Welch PSD → 보정 → 속도 RMS)를 계산하고, 세트 시각의 '시'로 모은다.
 3. `settled_through`로 이번에 다 본 마지막 id를 정한다. 계산에 실패한 세트와 축이 빠진 묶음도 다 본 것이다. 맨 끝 묶음에 Z가 아직 없으면 그 묶음 앞까지만 본 것으로 한다.
-4. 다시 `Store.lock` 안에서, 계산된 세트가 있으면 `measurement`에 구간 한 줄을 넣고 `stat_cursor`를 3의 위치로 옮긴다. 둘은 같은 commit이다.
-5. 모든 MAC이 끝나면 `stat_meta` 시각을 갱신한다. 응답은 줄을 넣은 MAC 수(`macs`)와 계산에 실패한 세트 수(`failed_sets`)다.
+4. 다시 `Store.lock` 안에서, 시간 줄이 이미 있으면 세트 수로 가중해 합치고 없으면 넣는다. `stat_cursor`도 같은 commit으로 옮긴다.
+5. 10ms 쉬고 300줄이 더 있으면 1로. 모든 MAC이 끝나면 `stat_meta` 시각을 갱신한다.
 
-정리하면, MAC마다 아직 통계에 넣지 않은 `packet`만 읽는다. 완성된 X/Y/Z 세트의 RMS 평균, PEAK 최댓값, SRSS 평균을 `measurement`에 구간 한 줄로 추가한다. 이전 구간은 남긴다. 축이 비거나 샘플 수·속도가 다른 세트는 그 구간에서 빠지고, 끝이 덜 온 세트는 다음 최신화까지 둔다. 빠진 세트도 읽은 위치는 `stat_cursor`에 남겨, 다음에 다시 읽지 않는다. 샘플링 속도는 packet의 원본 값을 그래프와 같은 규칙으로 Hz로 읽는다.
+잠금을 잡는 것은 1과 4의 순간뿐이다. 427세트 전체 재계산(1.6초) 동안 수신 쪽이 잠금을 기다린 시간은 중앙값 0.01ms, 최대 36ms였다(2026-11-23).
+
+재계산(`rebuild_statistics`)은 같은 순서를 위치 0부터 돌고, 새 버전 줄은 끝날 때까지 화면에 안 보인다. 끝나면 한 commit에서 지금 버전을 바꾸고, 다른 버전 줄을 지우고, 읽기 위치를 맞춘다.
 
 `set_no`는 수신할 때 `assign_set`이 붙이고, 그 뒤로 바꾸지 않는다. 통계는 `set_no`를 믿지 않고 seq로 다시 묶으므로, 번호가 어긋나 있어도 통계 결과는 같다. `set_no`는 분석 화면이 세트 단위로 고를 때만 쓴다.
 
-통계 화면의 막대와 RMS 숫자는 구간 줄을 세트 수로 가중한 전체 평균이다. PEAK 숫자는 최댓값이다. 작은 그래프는 최근 구간 최대 40개의 변화다.
+통계 화면의 막대와 RMS 숫자는 시간 줄을 세트 수로 가중한 전체 평균이다. PEAK 숫자는 최댓값이다. 작은 그래프는 최근 시간 줄 최대 168개(7일)의 변화다. 센서 현황 경보는 가장 늦은 시간 줄의 SRSS(mm/s)다.
 
 ## 값을 자르는 곳
 
@@ -355,10 +364,10 @@ python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 
 | 위치 | 무엇을 자르나 | 계산에 영향 |
 | --- | --- | --- |
 | `view_pack._envelope_index` | 점이 16384개를 넘을 때만, 구간마다 최소·최대 점을 남긴다 | 없다. RMS, FFT, SRSS를 만든 다음의 전송용 배열이다 |
-| `view_pack._rounded` | 화면 숫자를 소수 6자리로 반올림한다 | 없다. 같은 이유다 |
+| `view_pack._rounded`, `_rounded_x` | 화면 Y는 소수 6자리와 유효숫자 7자리 중 자세한 쪽, X는 유효숫자 12자리(2026-11-23) | 없다. 같은 이유다 |
 | `signal.fft_peak`의 `x[offset:offset+n]` | Window N이 `전체`가 아닐 때만 가운데 n개로 FFT한다 | 있다. 사용자가 1024처럼 짧은 창을 고른 그래프 FFT만 해당한다. 기본값 `전체`는 패킷 샘플을 그대로 쓴다 |
 | `spectrum[:n//2+1]` | 단측 스펙트럼의 0 Hz부터 나이퀴스트까지 | 샘플을 버리는 것이 아니다. 음수 주파수는 양수 쪽과 짝이라 단측에서 접는다 |
-| `stats_calc.adxl_set_stats` | 자르지 않는다 | `fft_peak`를 창 길이 없이 호출하므로 저장된 샘플 전체로 RMS, PEAK, SRSS를 만든다 |
+| `stat_profile.set_stats` | 자르지 않는다 | 저장된 샘플 전체로 Welch PSD(기준의 구간 N)를 만든다 |
 | `store_query`의 조회 개수 1~200 | 분석 화면에 올릴 세트 수 | 한 패킷 안의 샘플 수는 줄이지 않는다 |
 | `load_file.recover_adxl_hex_prefix` | 깨진 HEX의 앞쪽 완전한 16비트 단어만 남긴다 | 원본 CSV 파일은 고치지 않는다. 복구본은 미리보기용이고, 잘린 패킷은 재전송에서 뺀다 |
 | `graph_curves._decimate_xy` | FFT 왕복 검사 그림만 160점 안쪽으로 줄인다 | 합격 판정은 줄이기 전의 전체 샘플로 한다 |

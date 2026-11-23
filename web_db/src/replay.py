@@ -11,7 +11,7 @@ from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
-from web_db.src import analysis
+from web_db.src import analysis, analysis_export
 from web_db.src import core as gen
 from web_db.src.mqtt_util import mqtt_client
 from web_db.src.view_pack import _pack_curves
@@ -126,7 +126,7 @@ class ReplayService:
             packets = data
         curves = analysis.generator_curves(sensor, packet, packets, index, self.view_options)
         packed = _pack_curves(curves)
-        packed.update({"sensor": sensor, "index": index + 1, "count": len(data)})
+        packed.update({"sensor": sensor, "index": index + 1, "count": len(data), "time": _packet_time(packet)})
         return packed
 
     def velocity_history(self, start=None, count=None, options=None):
@@ -150,6 +150,28 @@ class ReplayService:
         self.log(
             f"[RMS 시간 이력] {result['start']}번부터 {result['count']}세트 분석, "
             f"성공 {len(result['rows'])}세트 / 제외 {len(result['skipped'])}세트"
+        )
+        return result
+
+    def velocity_export(self, target, start=None, count=None, options=None):
+        """불러온 ADXL 세트의 분석 데이터를 target에 ZIP으로 쓴다(발생기 v073 '분석 데이터 저장', analysis_export).
+
+        인자는 velocity_history와 같다. 템플릿 목록만 복사해 잠금을 풀고 계산한다.
+        """
+        with self.lock:
+            packets = list(self.templates.get("ADXL") or [])
+            current = self.index.get("ADXL", 0)
+            if options is not None:
+                self.view_options = options
+            view = self.view_options
+        if not packets:
+            raise ValueError("ADXL X/Y/Z 데이터를 먼저 불러와 주세요.")
+        if start in (None, ""):
+            start = current + 1
+        result = analysis_export.write_zip(target, packets, analysis.resolve_options(view), start=start, count=count)
+        self.log(
+            f"[분석 데이터 저장] {result['start']}~{result['end']}세트, "
+            f"저장 {result['good']}세트 / 제외 {len(result['skipped'])}세트"
         )
         return result
 
@@ -370,3 +392,23 @@ class ReplayService:
             "index": {name: value + 1 for name, value in self.index.items()},
             "logs": list(self.logs),
         }
+
+
+def _packet_time(packet):
+    """패킷(또는 ADXL X/Y/Z 세트)의 수신 시각 문자열. 없으면 ''.
+
+    DB(grouping.packet_to_template)와 CSV(load_file) 모두 '_received_at' 메타에 시각을 둔다.
+    ADXL 세트는 X → Y → Z 순서로 처음 있는 축의 시각(세트 시작 시각)을 쓴다.
+    화면에는 초까지만 보이도록 밀리초와 'T'를 정리한다(예: 2026-11-18 09:41:49).
+    """
+    if not isinstance(packet, dict):
+        return ""
+    when = packet.get("_received_at")
+    if not when:
+        for axis in ("X", "Y", "Z"):
+            item = packet.get(axis)
+            if isinstance(item, dict) and item.get("_received_at"):
+                when = item["_received_at"]
+                break
+    text = str(when or "").strip().replace("T", " ")
+    return text.split(".")[0]

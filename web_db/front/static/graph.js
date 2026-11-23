@@ -69,13 +69,53 @@ const GraphView = (() => {
     },
   };
 
-  /** 커서 값 글자. 아주 크거나 작으면 지수, 아니면 유효숫자 6자리. */
-  function fmt(value) {
+  /**
+   * 툴팁 숫자(RAW·FFT 공통). Chart.js 기본은 소수점 3자리까지라 4자리로 늘린다(2026-11-23 요청).
+   * 0이 아닌 아주 작은 값(< 0.0001, 예: PSD 밀도)과 아주 큰 값(≥ 1e6)은 0·자릿수 넘침 대신 지수로 보인다.
+   */
+  function tipNumber(value) {
     if (!Number.isFinite(value)) return "-";
     const size = Math.abs(value);
-    if (size !== 0 && (size >= 1e5 || size < 1e-3)) return value.toExponential(4);
-    return String(Number(value.toPrecision(6)));
+    if (size !== 0 && (size >= 1e6 || size < 1e-4)) return value.toExponential(4);
+    return value.toLocaleString("en-US", { maximumFractionDigits: 4 });
   }
+
+  /**
+   * 고정 커서 Y값(2026-11-23 요청): 소수점 4자리를 늘 보인다(끝의 0도 남김, 예: 0.0120 g RMS / bin). X는 xNumber.
+   * 0이 아니면서 0.0001보다 작거나 1e6 이상이면 tipNumber처럼 지수다.
+   */
+  function pinX(value) {
+    if (!Number.isFinite(value)) return "-";
+    const size = Math.abs(value);
+    if (size !== 0 && (size >= 1e6 || size < 1e-4)) return value.toExponential(4);
+    return value.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
+  }
+
+  /**
+   * X값(시간 ms·주파수 kHz/Hz) 글자: 반올림하지 않고 실제 값을 끝자리까지 보인다(2026-11-23).
+   * X 간격이 4자리보다 촘촘하다(MEMS FFT 0.000390625 kHz, PIEZO RAW 0.0390625 ms).
+   * 4자리로 자르면 0.012890625가 0.0129로 보여 이웃 점과 구분되지 않는다.
+   * 최소 4자리(1000.0000)는 남기고, 부동소수 꼬리(0.012890625000000001)는 유효숫자 12자리에서 지운다.
+   */
+  function xNumber(value) {
+    if (!Number.isFinite(value)) return "-";
+    const size = Math.abs(value);
+    if (size !== 0 && (size >= 1e9 || size < 1e-6)) return value.toExponential(6);
+    const clean = Number(value.toPrecision(12));
+    return clean.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 10 });
+  }
+
+  /** 툴팁 글자: 제목 = X값(xNumber, 끝자리까지), 줄 = '선 이름: Y값'(tipNumber, 소수점 4자리). */
+  const tipCallbacks = {
+    title(items) {
+      return items.length ? xNumber(Number(items[0].parsed.x)) : "";
+    },
+    label(item) {
+      const name = String(item.dataset.label || "");
+      const value = tipNumber(Number(item.parsed.y));
+      return name ? `${name}: ${value}` : value;
+    },
+  };
 
   /** 축 제목 글자(단위 포함). 없으면 빈 칸. */
   function axisName(plot, axis) {
@@ -173,20 +213,30 @@ const GraphView = (() => {
       // 값 상자: 그래프 안 오른쪽 위에 둔다(점 위치와 상관없이 늘 같은 자리라 읽기 쉽다).
       const xName = axisName(plot, "x");
       const yName = axisName(plot, "y");
-      // X 눈금을 따로 쓰는 그래프(속도 RMS 시간 이력: 시각)는 눈금과 같은 글자로 보인다.
+      // X가 시각인 그래프(속도 RMS 시간 이력)만 눈금과 같은 시각 글자로 보인다. 그 그래프가 plot.$pinTickText = true를 단다.
+      // (2026-11-23 수정) 예전에는 ticks.callback이 함수면 눈금 글자를 썼는데, Chart.js가 모든 숫자 축에 기본 눈금 함수를
+      // 넣어 두어 RAW·FFT도 눈금처럼 반올림됐다(2559.9609375 ms → '2,559', 1.063672 kHz → '1').
       const tickText = plot.options.scales.x.ticks && plot.options.scales.x.ticks.callback;
-      let xText = fmt(value.x);
-      if (typeof tickText === "function") {
+      let xText = xNumber(value.x);
+      if (plot.$pinTickText && typeof tickText === "function") {
         try {
           xText = String(tickText.call(plot.scales.x, value.x, 0, [{ value: value.x }]));
         } catch (error) {
-          xText = fmt(value.x);
+          xText = xNumber(value.x);
         }
       }
+      // 축 이름('주파수 (kHz)', 'Time (ms)')은 빼고 괄호 안 단위만 붙인다(상자를 좁게, 2026-11-23).
+      // 괄호로 끝나지 않는 이름('(g)²/Hz', 'g RMS / bin')은 그 자체가 단위라 그대로 둔다.
+      const unitOf = (name) => {
+        const found = /\(([^()]*)\)\s*$/.exec(name);
+        return found ? found[1] : name;
+      };
+      const xUnit = unitOf(xName);
+      const yUnit = unitOf(yName);
       const lines = [
         `고정 ${pin.label}`,
-        `X = ${xText}${xName ? ` (${xName})` : ""}`,
-        `Y = ${fmt(value.y)}${yName ? ` (${yName})` : ""}`,
+        `X = ${xText}${xUnit ? ` ${xUnit}` : ""}`,
+        `Y = ${pinX(value.y)}${yUnit ? ` ${yUnit}` : ""}`,
       ];
       ctx.font = `12px ${font}`;
       const width = Math.max(...lines.map((line) => ctx.measureText(line).width)) + 14;
@@ -284,7 +334,7 @@ const GraphView = (() => {
             position: "top",
             labels: { boxWidth: 12, color: "#1c2833", font: { size: 12, family: font } },
           },
-          tooltip: { enabled: true },
+          tooltip: { enabled: true, callbacks: tipCallbacks },
           zoom: {
             zoom: { wheel: { enabled: false }, pinch: { enabled: true }, mode: "xy" },
             pan: { enabled: false },

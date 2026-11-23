@@ -1,10 +1,25 @@
-"""조회와 통계 최신화. 수신 콜백에서는 통계를 계산하지 않는다."""
+"""조회와 통계 최신화. 수신 콜백에서는 통계를 계산하지 않는다.
+
+통계(measurement)는 2026-11-23부터 'MAC마다 한 시간 한 줄'이고, 계산 기준은 DB stat_profile 버전이다.
+- 조회(stats, dashboard, store_site.site_rows)는 지금 버전(app_setting 'stat_profile_active') 줄만 본다.
+  지금 버전이 아직 없으면(업그레이드 직후, 재계산 전) 옛 하루 통계 줄(profile_id 없음)을 본다.
+- 최신화(update_statistics)는 매시간 스케줄러가, 재계산(rebuild_statistics)은 기준 저장·관리 버튼이 부른다.
+  둘 다 SQLite를 오래 잡지 않는다: 300줄씩 짧게 읽고(self.lock), 잠금 없이 계산하고, 짧게 쓴다.
+  계산은 세트당 약 5ms라 수신 저장이 기다리는 시간은 읽기·쓰기 순간뿐이다.
+"""
 
 from __future__ import annotations
 
+import json
+import time
+
+from web_db.src import stat_profile as sp
 from web_db.src.db_util import _iso
-from web_db.src.grouping import complete_sets, settled_through
-from web_db.src.stats_calc import adxl_set_stats, summarize_mac
+from web_db.src.grouping import complete_sets, packet_to_template, settled_through
+
+# 한 번에 읽는 packet 줄 수(ADXL 약 100세트, HEX 포함 약 10MB). 이만큼 계산하고 쓴 뒤 다음을 읽는다.
+STAT_CHUNK = 300
+ACTIVE_KEY = "stat_profile_active"
 
 
 class QueryMixin:
@@ -40,8 +55,62 @@ class QueryMixin:
             item["limit"] = self.get_srss_limit(item["mac"])
         return items
 
+    # ---------- 통계 계산 기준(stat_profile) ----------
+    def _active_profile_id(self):
+        """lock을 가진 상태에서 지금 화면·경보가 보는 기준 버전 id. 없으면 0(옛 하루 통계)."""
+        row = self._conn.execute("SELECT value FROM app_setting WHERE key=?", (ACTIVE_KEY,)).fetchone()
+        try:
+            return int(json.loads(row["value"]).get("id") or 0) if row else 0
+        except (ValueError, TypeError, AttributeError):
+            return 0
+
+    def ensure_stat_profile(self):
+        """기준 버전이 하나도 없으면 첫 버전(stat_profile.default_settings)을 만든다. 가장 최근 버전 id."""
+        with self.lock:
+            row = self._conn.execute("SELECT MAX(id) AS id FROM stat_profile").fetchone()
+            if row["id"]:
+                return int(row["id"])
+        return self.add_stat_profile(sp.default_settings(), "첫 버전: 그래프 설정 파일(g/LSB·MEMS 보정) + HPF 10Hz·LPF 1000Hz")
+
+    def add_stat_profile(self, settings, note=""):
+        """새 기준 버전을 저장하고 id를 돌려준다. 지금 버전으로 바꾸는 것은 재계산이 끝날 때다."""
+        settings = sp.validate(settings)
+        with self.lock:
+            cursor = self._conn.execute(
+                "INSERT INTO stat_profile(settings, note, created_at) VALUES (?, ?, ?)",
+                (sp.to_json(settings), str(note or "").strip()[:200], _iso()),
+            )
+            self._conn.commit()
+            return int(cursor.lastrowid)
+
+    def stat_profile(self, profile_id):
+        """버전 하나 {id, settings, note, created_at, summary}. 없으면 None."""
+        with self.lock:
+            row = self._conn.execute("SELECT * FROM stat_profile WHERE id=?", (int(profile_id),)).fetchone()
+        if row is None:
+            return None
+        settings = sp.validate(json.loads(row["settings"]))
+        return {"id": int(row["id"]), "settings": settings, "note": row["note"], "created_at": row["created_at"],
+                "summary": sp.summary_text(settings)}
+
+    def stat_profiles(self):
+        """설정 화면용: 지금 버전 id, 가장 최근 버전 id, 버전 목록(최근 50개, 최신 먼저)."""
+        with self.lock:
+            active = self._active_profile_id()
+            rows = self._conn.execute("SELECT * FROM stat_profile ORDER BY id DESC LIMIT 50").fetchall()
+        items = []
+        for row in rows:
+            try:
+                settings = sp.validate(json.loads(row["settings"]))
+                summary = sp.summary_text(settings)
+            except (ValueError, TypeError):
+                settings, summary = None, "(읽을 수 없는 기준)"
+            items.append({"id": int(row["id"]), "note": row["note"], "created_at": row["created_at"],
+                          "settings": settings, "summary": summary, "active": int(row["id"]) == active})
+        return {"active": active, "latest": items[0]["id"] if items else 0, "items": items}
+
     def stats(self, mac):
-        """한 MAC의 전체 통계. 구간 줄을 세트 수로 가중해 평균한다."""
+        """한 MAC의 전체 통계(지금 기준 버전). 시간 줄을 세트 수로 가중해 평균한다."""
         with self.lock:
             row = self._conn.execute(
                 """
@@ -54,9 +123,9 @@ class QueryMixin:
                        MIN(first_at) AS first_at,
                        MAX(last_at) AS last_at
                 FROM measurement
-                WHERE mac=? AND sensor_type='ADXL'
+                WHERE mac=? AND sensor_type='ADXL' AND COALESCE(profile_id, 0)=?
                 """,
-                (mac,),
+                (mac, self._active_profile_id()),
             ).fetchone()
         if row is None or not row["measurements"]:
             return {"mac": mac, "measurements": 0, "srss_avg": None, "rms_avg": None, "peak_max": None, "unit": ""}
@@ -73,8 +142,12 @@ class QueryMixin:
         }
 
     def dashboard(self):
-        """MAC별 전체 평균과 구간별 변화. 화면은 저장된 숫자만 읽는다."""
+        """MAC별 전체 평균과 시간별 변화(지금 기준 버전). 화면은 저장된 숫자만 읽는다.
+
+        series는 최근 168줄(한 시간 한 줄이면 7일). 옛 하루 통계(버전 0)면 하루 한 줄이다.
+        """
         with self.lock:
+            active = self._active_profile_id()
             rows = self._conn.execute(
                 """
                 SELECT d.mac, d.display_name,
@@ -87,32 +160,39 @@ class QueryMixin:
                        MAX(m.last_at) AS last_at
                 FROM device d
                 LEFT JOIN measurement m
-                  ON m.mac=d.mac AND m.sensor_type='ADXL'
+                  ON m.mac=d.mac AND m.sensor_type='ADXL' AND COALESCE(m.profile_id, 0)=?
                 GROUP BY d.mac
                 ORDER BY d.created_at, d.mac
-                """
+                """,
+                (active,),
             ).fetchall()
             items = []
             for row in rows:
                 item = dict(row)
                 item["limit"] = self._read_srss_limit(item["mac"])
                 item["set_count"] = int(item["set_count"] or 0)
+                # 최근 줄 = 가장 늦은 시간 줄(센서 현황 경보와 같은 기준: last_at 순).
                 history = self._conn.execute(
                     """
-                    SELECT srss_mms, rms, peak, last_at, set_count
+                    SELECT srss_mms, rms, peak, last_at, set_count, hour, x_mms, y_mms, z_mms, srss_mms_max
                     FROM measurement
-                    WHERE mac=? AND sensor_type='ADXL'
-                    ORDER BY id DESC LIMIT 40
+                    WHERE mac=? AND sensor_type='ADXL' AND COALESCE(profile_id, 0)=?
+                    ORDER BY last_at DESC, id DESC LIMIT 168
                     """,
-                    (item["mac"],),
+                    (item["mac"], active),
                 ).fetchall()
                 # 가장 최근 줄(대문 경보 판정과 같은 값). 통계 화면이 '최근'으로 함께 보여 준다.
                 item["latest_srss_mms"] = history[0]["srss_mms"] if history else None
                 item["latest_at"] = history[0]["last_at"] if history else None
                 item["series"] = [
                     {
-                        "t": point["last_at"],
+                        # 시간 줄은 묶음 시(hour), 옛 하루 통계는 마지막 세트 시각.
+                        "t": point["hour"] or point["last_at"],
                         "srss_mms": point["srss_mms"],
+                        "srss_mms_max": point["srss_mms_max"],
+                        "x_mms": point["x_mms"],
+                        "y_mms": point["y_mms"],
+                        "z_mms": point["z_mms"],
                         "rms": point["rms"],
                         "peak": point["peak"],
                         "set_count": point["set_count"],
@@ -120,7 +200,14 @@ class QueryMixin:
                     for point in reversed(history)
                 ]
                 items.append(item)
-        return {"updated_at": self.stats_updated_at(), "items": items}
+        profile = self.stat_profile(active) if active else None
+        return {
+            "updated_at": self.stats_updated_at(),
+            "items": items,
+            # 통계 화면 안내 줄: 어떤 기준으로 계산한 값인지.
+            "profile": {"id": active, "summary": profile["summary"] if profile else "옛 하루 통계(필터·보정 없음)",
+                        "created_at": profile["created_at"] if profile else ""},
+        }
 
     def stats_updated_at(self):
         """통계를 마지막으로 만든 시각. 기록이 없으면 마지막 measurement 시각."""
@@ -136,119 +223,216 @@ class QueryMixin:
         return None if fallback is None else fallback["updated_at"]
 
     def update_statistics(self):
-        """마지막 통계 이후의 완성 XYZ만 모아 measurement에 구간 한 줄을 추가한다.
+        """매시간 스케줄러(와 명령줄 import_csv)가 부른다. 지금 기준 버전으로 새 세트만 더한다.
 
-        부르는 곳은 하루 스케줄러와 명령줄 import_csv다. 둘이 겹치면 뒤에 온 쪽은 앞 최신화가 끝날 때까지 기다린다.
-        계산은 self.lock 밖에서 하므로, 이 잠금이 없으면 둘이 같은 through_id를 읽는다.
+        지금 버전이 아직 없으면(업그레이드 직후 재계산 전) 아무것도 하지 않는다. 재계산이 끝나면 버전이 정해진다.
+        재계산·CSV 통계와 겹치지 않게 stats_lock을 잡는다(뒤에 온 쪽은 기다린다).
         """
         with self.stats_lock:
-            return self._update_statistics()
+            with self.lock:
+                active = self._active_profile_id()
+            if not active:
+                return {"macs": 0, "sets": 0, "failed_sets": 0, "skipped": "통계 기준 버전이 아직 없습니다(재계산 대기)"}
+            profile = self.stat_profile(active)
+            result = self._compute_statistics(active, profile["settings"], cursors=None)
+            result["updated_at"] = self._touch_stat_meta()
+            return result
 
-    def _update_statistics(self):
-        """update_statistics 본문. stats_lock을 가진 상태에서만 부른다.
+    def rebuild_statistics(self, profile_id, progress=None):
+        """packet 전체를 기준 버전 profile_id로 다시 계산하고, 끝나면 그 버전을 '지금 버전'으로 바꾼다.
 
-        MAC마다 다음 순서로 돈다. 패킷 수신은 그동안에도 계속된다.
-        1. (self.lock) 읽기 위치 = stat_cursor와 measurement.through_id 중 큰 값.
-           그보다 id가 큰 ADXL 패킷만 읽는다. 이 순간까지 commit된 패킷이 이번 대상이다.
-        2. (lock 없음) complete_sets로 X/Y/Z를 묶고 세트마다 RMS·PEAK·SRSS를 계산한다.
-           오래 걸리는 부분이라 lock을 풀어, 이 사이에 들어온 패킷이 저장을 기다리지 않게 한다.
-           이 사이에 들어온 패킷은 1에서 읽지 않았으므로 이번 계산에는 없다.
-        3. settled_through로 '다 본 마지막 id'를 정한다. 실패한 세트도 다 본 것이다.
-           맨 끝에 Z가 아직 없는 묶음은 남겨 두어, 다음 최신화가 뒤 축과 함께 다시 읽는다.
-        4. (self.lock) 계산된 세트가 있으면 measurement에 구간 한 줄을 넣고,
-           stat_cursor를 3의 위치로 옮긴다. 같은 commit이라 둘이 어긋나지 않는다.
-        마지막에 stat_meta 시각을 갱신한다. 하루 스케줄러는 이 날짜로 오늘 돌았는지 본다.
+        부르는 쪽(stats_job.StatRebuildJob)이 stats_lock을 잡고 있다(매시간 최신화·CSV 통계와 겹치지 않음).
+        1. 새 버전 줄은 계산되는 대로 measurement에 쓰지만, 화면·경보는 지금 버전만 보므로 끝날 때까지 안 보인다.
+           그 사이에도 화면에는 이전 통계가 그대로 보인다.
+        2. 다 끝나면 한 commit에서: 지금 버전 = profile_id, 다른 버전 줄 삭제, 통계 읽기 위치 = 이번에 다 본 위치.
+        중간에 실패하면 이미 쓴 새 버전 줄만 지우고 지금 버전은 그대로 둔다.
         """
+        profile = self.stat_profile(profile_id)
+        if profile is None:
+            raise ValueError(f"통계 기준 버전 {profile_id}이 없습니다")
+        profile_id = int(profile_id)
         with self.lock:
-            macs = [
-                row["mac"]
-                for row in self._conn.execute(
-                    "SELECT DISTINCT mac FROM packet WHERE sensor_type='ADXL'"
-                ).fetchall()
-            ]
-        written = 0
-        failed = 0
-        for mac in macs:
+            # 같은 버전을 다시 계산할 때 남은 줄이 섞이지 않게 먼저 비운다.
+            self._conn.execute("DELETE FROM measurement WHERE profile_id=?", (profile_id,))
+            self._conn.commit()
+        cursors = {}
+        try:
+            result = self._compute_statistics(profile_id, profile["settings"], cursors=cursors, progress=progress)
+        except Exception:
             with self.lock:
-                through = self._stat_through(mac)
-                rows = [
-                    dict(row)
-                    for row in self._conn.execute(
-                        """
-                        SELECT id, axis, seq, decoded_samples, sample_rate, sample_count, received_at
-                        FROM packet
-                        WHERE mac=? AND sensor_type='ADXL' AND id>?
-                        ORDER BY id
-                        """,
-                        (mac, through),
-                    ).fetchall()
-                ]
-            collected = []
-            times = []
-            included = []
-            for found in complete_sets(rows):
-                try:
-                    collected.append(adxl_set_stats(found))
-                except (ValueError, TypeError, OverflowError):
-                    failed += 1
-                    continue
-                times.append(max(found[axis]["received_at"] for axis in ("X", "Y", "Z")))
-                included.extend(int(found[axis]["id"]) for axis in ("X", "Y", "Z"))
-            # 계산에 실패한 세트와 축이 빠진 묶음도 여기까지 본 것으로 친다. 다음에는 다시 읽지 않는다.
-            settled = settled_through(rows, through)
-            if not collected:
-                if settled > through:
-                    with self.lock:
-                        self._save_stat_through(mac, settled)
-                        self._conn.commit()
-                continue
-            summary = summarize_mac(collected)
-            now = _iso()
-            with self.lock:
-                self._save_stat_through(mac, settled)
-                self._conn.execute(
-                    """
-                    INSERT INTO measurement(
-                        mac, received_at, sensor_type, sample_rate, sample_count,
-                        rms, peak, srss, srss_mms, unit, g_per_lsb, set_key,
-                        set_count, first_at, last_at, computed_at, through_id
-                    ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                    """,
-                    (
-                        mac,
-                        max(times),
-                        "ADXL",
-                        summary["sample_rate"],
-                        summary["sample_count"],
-                        summary["rms"],
-                        summary["peak"],
-                        summary["srss"],
-                        summary["srss_mms"],
-                        "g RMS",
-                        summary["g_per_lsb"],
-                        f"ADXL|{mac}|{max(included)}",
-                        summary["set_count"],
-                        min(times),
-                        max(times),
-                        now,
-                        settled,
-                    ),
-                )
+                self._conn.execute("DELETE FROM measurement WHERE profile_id=?", (profile_id,))
                 self._conn.commit()
-            written += 1
+            raise
         now = _iso()
         with self.lock:
-            self._conn.execute(
-                """
-                INSERT INTO stat_meta(key, updated_at) VALUES ('measurement', ?)
-                ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at
-                """,
-                (now,),
-            )
+            self._save_active_profile(profile_id, now)
+            self._conn.execute("DELETE FROM measurement WHERE COALESCE(profile_id, 0)<>?", (profile_id,))
+            # 읽기 위치는 MAX가 아니라 그대로 덮어쓴다(이번 재계산이 처음부터 다 봤으므로 이 값이 정답).
+            for mac, through in cursors.items():
+                self._conn.execute(
+                    """
+                    INSERT INTO stat_cursor(mac, through_id, updated_at) VALUES (?, ?, ?)
+                    ON CONFLICT(mac) DO UPDATE SET through_id=excluded.through_id, updated_at=excluded.updated_at
+                    """,
+                    (mac, int(through), now),
+                )
+            self._save_stat_meta(now)
             self._conn.commit()
-        return {"macs": written, "failed_sets": failed, "updated_at": now}
+            result["hours"] = int(self._conn.execute(
+                "SELECT COUNT(*) FROM measurement WHERE profile_id=?", (profile_id,)).fetchone()[0])
+        result["updated_at"] = now
+        result["profile_id"] = profile_id
+        return result
 
-    # ---------- CSV 일자별 통계(csv_stats.CsvStatsJob) ----------
+    def _save_active_profile(self, profile_id, now):
+        """lock을 가진 상태에서 지금 버전을 바꾼다. commit은 부르는 쪽이 한다."""
+        self._conn.execute(
+            """
+            INSERT INTO app_setting(key, value, updated_at) VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
+            """,
+            (ACTIVE_KEY, json.dumps({"id": int(profile_id)}), now),
+        )
+
+    def _save_stat_meta(self, now):
+        """lock을 가진 상태에서 마지막 통계 계산 시각을 남긴다. commit은 부르는 쪽이 한다."""
+        self._conn.execute(
+            """
+            INSERT INTO stat_meta(key, updated_at) VALUES ('measurement', ?)
+            ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at
+            """,
+            (now,),
+        )
+
+    def _touch_stat_meta(self):
+        """마지막 통계 계산 시각을 지금으로. 매시간 스케줄러는 이 시각의 '시'로 이번 시간에 돌았는지 본다."""
+        now = _iso()
+        with self.lock:
+            self._save_stat_meta(now)
+            self._conn.commit()
+        return now
+
+    def _compute_statistics(self, profile_id, settings, cursors=None, progress=None):
+        """MAC마다 읽기 위치 뒤의 ADXL 패킷을 STAT_CHUNK줄씩 읽어 시간 줄로 더한다.
+
+        cursors가 None이면 매시간 최신화: 읽기 위치는 stat_cursor, 조각마다 위치를 같은 commit으로 저장한다.
+        cursors가 dict면 재계산: 위치 0부터, 위치는 dict에만 두고(끝날 때 rebuild_statistics가 저장) 줄만 쓴다.
+        조각 하나의 순서(수신 저장은 그동안에도 계속된다):
+          1. (self.lock) id > 위치인 줄을 STAT_CHUNK개 읽는다. HEX 칸만 읽고 큰 decoded_samples는 안 읽는다.
+          2. (잠금 없음) seq로 X/Y/Z 세트를 묶고 세트마다 stat_profile.set_stats. 시(hour)별로 모은다.
+          3. settled_through로 다 본 위치를 정한다. 끝에 Z가 아직 없는 묶음은 다음에 다시 읽는다.
+          4. (self.lock) 시간 줄이 이미 있으면 세트 수 가중으로 합치고(merge_rows), 없으면 넣는다. 위치 저장. commit.
+        조각 사이에 잠깐 쉬어(10ms) 수신 스레드가 잠금을 먼저 잡을 수 있게 한다.
+        """
+        with self.lock:
+            macs = [row["mac"] for row in self._conn.execute(
+                "SELECT DISTINCT mac FROM packet WHERE sensor_type='ADXL' ORDER BY mac").fetchall()]
+        totals = {"macs": 0, "sets": 0, "failed_sets": 0, "hours": 0, "notes": []}
+        for done, mac in enumerate(macs):
+            with self.lock:
+                through = 0 if cursors is not None else self._stat_through(mac)
+            touched = False
+            while True:
+                with self.lock:
+                    rows = [dict(row) for row in self._conn.execute(
+                        """
+                        SELECT id, mac, axis, seq, sample_rate, sample_count, received_at, sensor_type, sensor_data_hex
+                        FROM packet
+                        WHERE mac=? AND sensor_type='ADXL' AND id>?
+                        ORDER BY id LIMIT ?
+                        """,
+                        (mac, through, STAT_CHUNK),
+                    ).fetchall()]
+                if not rows:
+                    break
+                full = len(rows) == STAT_CHUNK
+                buckets = {}
+                for found in complete_sets(rows):
+                    try:
+                        objs = {axis: packet_to_template(found[axis]) for axis in ("X", "Y", "Z")}
+                        stats = sp.set_stats(objs, settings)
+                        when = max(str(found[axis]["received_at"]) for axis in ("X", "Y", "Z"))
+                        hour = sp.hour_bucket(when)
+                    except (ValueError, TypeError, OverflowError, ZeroDivisionError, KeyError):
+                        totals["failed_sets"] += 1
+                        continue
+                    ids = [int(found[axis]["id"]) for axis in ("X", "Y", "Z")]
+                    buckets.setdefault(hour, []).append((stats, when, min(ids), max(ids)))
+                    totals["sets"] += 1
+                    for text in stats["notes"]:
+                        if text not in totals["notes"]:
+                            totals["notes"].append(text)
+                settled = settled_through(rows, through)
+                if settled <= through and full:
+                    # 묶음은 최대 3줄이라 조각 하나가 통째로 '끝나지 않은 묶음'일 수는 없지만, 혹시라도 멈추지 않게 넘긴다.
+                    settled = max(int(row["id"]) for row in rows)
+                self._write_hours(mac, profile_id, settings, buckets, settled, save_cursor=cursors is None)
+                touched = touched or bool(buckets)
+                totals["hours"] += len(buckets)
+                through = settled
+                if cursors is not None:
+                    cursors[mac] = through
+                if not full:
+                    break
+                time.sleep(0.01)
+            if touched:
+                totals["macs"] += 1
+            if progress:
+                progress(done + 1, len(macs))
+        return totals
+
+    def _write_hours(self, mac, profile_id, settings, buckets, settled, save_cursor):
+        """시간 묶음들을 measurement에 넣거나 합친다(한 commit). save_cursor면 읽기 위치도 같은 commit에."""
+        now = _iso()
+        with self.lock:
+            for hour, items in sorted(buckets.items()):
+                new = sp.row_from_sets([(stats, when, first_id) for stats, when, first_id, _last in items])
+                last_id = max(item[3] for item in items)
+                key = f"H|{profile_id}|{mac}|{hour}"
+                old = self._conn.execute("SELECT * FROM measurement WHERE set_key=?", (key,)).fetchone()
+                if old is not None:
+                    previous = dict(old)
+                    try:
+                        previous["notes"] = json.loads(previous.get("notes") or "[]")
+                    except ValueError:
+                        previous["notes"] = []
+                    new = sp.merge_rows(previous, new)
+                    last_id = max(last_id, int(previous.get("through_id") or 0))
+                self._upsert_hour(mac, profile_id, hour, key, new, settings["g_per_lsb"], last_id, now)
+            if save_cursor:
+                self._save_stat_through(mac, settled)
+            self._conn.commit()
+
+    def _upsert_hour(self, mac, profile_id, hour, key, row, g_per_lsb, through_id, now):
+        """lock을 가진 상태에서 시간 줄 하나를 넣거나 같은 set_key 줄을 덮어쓴다. commit은 부르는 쪽."""
+        values = (
+            mac, row["last_at"], "ADXL", row["sample_rate"], row["sample_count"],
+            row["rms"], row["peak"], row["srss"], row["srss_mms"], "g RMS", g_per_lsb, key,
+            row["set_count"], row["first_at"], row["last_at"], now, int(through_id),
+            int(profile_id), hour, row["x_mms"], row["y_mms"], row["z_mms"], row["srss_mms_max"],
+            int(row.get("first_id") or 0), json.dumps(row["notes"], ensure_ascii=False) if row.get("notes") else "",
+        )
+        self._conn.execute(
+            """
+            INSERT INTO measurement(
+                mac, received_at, sensor_type, sample_rate, sample_count,
+                rms, peak, srss, srss_mms, unit, g_per_lsb, set_key,
+                set_count, first_at, last_at, computed_at, through_id,
+                profile_id, hour, x_mms, y_mms, z_mms, srss_mms_max, first_id, notes
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(set_key) DO UPDATE SET
+                received_at=excluded.received_at, sample_rate=excluded.sample_rate,
+                sample_count=excluded.sample_count, rms=excluded.rms, peak=excluded.peak,
+                srss=excluded.srss, srss_mms=excluded.srss_mms, g_per_lsb=excluded.g_per_lsb,
+                set_count=excluded.set_count, first_at=excluded.first_at, last_at=excluded.last_at,
+                computed_at=excluded.computed_at, through_id=excluded.through_id,
+                x_mms=excluded.x_mms, y_mms=excluded.y_mms, z_mms=excluded.z_mms,
+                srss_mms_max=excluded.srss_mms_max, first_id=excluded.first_id, notes=excluded.notes
+            """,
+            values,
+        )
+
+    # ---------- CSV 시간별 통계(csv_stats.CsvStatsJob) ----------
     def adxl_packet_marks(self):
         """MAC별 지금 마지막 ADXL packet id. CSV 통계가 끝난 뒤 통계 읽기 위치로 쓴다."""
         with self.lock:
@@ -257,14 +441,14 @@ class QueryMixin:
             ).fetchall()
         return {row["mac"]: int(row["last_id"] or 0) for row in rows}
 
-    def replace_measurements_from_csv(self, rows, marks):
-        """measurement를 전부 지우고 CSV 일자별 줄로 바꾼다. 한 commit이라 중간 상태가 남지 않는다.
+    def replace_measurements_from_csv(self, rows, marks, profile_id, g_per_lsb):
+        """measurement를 전부 지우고 CSV 시간별 줄(기준 버전 profile_id)로 바꾼다. 한 commit이다.
 
-        rows: csv_stats.rows_for_store 결과(MAC·날짜마다 한 줄). marks: adxl_packet_marks() (시작 순간 값).
-        - stat_cursor를 marks로 옮긴다. 그 id까지의 packet은 CSV에도 있으므로 하루 스케줄러가 다시 세지 않는다.
-          (MAX로 저장하므로 이미 더 앞선 위치면 그대로.) 그 뒤에 들어온 패킷만 다음 하루 통계에 들어간다.
+        rows: csv_stats.rows_for_store 결과(MAC·시간마다 한 줄). marks: adxl_packet_marks() (시작 순간 값).
+        - 지금 버전을 profile_id로 바꾼다(CSV 통계는 가장 최근 기준 버전으로 계산한다).
+        - stat_cursor를 marks로 옮긴다. 그 id까지의 packet은 CSV에도 있으므로 매시간 최신화가 다시 세지 않는다.
+          (MAX로 저장하므로 이미 더 앞선 위치면 그대로.) 그 뒤에 들어온 패킷만 다음 최신화에 들어간다.
         - device에 없는 MAC은 등록한다. 마지막 수신이 비어 있으면 CSV 마지막 시각을 넣는다(대문 '마지막 수신').
-        - stat_meta(마지막 계산 시각)를 지금으로.
         stats_lock은 부르는 쪽(CsvStatsJob)이 잡고 있다.
         """
         now = _iso()
@@ -273,24 +457,9 @@ class QueryMixin:
             last_seen[row["mac"]] = max(last_seen.get(row["mac"], ""), row["last_at"])
         with self.lock:
             self._conn.execute("DELETE FROM measurement")
-            self._conn.executemany(
-                """
-                INSERT INTO measurement(
-                    mac, received_at, sensor_type, sample_rate, sample_count,
-                    rms, peak, srss, srss_mms, unit, g_per_lsb, set_key,
-                    set_count, first_at, last_at, computed_at, through_id
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                [
-                    (
-                        row["mac"], row["received_at"], "ADXL", row["sample_rate"], row["sample_count"],
-                        row["rms"], row["peak"], row["srss"], row["srss_mms"], "g RMS", row["g_per_lsb"],
-                        f"CSV|{row['mac']}|{row['day']}", row["set_count"], row["first_at"], row["last_at"],
-                        now, int(marks.get(row["mac"], 0)),
-                    )
-                    for row in rows
-                ],
-            )
+            for row in rows:
+                key = f"CSV|{profile_id}|{row['mac']}|{row['hour']}"
+                self._upsert_hour(row["mac"], profile_id, row["hour"], key, row, g_per_lsb, 0, now)
             for mac, through in marks.items():
                 self._save_stat_through(mac, through)
             for mac, seen in last_seen.items():
@@ -304,31 +473,17 @@ class QueryMixin:
                     """,
                     (mac, now, now, seen),
                 )
-            self._conn.execute(
-                """
-                INSERT INTO stat_meta(key, updated_at) VALUES ('measurement', ?)
-                ON CONFLICT(key) DO UPDATE SET updated_at=excluded.updated_at
-                """,
-                (now,),
-            )
+            self._save_active_profile(profile_id, now)
+            self._save_stat_meta(now)
             self._conn.commit()
 
     def _stat_through(self, mac):
-        """lock을 가진 상태에서, 그 MAC이 통계에서 이미 본 마지막 packet id를 읽는다."""
+        """lock을 가진 상태에서, 그 MAC이 통계에서 이미 본 마지막 packet id(stat_cursor)."""
         cursor = self._conn.execute(
             "SELECT through_id FROM stat_cursor WHERE mac=?",
             (mac,),
         ).fetchone()
-        marker = self._conn.execute(
-            """
-            SELECT COALESCE(MAX(through_id), 0) AS through_id
-            FROM measurement
-            WHERE mac=? AND sensor_type='ADXL'
-            """,
-            (mac,),
-        ).fetchone()
-        saved = 0 if cursor is None else int(cursor["through_id"] or 0)
-        return max(saved, int(marker["through_id"] or 0))
+        return 0 if cursor is None else int(cursor["through_id"] or 0)
 
     def _save_stat_through(self, mac, through_id):
         """lock을 가진 상태에서 그 MAC의 통계 읽기 위치를 남긴다. commit은 부르는 쪽이 한다."""

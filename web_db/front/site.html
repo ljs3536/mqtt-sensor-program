@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
   대문: 센서 현황(보기 전용). 평면도 위 아이콘 색 하나로 센서 상태를 본다.
-  - 상태는 다섯 가지: 경보(빨강) > 끊김(진회색) > 주의(주황) > 정상(초록) > 대기(연회색). 판정은 서버 site_status.py.
+  - 상태는 여섯 가지: 위험(빨강) > 미수신(진회색) > 경보(주황) > 지연(노랑) > 정상(초록) > 확인 불가(연회색). 판정은 서버 site_status.py.
   - 위 타일을 누르면 그 상태 센서만 강조·목록에 남는다. 아이콘이나 목록을 누르면 정보 카드.
   - 평면도 추가·배치는 설정 화면 '평면도 배치' 탭(/settings#plan). 이 화면에서는 바꾸지 않는다.
   화면 동작은 static/site.js(data-site-mode="view"), 모양은 static/site.css.
@@ -17,9 +17,9 @@
     document.documentElement.setAttribute("data-theme", theme);
   })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=28">
+  <link rel="stylesheet" href="/static/style.css?v=31">
   <link rel="stylesheet" href="/static/theme.css?v=14">
-  <link rel="stylesheet" href="/static/site.css?v=8">
+  <link rel="stylesheet" href="/static/site.css?v=12">
 </head>
 <body class="site-page" data-site-mode="view">
   <header>
@@ -34,7 +34,7 @@
     </nav>
   </header>
   <main class="site-main">
-    <!-- 상태 타일: 상태별 센서 수. 누르면 그 상태만 강조 -->
+    <!-- 위쪽 요약: 진동 / 초음파 묶음마다 총 개수, 상태(경보·위험), 수신(정상·이상·확인 불가). 숫자를 누르면 그 조건만 강조 -->
     <section class="site-top">
       <div id="statusTiles" class="status-tiles"></div>
       <div class="site-meta">
@@ -42,6 +42,8 @@
         <span id="refreshText" class="hint"></span>
         <button type="button" class="icon-btn" id="refreshNow" title="지금 새로고침" aria-label="새로고침">↻</button>
         <a class="icon-btn" href="/settings#plan" title="평면도·센서 배치 편집(설정)" aria-label="배치 편집">⚙</a>
+        <!-- 오른쪽 센서 목록 숨기기/펴기(상태는 브라우저에 기억) -->
+        <button type="button" class="icon-btn list-toggle" id="listToggle" aria-pressed="true" title="센서 목록 숨기기" aria-label="센서 목록 숨기기/보이기">☰</button>
       </div>
     </section>
     <!-- 수신이 꺼져 있을 때만 보이는 안내 -->
@@ -68,21 +70,18 @@
           </div>
         </div>
         <!-- 색 범례. ⓘ에 마우스를 올리면 판정 기준 -->
-        <div class="site-legend">
-          <span class="state-alarm"><i></i>경보</span>
-          <span class="state-lost"><i></i>끊김</span>
-          <span class="state-warn"><i></i>주의</span>
-          <span class="state-ok"><i></i>정상</span>
-          <span class="state-idle"><i></i>대기</span>
+        <!-- 범례: 상태 색, ! = 배터리 부족, 종류 기호(Type1/2/3). site.js paintLegend가 앞에 채운다 -->
+        <div class="site-legend" id="siteLegend">
           <span id="legendInfo" class="legend-info" tabindex="0">ⓘ 판정 기준</span>
         </div>
       </section>
 
       <aside class="card site-list-card">
-        <!-- 센서 목록 / 최근 알림(상태 변화 기록). 알림 탭 배지 = 마지막으로 본 뒤 새로 생긴 경보·끊김·주의 수 -->
+        <!-- 센서 목록 / 최근 알림(상태 변화 기록). 알림 탭 배지 = 확인하지 않은 위험·미수신·경보·지연 수 -->
         <div class="site-list-head list-tabs">
           <button type="button" class="active" data-list-tab="sensors">센서 <small id="listCount"></small></button>
           <button type="button" data-list-tab="events">최근 알림 <span id="eventBadge" class="event-badge" hidden></span></button>
+          <button type="button" class="list-close" id="listClose" title="센서 목록 숨기기" aria-label="센서 목록 숨기기">»</button>
         </div>
         <input id="listSearch" class="list-search" type="search" placeholder="이름·MAC 검색" aria-label="센서 검색">
         <ul id="sensorList" class="site-list"></ul>
@@ -98,7 +97,7 @@
     <div id="sensorCard" class="site-card" hidden></div>
   </main>
   <script src="/static/api.js?v=1"></script>
-  <script src="/static/site.js?v=12"></script>
+  <script src="/static/site.js?v=18"></script>
   <script src="/static/theme.js?v=4"></script>
 </body>
 </html>

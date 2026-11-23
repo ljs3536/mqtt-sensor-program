@@ -184,15 +184,29 @@ function pairs(xs, ys, logX, logY) {
   return data;
 }
 
-/** 확대 상태를 풀고 전체 범위로 되돌린다. */
+/**
+ * 새 패킷을 그리기 전에 확대 상태를 풀고 전체 범위로 되돌린다. 단 **고정한 축은 그대로 둔다**.
+ * 예전에는 resetZoom()이 '축 적용/고정'·'X/Y축 고정'으로 넣은 min/max까지 지워서, 체크는 남아 있는데
+ * 다음 패킷에서 범위가 풀렸다(2026-11-23 수정). 고정 축의 min/max를 먼저 받아 두고 resetZoom 뒤 다시 넣는다.
+ */
 function loosen(target) {
+  const kept = {};
+  ["x", "y"].forEach((axis) => {
+    const locked = axis === "x" ? target.$lockX : target.$lockY;
+    const scale = target.options.scales[axis] || {};
+    if (locked && Number.isFinite(scale.min) && Number.isFinite(scale.max)) kept[axis] = [scale.min, scale.max];
+  });
   if (typeof target.resetZoom === "function") {
     try {
-      target.resetZoom();
+      target.resetZoom("none");
     } catch (_error) {
       /* zoom plugin not active yet */
     }
   }
+  Object.entries(kept).forEach(([axis, [min, max]]) => {
+    target.options.scales[axis].min = min;
+    target.options.scales[axis].max = max;
+  });
 }
 
 /**
@@ -231,6 +245,8 @@ function draw(preview) {
   const bits = [];
   if (preview.sensor) bits.push(preview.sensor);
   if (preview.index && preview.count) bits.push(`${preview.index} / ${preview.count}`);
+  // 그 패킷(ADXL은 세트 시작)의 수신 시각. DB·CSV에 시각이 없으면 빠진다(2026-11-23).
+  if (preview.time) bits.push(preview.time);
   String(preview.info || "")
     .split("|")
     .map((part) => part.trim())

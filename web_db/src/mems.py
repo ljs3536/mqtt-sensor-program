@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -20,13 +22,51 @@ def _settings_file(name):
     return path if path.exists() else ROOT / name
 
 
+# ---------- 설정 파일 읽기 캐시 (2026-11-23) ----------
+# FFT 평균 380세트를 그리면 패킷·축마다 g/LSB와 보정 파일을 다시 읽어 디스크 읽기만 약 2초가 걸렸다.
+# 같은 파일은 1초 안에는 다시 읽지 않고, 1초가 지나면 수정 시각(mtime)이 바뀌었을 때만 다시 읽는다.
+# 이 서버의 저장 함수(save_*)는 저장 직후 캐시를 비우므로 화면에서 바꾼 값은 바로 반영된다.
+# 파일을 손으로 고친 경우도 1초 안에 반영된다.
+_READ_TTL = 1.0
+_read_cache = {}
+_read_lock = threading.Lock()
+
+
+def _cached_read(name, loader):
+    """설정 파일 name을 loader(path)로 읽되, 위 규칙으로 캐시한다."""
+    now = time.monotonic()
+    with _read_lock:
+        hit = _read_cache.get(name)
+    if hit and now - hit["checked"] < _READ_TTL:
+        return hit["value"]
+    path = _settings_file(name)
+    try:
+        stamp = (str(path), path.stat().st_mtime_ns)
+    except OSError:
+        stamp = (str(path), None)
+    value = hit["value"] if hit and hit["stamp"] == stamp else loader(path)
+    with _read_lock:
+        _read_cache[name] = {"checked": now, "stamp": stamp, "value": value}
+    return value
+
+
+def _forget(name):
+    """저장 직후 캐시를 비워 다음 읽기가 새 파일을 보게 한다."""
+    with _read_lock:
+        _read_cache.pop(name, None)
+
+
 MEMS_SCALE_FILENAME = "mems_lsb_scale.json"
 MEMS_DEFAULT_G_PER_LSB = 1.0 / 256.0
 
 def read_mems_g_per_lsb():
-    """데이터 폴더(없으면 저장소 루트) JSON에서 1 LSB당 g를 읽는다. 없으면 1/256이다."""
+    """데이터 폴더(없으면 저장소 루트) JSON에서 1 LSB당 g를 읽는다. 없으면 1/256이다. 1초 캐시(_cached_read)."""
+    return _cached_read(MEMS_SCALE_FILENAME, _load_g_per_lsb)
+
+
+def _load_g_per_lsb(path):
+    """g/LSB 파일 하나를 실제로 읽는다."""
     try:
-        path = _settings_file(MEMS_SCALE_FILENAME)
         value = float(json.loads(path.read_text(encoding="utf-8"))["g_per_lsb"])
         if math.isfinite(value) and 0 < value <= 10:
             return value
@@ -43,6 +83,7 @@ def save_mems_g_per_lsb(value):
     temp = path.with_name(path.name + ".tmp")
     temp.write_text(json.dumps({"g_per_lsb": value}, indent=2) + "\n", encoding="utf-8")
     temp.replace(path)
+    _forget(MEMS_SCALE_FILENAME)
 
 
 
@@ -83,9 +124,13 @@ def validate_mems_correction(values):
     return result
 
 def load_mems_correction():
-    """보정 JSON을 읽는다. 없으면 기본 보정이다."""
+    """보정 JSON을 읽는다. 없으면 기본 보정이다. 1초 캐시(_cached_read). 호출 쪽이 고쳐도 캐시가 안 바뀌게 복사해 준다."""
+    return dict(_cached_read(MEMS_CORRECTION_FILENAME, _load_correction))
+
+
+def _load_correction(path):
+    """보정 파일 하나를 실제로 읽는다."""
     try:
-        path = _settings_file(MEMS_CORRECTION_FILENAME)
         return validate_mems_correction(json.loads(path.read_text(encoding="utf-8")))
     except (OSError, ValueError, TypeError, KeyError):
         return dict(MEMS_CORRECTION_DEFAULTS)
@@ -97,6 +142,7 @@ def save_mems_correction(values):
     temp = path.with_name(path.name + '.tmp')
     temp.write_text(json.dumps(values, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
     temp.replace(path)
+    _forget(MEMS_CORRECTION_FILENAME)
     return values
 
 def mems_sensitivity(measured_hz, config):

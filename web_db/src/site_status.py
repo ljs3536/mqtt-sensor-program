@@ -11,7 +11,7 @@
 3. 배터리(battery): 센서가 보내는 batteryRmin(0~10). 3 이하면 low. 상태(state)와는 따로 표시한다.
 
 연결 기준(2026-11-19 확정): 무선 센서는 보통 1시간에 한 번 보낸다.
-정상 = 마지막 수신 후 경과 ≤ 원래 간격 + 30초, 지연 = ≤ 간격×2 + 30초(한 번 빠짐), 그 밖은 끊김.
+정상 = 마지막 수신 후 경과 ≤ 원래 간격 + 30초, 지연 = ≤ 간격×2 + 30초(한 번 빠짐), 그 밖은 미수신.
 바꿀 때는 아래 상수만 고친다(docs/대문-평면도-대시보드-계획.md "연결 판정").
 """
 
@@ -21,7 +21,7 @@ import json
 import statistics
 from datetime import datetime
 
-# 정상: 경과 ≤ 간격 × LINK_OK_FACTOR + LINK_GRACE_S. 지연: ≤ 간격 × LINK_LATE_FACTOR + LINK_GRACE_S. 그 밖은 끊김.
+# 정상: 경과 ≤ 간격 × LINK_OK_FACTOR + LINK_GRACE_S. 지연: ≤ 간격 × LINK_LATE_FACTOR + LINK_GRACE_S. 그 밖은 미수신.
 LINK_OK_FACTOR = 1.0
 LINK_LATE_FACTOR = 2.0
 LINK_GRACE_S = 30.0
@@ -32,44 +32,54 @@ SAME_MEASURE_S = 2.0
 AXIS_RANK = {"X": 0, "Y": 1, "Z": 2}
 # 실제 수신 간격을 쓰려면 측정이 이만큼 있어야 한다(간격은 하나 적다).
 MIN_MEASURES = 3
-# 통계 화면과 같은 주의 기준(한계의 80%).
+# 통계 화면과 같은 경보 기준(한계의 80%).
 WARN_RATIO = 0.8
 # 배터리(batteryRmin, 0~10). 이 값 이하면 부족(빨강).
 BATTERY_LOW = 3.0
 
 # 화면 문구와 색 이름. 화면(site.js)은 state 값으로 색을 고른다.
+# 2026-11-23 피드백(docs/센서-현황-작업.md 3·4번): 끊김 → '미수신', 대기 → '확인 불가',
+# 측정 이상 단계는 진동·초음파 공통으로 '경보 / 위험' 두 단계.
 LINK_TEXT = {
     "ok": "정상 수신",
     "late": "수신 지연",
-    "lost": "수신 끊김",
+    "lost": "미수신",
     "stopped": "측정 중지",
-    "none": "기록 없음",
+    "none": "받은 데이터 없음",
     "unknown": "주기 미상",
     "offline": "수신 꺼짐",
 }
-ALARM_TEXT = {"ok": "정상", "warn": "주의", "over": "초과", "none": "통계 없음", "na": "알람 없음"}
+# 측정 이상(진동): 한계의 80% 이상 = 경보, 한계 이상 = 위험. 'na' = 판정 기준 없음(PIEZO·초음파, 표시만).
+ALARM_TEXT = {"ok": "정상", "warn": "경보", "over": "위험", "none": "통계 없음", "na": "기준 없음"}
 
-# 화면에 보이는 '하나의 상태'. 연결(link)과 알람(alarm) 두 판정 중 더 나쁜 쪽 하나로 줄인다.
-# 사용자는 아이콘 색 하나만 보면 된다. 순서(나쁜 것부터): 경보 > 끊김 > 주의 > 정상 > 대기.
-STATE_TEXT = {"alarm": "경보", "lost": "끊김", "warn": "주의", "ok": "정상", "idle": "대기"}
-STATE_ORDER = ["alarm", "lost", "warn", "ok", "idle"]
+# 수신 상태 묶음(위쪽 요약 '수신 정상 / 이상 / 확인 불가').
+LINK_GROUP = {"ok": "ok", "late": "bad", "lost": "bad",
+              "stopped": "unknown", "none": "unknown", "unknown": "unknown", "offline": "unknown"}
+
+# 화면에 보이는 '하나의 상태'(아이콘 색). 측정과 수신 판정 중 더 나쁜 쪽 하나로 줄인다.
+# 순서(나쁜 것부터): 위험 > 미수신 > 경보 > 지연 > 정상 > 확인 불가.
+STATE_TEXT = {"alarm": "위험", "lost": "미수신", "warn": "경보", "late": "지연", "ok": "정상", "idle": "확인 불가"}
+STATE_ORDER = ["alarm", "lost", "warn", "late", "ok", "idle"]
 
 
 def overall_state(link, alarm):
     """연결·알람 판정 → 하나의 상태.
 
-    - 경보(alarm): 쌓인 통계 SRSS ≥ 한계.
-    - 끊김(lost): 원래 간격보다 훨씬 오래 수신 없음.
-    - 주의(warn): SRSS ≥ 한계의 80%, 또는 수신 지연.
-    - 정상(ok): 제때 수신 중이고 알람 없음.
-    - 대기(idle): 판단할 수 없음(수신 꺼짐, 측정 중지, 기록 없음, 주기 미상).
+    - 위험(alarm): 최근 통계 SRSS ≥ 한계.
+    - 미수신(lost): 원래 간격 ×2 + 30초보다 오래 수신 없음.
+    - 경보(warn): SRSS ≥ 한계의 80%.
+    - 지연(late): 원래 간격 + 30초를 넘겼지만 ×2 + 30초 안.
+    - 정상(ok): 제때 수신 중이고 측정 이상 없음.
+    - 확인 불가(idle): 판단할 수 없음(수신 꺼짐, 측정 중지, 받은 데이터 없음, 주기 미상).
     """
     if alarm == "over":
         return "alarm"
     if link == "lost":
         return "lost"
-    if alarm == "warn" or link == "late":
+    if alarm == "warn":
         return "warn"
+    if link == "late":
+        return "late"
     if link == "ok":
         return "ok"
     return "idle"
@@ -209,7 +219,7 @@ def build_status(rows, receiver, now=None):
 
     rows: store.site_rows(). receiver: {"connected": bool, "host", "port"} (MonitorService에서).
     돌려주는 dict: now, receiver, sensors[...], counts{link 상태별, alarm 상태별, state(하나의 상태)별}.
-    sensors는 나쁜 상태부터(경보 → 끊김 → 주의 → 정상 → 대기), 같은 상태 안에서는 원래 순서.
+    sensors는 나쁜 상태부터(위험 → 미수신 → 경보 → 지연 → 정상 → 확인 불가), 같은 상태 안에서는 원래 순서.
     """
     now = now or datetime.now()
     receiver_on = bool(receiver.get("connected"))
@@ -234,6 +244,7 @@ def build_status(rows, receiver, now=None):
             "battery_state": battery_flag,
             "link": link,
             "link_text": LINK_TEXT[link],
+            "link_group": LINK_GROUP[link],
             "interval_s": interval,
             "interval_source": source,
             "config_period": config.get("SENSING_PERIOD"),

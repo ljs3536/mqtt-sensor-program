@@ -32,6 +32,104 @@ async function saveDevice(mac, name, limit) {
   return { name: nameData.display_name, limit: limitData.value };
 }
 
+/* ---------- 센서 사진 (MAC마다 한 장, 2026-11-23) ----------
+ * 대문(센서 현황) 정보 카드 위쪽에 보인다. 서버: /api/site/sensors/{mac}/photo (routes/site.py).
+ * 휴대폰 사진은 수 MB라서 올리기 전에 브라우저에서 긴 변 PHOTO_EDGE px JPEG로 줄인다.
+ * 줄이지 못하면(브라우저가 못 읽는 형식 등) 원본을 그대로 보내고 서버가 형식·크기를 확인한다. */
+const PHOTO_EDGE = 1600;
+
+/** 이미지 파일을 긴 변 PHOTO_EDGE 이하 JPEG Blob으로 줄인다. 이미 작으면 원본 그대로. */
+async function shrinkPhoto(file) {
+  const url = URL.createObjectURL(file);
+  try {
+    const image = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("이미지를 읽지 못했습니다"));
+      img.src = url;
+    });
+    const scale = Math.min(1, PHOTO_EDGE / Math.max(image.naturalWidth, image.naturalHeight));
+    if (scale === 1 && file.size <= 1.5 * 1024 * 1024) return { blob: file, name: file.name };
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(image.naturalWidth * scale);
+    canvas.height = Math.round(image.naturalHeight * scale);
+    canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    return blob ? { blob, name: "photo.jpg" } : { blob: file, name: file.name };
+  } catch {
+    return { blob: file, name: file.name };
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** 표의 '사진' 칸: 미리보기(누르면 크게), 올리기/바꾸기, 삭제. */
+function photoCell(item) {
+  const cell = document.createElement("td");
+  cell.className = "settings-photo";
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp";
+  input.hidden = true;
+  if (item.photo) {
+    const link = document.createElement("a");
+    link.href = item.photo;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.title = "크게 보기";
+    const img = document.createElement("img");
+    img.src = item.photo;
+    img.alt = `${item.mac} 사진`;
+    img.loading = "lazy";
+    link.appendChild(img);
+    cell.appendChild(link);
+  }
+  const pick = document.createElement("button");
+  pick.type = "button";
+  pick.className = "secondary";
+  pick.textContent = item.photo ? "바꾸기" : "올리기";
+  pick.onclick = () => input.click();
+  cell.append(input, pick);
+  input.onchange = async () => {
+    const file = input.files && input.files[0];
+    if (!file) return;
+    pick.disabled = true;
+    note(`${item.mac} 사진을 올리는 중…`);
+    try {
+      const { blob, name } = await shrinkPhoto(file);
+      const form = new FormData();
+      form.append("file", blob, name);
+      const response = await fetch(`/api/site/sensors/${encodeURIComponent(item.mac)}/photo`, { method: "POST", body: form });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || "사진 올리기 실패");
+      note(`${item.mac} 사진을 저장했습니다. 센서 현황에서 그 센서를 누르면 보입니다.`);
+      await load();
+    } catch (error) {
+      note(error.message);
+      pick.disabled = false;
+    }
+  };
+  if (item.photo) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "stop";
+    remove.textContent = "삭제";
+    remove.onclick = async () => {
+      if (!confirm(`${item.mac} 사진을 지웁니다.`)) return;
+      const response = await fetch(`/api/site/sensors/${encodeURIComponent(item.mac)}/photo`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) {
+        note(data.detail || "사진 삭제 실패");
+        return;
+      }
+      note(`${item.mac} 사진을 지웠습니다.`);
+      await load();
+    };
+    cell.appendChild(remove);
+  }
+  return cell;
+}
+
 /** 장치 한 줄을 표에 넣고 저장·삭제 버튼을 서버에 연결한다. */
 function appendRow(item) {
   const tr = document.createElement("tr");
@@ -64,7 +162,7 @@ function appendRow(item) {
   deleteButton.textContent = "이름 삭제";
   deleteButton.style.marginLeft = "6px";
   actionCell.append(saveButton, deleteButton);
-  tr.append(macCell, nameCell, limitCell, packetCell, timeCell, actionCell);
+  tr.append(macCell, nameCell, limitCell, photoCell(item), packetCell, timeCell, actionCell);
 
   saveButton.onclick = async () => {
     const limit = limitValue(limitInput);
@@ -106,7 +204,7 @@ async function load() {
   if (!data.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 6;
+    td.colSpan = 7;
     td.textContent = "등록된 MAC이 없습니다.";
     tr.appendChild(td);
     deviceRows.appendChild(tr);
@@ -147,7 +245,10 @@ function showTab(name) {
   const tab = TABS.includes(name) ? name : "devices";
   document.querySelectorAll("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
   document.querySelectorAll("[data-panel]").forEach((panel) => (panel.hidden = panel.dataset.panel !== tab));
-  if (tab === "stats") loadCsvStats();
+  if (tab === "stats") {
+    loadCsvStats();
+    if (window.loadStatProfile) window.loadStatProfile();
+  }
 }
 document.querySelectorAll("[data-tab]").forEach((button) => {
   button.addEventListener("click", () => {
@@ -158,7 +259,7 @@ document.querySelectorAll("[data-tab]").forEach((button) => {
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 showTab(location.hash.slice(1));
 
-/* ---------- 통계 데이터: CSV로 일자별 통계 다시 만들기 ----------
+/* ---------- 통계 데이터: CSV로 시간별 통계 다시 만들기 ----------
  * POST /api/db/csv-stats 로 시작하면 서버가 백그라운드로 돈다. 도는 동안 1초마다 GET으로 진행을 본다.
  * 결과는 measurement를 통째로 바꾸므로 확인을 받는다. */
 let csvTimer = null;
@@ -186,7 +287,8 @@ function paintCsvStats(data, dashboard) {
     result.textContent = `실패: ${data.error}`;
   } else if (data.result) {
     const r = data.result;
-    const range = r.first_day ? ` (${r.first_day} ~ ${r.last_day})` : "";
+    const hourText = (value) => String(value || "").replace("T", " ").slice(0, 13) + "시";
+    const range = r.first_hour ? ` (${hourText(r.first_hour)} ~ ${hourText(r.last_hour)})` : "";
     const extra = [r.failed ? `계산 못 한 세트 ${r.failed}개` : "", r.duplicates ? `중복 ${r.duplicates}개 제외` : "",
       r.skipped_groups && r.skipped_groups.length ? `읽지 못한 묶음 ${r.skipped_groups.length}개` : ""].filter(Boolean).join(" · ");
     result.textContent = `${r.message}${range} · ${r.sets}세트 · ${r.seconds}초${extra ? " · " + extra : ""}`;
@@ -205,7 +307,7 @@ async function loadCsvStats() {
   if (state.running) csvTimer = setTimeout(loadCsvStats, 1000);
 }
 document.querySelector("#csvStatsRun").onclick = async () => {
-  if (!confirm("지금 통계를 모두 지우고 CSV 폴더의 데이터로 일자별 통계를 다시 만듭니다. 계속할까요?")) return;
+  if (!confirm("지금 통계를 모두 지우고 CSV 폴더의 데이터로 시간별 통계를 다시 만듭니다(통계 계산 기준의 가장 최근 버전). 계속할까요?")) return;
   const response = await fetch("/api/db/csv-stats", { method: "POST" });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {

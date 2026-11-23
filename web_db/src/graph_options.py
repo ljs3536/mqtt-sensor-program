@@ -135,6 +135,34 @@ def _window_n(value):
     return count
 
 
+def avg_window(packets, index, options):
+    """FFT 평균(Linear Averaging)·PSD에 넣을 패킷 목록과 요청 개수. (chosen, amount, note)
+
+    평균 OFF면 지금 패킷 하나. ON이면 평균 개수만큼('전체'는 파일 전체 개수) 지금 패킷부터 뒤로 모은다.
+    파일 끝이라 뒤에 패킷이 모자라면 앞쪽 패킷으로 채운다(2026-11-23 웹 보완).
+    발생기 v073은 뒤로만 모아서, 끝 번호에서는 '전체'나 16을 골라도 자기 자신 1개만 평균되어 OFF와 같아 보였다.
+    목록 맨 앞은 늘 지금 패킷이다: Fs·샘플 수·주파수 칸을 맞추는 기준이 지금 패킷이 되도록.
+    note: 앞쪽으로 채웠을 때 화면에 보일 문구(없으면 '').
+    """
+    packets = list(packets or [])
+    if not packets:
+        return [], 0, ""
+    index = max(0, min(len(packets) - 1, int(index)))
+    if not _flag(options.get("fft_avg")):
+        return [packets[index]], 1, ""
+    choice = str(options.get("fft_avg_count") or "16").strip()
+    amount = len(packets) if choice == "전체" else int(float(choice))
+    if amount < 1:
+        raise ValueError("FFT 평균 개수는 1 이상이어야 합니다")
+    forward = packets[index:index + amount]
+    start = max(0, index - (amount - len(forward)))
+    backward = packets[start:index]
+    note = ""
+    if backward:
+        note = f"파일 끝: 앞쪽 {len(backward)}개 포함 ({start + 1}~{start + len(backward) + len(forward)}번)"
+    return forward + backward, amount, note
+
+
 def decode_wave(sensor, obj):
     """sensorData HEX → 부호 있는 16비트 Count. 시간축은 n / Fs 이고 Fs는 Hz다."""
     raw_hex = "".join(str(obj.get("sensorData") or "").split())

@@ -75,22 +75,28 @@ document.querySelector("#applySrssLimit").onclick = async () => {
   srssLimit.value = data.value;
   pushView();
 };
-// START는 센서 타입 칸에서 고른 값 그대로 보낸다(수신기 V057과 같음).
-// 예전에는 누르는 순간 PIEZO 3, MEMS 4(collection)로 바꿨지만, 이제는 사용자가 고른 0~4를 존중한다.
-// collection으로 시작하려면 센서 타입에서 3 또는 4를 고른 뒤 START를 누른다.
-document.querySelector("#start").onclick = () => command("start");
-// STOP은 센서 타입 칸과 상관없이 SENSORTYPE 0을 보낸다. 보낸 뒤에는 수신기 V057처럼
-// 센서 타입 칸을 종류에 맞는 normal(PIEZO 1, MEMS 2)로 돌려놓는다.
-// (예전에는 칸을 0으로 바꾼 채 두어서, 다음 START가 다시 STOP(0)을 보냈다.)
+// 센서 타입 칸을 종류에 맞는 값으로 돌려놓는다(collection이면 PIEZO 3·MEMS 4, normal이면 1·2).
+function setSensorTypeBox(collection) {
+  if (!document.querySelector("#sensorType")) return;
+  sensorType.value = sensor.value === "PIEZO" ? (collection ? "3" : "1") : (collection ? "4" : "2");
+  syncSensorType(false);
+}
+// 수신기 V063과 같게(2026-11-23 결정):
+// - START: 센서 타입 칸과 상관없이 collection으로 시작한다(PIEZO 3, MEMS 4). 서버도 같은 값으로 바꿔 보낸다.
+//   보낸 뒤 칸도 3/4로 바꿔 지금 상태를 보이게 한다.
+// - STOP: SENSORTYPE 0 → retain 삭제 → normal(PIEZO 1, MEMS 2). 끝나면 칸을 normal로.
+// - 설정 적용: 고른 값 그대로. 0을 고르면 STOP과 같은 3단계를 밟고 칸을 normal로 돌린다.
+document.querySelector("#start").onclick = async () => {
+  if (await command("start")) setSensorTypeBox(true);
+};
 document.querySelector("#stop").onclick = async () => {
-  const sent = await command("stop");
-  if (sent && document.querySelector("#sensorType")) {
-    sensorType.value = sensor.value === "PIEZO" ? "1" : "2";
-    syncSensorType(false);
-  }
+  if (await command("stop")) setSensorTypeBox(false);
 };
 syncSensorType(false);
-document.querySelector("#apply").onclick = () => command("apply");
+document.querySelector("#apply").onclick = async () => {
+  const stopping = document.querySelector("#sensorType") && sensorType.value === "0";
+  if ((await command("apply")) && stopping) setSensorTypeBox(false);
+};
 document.querySelector("#query").onclick = () => command("query");
 document.querySelector("#device").onchange = () => { graphDevice = device.value; refresh(); };
 

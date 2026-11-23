@@ -5,6 +5,8 @@
 - floor_plan: 평면도 이미지 정보. 여러 장(층·구역마다 한 장)이고 화면은 탭으로 고른다.
   이미지 파일은 DB가 아니라 site_dir 폴더에 floor_plan_{id}{확장자}로 둔다. 탭 순서는 sort_order.
 - site_state, site_state_history: 센서별 지금 상태와 시작 시각, 상태가 바뀐 기록(site_watch.py가 1분마다 남긴다).
+- 센서 사진: DB에 넣지 않고 site_dir/sensor_photos/{MAC}{확장자} 파일 하나로 둔다(MAC마다 한 장, 2026-11-23).
+  있는지 없는지는 폴더를 보고 안다. 대문 카드 위쪽에 보인다.
 - sensor_placement: MAC이 어느 평면도의 어디(x, y)에 있는지. x·y는 이미지 폭·높이에 대한
   비율(0~1)이라 화면 크기가 달라도 같은 자리에 그려진다. MAC 하나는 평면도 한 장에만 놓는다
   (replace_placements가 지킨다. 테이블 키는 (plan_id, mac)이라 DB만으로는 막지 않는다).
@@ -16,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -24,6 +27,18 @@ from web_db.src.db_util import _iso
 # 평면도로 받을 이미지 형식. 확장자 → 브라우저에 보낼 media type.
 PLAN_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml"}
 PLAN_MAX_BYTES = 15 * 1024 * 1024
+
+# 센서 사진으로 받을 형식(SVG는 받지 않는다: 사진이 아니고 스크립트를 담을 수 있다).
+# 확장자 → (media type, 파일 첫 바이트 확인 함수). 확장자만 바꾼 다른 파일(HTML 등)은 거른다.
+PHOTO_TYPES = {
+    ".png": ("image/png", lambda d: d.startswith(bytes.fromhex("89504e470d0a1a0a"))),
+    ".jpg": ("image/jpeg", lambda d: d.startswith(bytes.fromhex("ffd8ff"))),
+    ".jpeg": ("image/jpeg", lambda d: d.startswith(bytes.fromhex("ffd8ff"))),
+    ".webp": ("image/webp", lambda d: d[:4] == b"RIFF" and d[8:12] == b"WEBP"),
+}
+PHOTO_MAX_BYTES = 15 * 1024 * 1024
+# 사진 파일 이름에 쓰는 MAC. 경로 문자(/ \ ..)가 들어가지 못하게 영문·숫자·_-만 받는다.
+_PHOTO_KEY = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
 
 
 class SiteMixin:
@@ -193,6 +208,84 @@ class SiteMixin:
             return None
         return path, PLAN_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
+    # ---------- 센서 사진 (MAC마다 한 장) ----------
+    @property
+    def photo_dir(self):
+        """센서 사진 폴더. 평면도 이미지 옆 site_files/sensor_photos."""
+        path = self.site_dir / "sensor_photos"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @staticmethod
+    def _photo_key(mac):
+        """사진 파일 이름에 쓸 MAC(대문자). 영문·숫자·_-가 아니면 ValueError(경로 조작 막기)."""
+        key = str(mac or "").strip().upper()
+        if not _PHOTO_KEY.match(key):
+            raise ValueError("MAC 형식이 맞지 않습니다")
+        return key
+
+    def sensor_photo_file(self, mac):
+        """(파일 경로, media type). 사진이 없거나 MAC 형식이 틀리면 None."""
+        try:
+            key = self._photo_key(mac)
+        except ValueError:
+            return None
+        for suffix, (media, _check) in PHOTO_TYPES.items():
+            path = self.photo_dir / f"{key}{suffix}"
+            if path.exists():
+                return path, media
+        return None
+
+    def sensor_photos(self):
+        """{MAC: 버전}. 버전은 파일 수정 시각(정수)이라 화면이 주소 끝 ?v=로 캐시를 바꾼다.
+
+        대문 상태 API가 15초마다 부르므로 폴더 목록 한 번만 읽는다(파일을 열지 않는다).
+        """
+        result = {}
+        for path in self.photo_dir.iterdir():
+            if path.suffix.lower() in PHOTO_TYPES and _PHOTO_KEY.match(path.stem):
+                result[path.stem.upper()] = int(path.stat().st_mtime)
+        return result
+
+    def save_sensor_photo(self, mac, filename, data):
+        """그 MAC의 사진을 저장(있으면 바꾸기)하고 버전을 돌려준다. 형식·크기가 틀리면 ValueError.
+
+        filename은 확장자 확인에만 쓰고, 저장 이름은 {MAC}{확장자}다. 확장자가 다른 옛 사진은 지운다.
+        """
+        key = self._photo_key(mac)
+        suffix = Path(str(filename or "")).suffix.lower()
+        if suffix not in PHOTO_TYPES:
+            raise ValueError("사진은 PNG, JPG, WEBP만 올릴 수 있습니다")
+        if not data:
+            raise ValueError("빈 파일입니다")
+        if len(data) > PHOTO_MAX_BYTES:
+            raise ValueError("사진은 15MB 이하여야 합니다")
+        if not PHOTO_TYPES[suffix][1](data):
+            raise ValueError("이미지 파일이 아닙니다(내용이 확장자와 다릅니다)")
+        if suffix == ".jpeg":
+            suffix = ".jpg"
+        target = self.photo_dir / f"{key}{suffix}"
+        # 임시 파일에 다 쓴 뒤 바꿔 넣는다(쓰는 도중 화면이 반쪽 파일을 읽지 않게).
+        temp = target.with_suffix(suffix + ".part")
+        temp.write_bytes(data)
+        temp.replace(target)
+        # 저장 확장자는 .png/.jpg/.webp 셋 중 하나(.jpeg는 .jpg로 바꿨다). 나머지 이름의 옛 사진은 지운다.
+        for other in PHOTO_TYPES:
+            if other != suffix:
+                (self.photo_dir / f"{key}{other}").unlink(missing_ok=True)
+        return int(target.stat().st_mtime)
+
+    def delete_sensor_photo(self, mac):
+        """그 MAC의 사진을 지운다. 지운 것이 있으면 True."""
+        key = self._photo_key(mac)
+        removed = False
+        for suffix in PHOTO_TYPES:
+            path = self.photo_dir / f"{key}{suffix}"
+            if path.exists():
+                path.unlink()
+                removed = True
+        return removed
+
     # ---------- 센서 위치 ----------
     def placements(self):
         """모든 평면도의 센서 위치 [{plan_id, mac, x, y}]. MAC 하나는 평면도 한 장에만 있다."""
@@ -303,10 +396,10 @@ class SiteMixin:
         return [dict(row) for row in rows]
 
     def unacked_problems(self):
-        """확인 안 한 문제 알림 수(경보·끊김·주의로 바뀐 기록). 대문 '최근 알림' 탭 배지."""
+        """확인 안 한 문제 알림 수(위험·미수신·경보·지연으로 바뀐 기록). 대문 '최근 알림' 탭 배지."""
         with self.lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) FROM site_state_history WHERE acked_at='' AND state IN ('alarm','lost','warn')"
+                "SELECT COUNT(*) FROM site_state_history WHERE acked_at='' AND state IN ('alarm','lost','warn','late')"
             ).fetchone()
         return int(row[0])
 
@@ -341,7 +434,8 @@ class SiteMixin:
         - sensor_config: 마지막 설정 JSON(웹이 보낸 것 + 브로커 retain으로 받은 것)
         - measurement(ADXL): **가장 최근 통계 한 줄**의 SRSS·세트 수·시각(2026-11-19 결정).
           전체 평균으로 판정하면 지난 문제가 오래 남고 새 문제는 평균에 묻히므로 최근 줄 하나로 판정한다.
-          CSV 일자별 통계면 가장 최근 하루, 하루 통계면 가장 최근 하루 구간이다.
+          2026-11-23부터 통계는 한 시간 한 줄이라 가장 최근 한 시간(그 시간 세트들의 평균)이다.
+          지금 통계 기준 버전(stat_profile)의 줄만 본다(store_query._active_profile_id).
         - packet: 최근 패킷 120개의 (수신 시각, 종류, 축)(연결 판정용 수신 간격). 측정으로 묶는 일은 site_status가 한다.
         """
         with self.lock:
@@ -355,12 +449,13 @@ class SiteMixin:
                 LEFT JOIN sensor_config c ON c.mac=d.mac
                 LEFT JOIN measurement m ON m.id = (
                     SELECT id FROM measurement
-                    WHERE mac=d.mac AND sensor_type='ADXL'
+                    WHERE mac=d.mac AND sensor_type='ADXL' AND COALESCE(profile_id, 0)=?
                     ORDER BY last_at DESC, id DESC LIMIT 1
                 )
                 WHERE d.mac IS NOT NULL AND d.mac<>''
                 ORDER BY d.created_at, d.mac
-                """
+                """,
+                (self._active_profile_id(),),
             ).fetchall()
             result = []
             for row in devices:

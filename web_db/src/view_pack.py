@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 
@@ -14,8 +16,31 @@ def _clean(values):
 
 
 def _rounded(values):
-    """화면으로 보낼 값을 소수 6자리로 줄인다."""
-    return [round(float(value), 6) for value in values]
+    """화면으로 보낼 Y값을 줄인다: 소수 6자리와 유효숫자 7자리 중 더 자세한 쪽.
+
+    목적은 JSON 크기(브라우저로 보내는 글자 수)를 줄이는 것이다. 화면 속도와는 거의 관계없다.
+    예전에는 소수 6자리 고정이라 0.0000005보다 작은 값(PSD (g)²/Hz 등)이 0이 됐다
+    (2026-11-23 확인: PSD 257점 중 10점이 0, Y 로그 눈금에서 점이 빠짐). 이제 1.556919e-07처럼 남는다.
+    큰 값은 지금처럼 소수 6자리까지(41.849123).
+    """
+    out = []
+    for value in values:
+        value = float(value)
+        if value == 0.0:
+            out.append(0.0)
+            continue
+        digits = max(6, 6 - int(math.floor(math.log10(abs(value)))))
+        out.append(round(value, digits))
+    return out
+
+
+def _rounded_x(values):
+    """화면으로 보낼 X값(시간 ms, 주파수 kHz/Hz): 유효숫자 12자리.
+
+    X는 점 위치라서 반올림하면 툴팁·고정 커서에 실제 값이 안 보인다(0.012890625 kHz가 0.012891).
+    12자리는 부동소수 꼬리(0.012890625000000001)만 지운다.
+    """
+    return [float(f"{float(value):.12g}") for value in values]
 
 
 def _envelope_index(values, limit=16384):
@@ -41,12 +66,12 @@ def _envelope_index(values, limit=16384):
     return np.asarray(chosen, dtype=int)
 
 
-def _take(values, index):
-    """고른 인덱스의 값을 화면용 소수로 꺼낸다."""
+def _take(values, index, x_axis=False):
+    """고른 인덱스의 값을 화면용 소수로 꺼낸다. x_axis면 X 규칙(_rounded_x)."""
     data = _clean(values)
     if data.size == 0:
         return []
-    return _rounded(data[index])
+    return _rounded_x(data[index]) if x_axis else _rounded(data[index])
 
 
 def _pack_pair(x_values, y_values):
@@ -57,7 +82,7 @@ def _pack_pair(x_values, y_values):
     if count == 0:
         return [], []
     index = _envelope_index(y_data[:count])
-    return _take(x_data[:count], index), _take(y_data[:count], index)
+    return _take(x_data[:count], index, x_axis=True), _take(y_data[:count], index)
 
 
 def _pack_curves(curves):

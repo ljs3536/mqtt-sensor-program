@@ -27,8 +27,21 @@
       <label>세트 수<input id="historyCount" class="w-num" placeholder="끝까지" inputmode="numeric" /></label>
       <button type="button" id="historyRun">다시 계산</button>
       <button type="button" class="secondary" id="historyReset">그래프 전체 보기</button>
+      <!-- 발생기 v073: 같은 범위·설정의 계산 결과를 CSV 4개 + JSON(ZIP)으로 내려받는다(analysis_export.py). -->
+      <button type="button" id="historyExport" title="시작 세트·세트 수 범위를 지금 설정으로 계산해 ZIP으로 저장">분석 데이터 저장 (CSV·ZIP)</button>
       <span id="historyNote" class="hint"></span>
     </div>
+    <!-- 발생기 v073 축별 허용치: 화면 표시 전용. 장치 SRSS 한계(설정 화면)를 바꾸지 않는다. 값은 브라우저에 기억. -->
+    <fieldset class="history-axis-limits">
+      <legend>축별 허용치 (mm/s RMS) · 체크한 한계값만 그래프에 표시</legend>
+      <label>X 한계값<input id="historyLimitX" class="w-num" inputmode="decimal" /></label>
+      <label class="check"><input type="checkbox" id="historyShowX" /><span>표시</span></label>
+      <label>Y 한계값<input id="historyLimitY" class="w-num" inputmode="decimal" /></label>
+      <label class="check"><input type="checkbox" id="historyShowY" /><span>표시</span></label>
+      <label>Z 한계값<input id="historyLimitZ" class="w-num" inputmode="decimal" /></label>
+      <label class="check"><input type="checkbox" id="historyShowZ" /><span>표시</span></label>
+      <span class="hint">기본: 모두 숨김 | SRSS 한계값과 독립</span>
+    </fieldset>
     <p class="field-note history-help">
       세트마다 PSD를 따로 구해(세트끼리 평균하지 않음) vRMS = √(Σ Pv×Δf), SRSS = √(X²+Y²+Z²).
       PSD 구간 N·Overlap·목표 구간과 MEMS 창·필터·보정은 서랍 값을 씁니다. 표의 줄을 누르면 그 세트로 이동합니다.

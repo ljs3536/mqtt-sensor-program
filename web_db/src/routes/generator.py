@@ -1,9 +1,14 @@
 """/api/generator. 파일·CSV를 열고 MQTT로 다시 보낸다."""
 
+import json
+import os
 import tempfile
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 
 from web_db.src.runtime import replay
 
@@ -115,6 +120,33 @@ async def generator_velocity_history(body: dict):
         return replay.velocity_history(body.get("start"), body.get("count"), body.get("options"))
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/generator/velocity-export")
+def generator_velocity_export(body: dict):
+    """분석 데이터 저장(발생기 v073). 속도 RMS 시간 이력과 같은 범위·설정의 CSV 4개 + JSON을 ZIP으로 내려준다.
+
+    본문: velocity-history와 같다 {"start", "count", "options"}.
+    응답: ADXL_analysis_{시작}_{끝}.zip. 헤더 X-Export-Summary에 저장/제외 세트 수(JSON, URL 인코딩).
+    def(스레드 풀)다: 세트가 많으면 몇 초 걸리므로 다른 요청을 막지 않게 한다.
+    ZIP은 임시 파일에 쓰고, 보낸 뒤 지운다(BackgroundTask).
+    """
+    handle, path = tempfile.mkstemp(prefix="adxl_analysis_", suffix=".zip")
+    os.close(handle)
+    try:
+        result = replay.velocity_export(path, body.get("start"), body.get("count"), body.get("options"))
+    except Exception as exc:
+        Path(path).unlink(missing_ok=True)
+        raise HTTPException(400, str(exc)) from exc
+    name = f"ADXL_analysis_{result['start']}_{result['end']}.zip"
+    summary = {"good": result["good"], "requested": result["requested"], "skipped": len(result["skipped"])}
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=name,
+        headers={"X-Export-Summary": quote(json.dumps(summary))},
+        background=BackgroundTask(lambda: Path(path).unlink(missing_ok=True)),
+    )
 
 
 @router.post("/api/generator/test")

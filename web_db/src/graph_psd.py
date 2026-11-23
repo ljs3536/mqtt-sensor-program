@@ -37,6 +37,7 @@ from web_db.src.graph_options import (
     _flag,
     _merge,
     _num,
+    avg_window,
     decode_wave,
 )
 
@@ -171,7 +172,7 @@ def _rms(freq, density):
 def packet_psd(sensor, packets, index, options, device=""):
     """선택 패킷부터 고른 범위의 Welch PSD 곡선과 요약. v070 _plot_packet_psd와 같은 결과.
 
-    패킷 범위: 'FFT 평균 적용'이 켜져 있으면 평균 개수(전체 가능)만큼, 꺼져 있으면 선택 패킷 하나.
+    패킷 범위: 'FFT 평균 (Linear Averaging)'이 켜져 있으면 평균 개수(전체 가능)만큼, 꺼져 있으면 선택 패킷 하나.
       (v070도 PSD 모드에서는 Linear Averaging 체크를 '범위'로만 쓰고 FFT 평균은 하지 않는다.)
     목표 구간: 축마다 쓴 구간 수가 target이 되면 그 축은 더 읽지 않는다.
     Fs·샘플 수가 선택 패킷과 다른 패킷은 건너뛴다(주파수 칸이 달라 평균할 수 없음).
@@ -184,14 +185,8 @@ def packet_psd(sensor, packets, index, options, device=""):
     - psd: 화면 'PSD 결과' 칸에 넣을 SRSS/한계값/판정/단계 문구
     """
     settings = psd_settings(options)
-    choice = str(options.get("fft_avg_count") or "16").strip()
-    if _flag(options.get("fft_avg")):
-        amount = (len(packets) - index) if choice == "전체" else int(float(choice))
-    else:
-        amount = 1
-    if amount < 1:
-        raise ValueError("FFT 평균 개수는 1 이상이어야 합니다")
-    chosen = list(packets[index:index + amount])
+    # FFT 평균과 같은 패킷 범위: 지금 패킷부터 뒤로, 파일 끝이면 앞쪽으로 채운다(graph_options.avg_window).
+    chosen, amount, fill_note = avg_window(packets, index, options)
     if not chosen:
         raise ValueError("PSD를 계산할 패킷이 없습니다")
     axes = ("PIEZO",) if sensor == "PIEZO" else ("X", "Y", "Z")
@@ -298,6 +293,7 @@ def packet_psd(sensor, packets, index, options, device=""):
         + f" | 선택 {len(chosen)}/{amount} 패킷 | Overlap={settings['overlap']:g}% | 목표={settings['target_text']}구간"
         + f" | RMS: {rms_text}"
         + (" | 목표 미달(파일 구간 부족)" if short else "")
+        + (f" | {fill_note}" if fill_note else "")
     )
     if unit == "mm/s":
         formula = "PSD (속도): Pa[g²/Hz] → Pv[(mm/s)²/Hz] = Pa × (9806.65/(2πf))², f>0 → vRMS[mm/s] = √(Σ Pv×Δf)"
@@ -322,7 +318,7 @@ def packet_psd(sensor, packets, index, options, device=""):
         "avg_status": status,
         "psd_formula": formula,
         "psd": dict(summary, on=True, axis_rms=axis_rms, unit=unit, steps=steps, title=title,
-                    empty=not fft),
+                    empty=not fft, segments=dict(segments), target=target),
     }
 
 

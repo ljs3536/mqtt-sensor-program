@@ -121,7 +121,9 @@ async function command(action) {
   // STOP은 MAC마다 3단계(STOP → retain 삭제 → normal)를 보내고 단계마다 PUBACK을 기다린다(최대 10초씩).
   const buttons = ["#start", "#stop", "#apply", "#query"].map((id) => document.querySelector(id)).filter(Boolean);
   buttons.forEach((button) => (button.disabled = true));
-  if (action === "stop") preview.textContent = "STOP 3단계 전송 중(STOP → retain 삭제 → normal, 단계마다 PUBACK 대기)…";
+  // 설정 적용에서 센서 타입 0을 고르면 서버가 STOP 3단계로 보낸다(수신기 V063).
+  const stopping = action === "stop" || (action === "apply" && document.querySelector("#sensorType") && sensorType.value === "0");
+  if (stopping) preview.textContent = "STOP 3단계 전송 중(STOP → retain 삭제 → normal, 단계마다 PUBACK 대기)…";
   const { response, data } = await postJson("/api/monitor/command", {
     action,
     macs,

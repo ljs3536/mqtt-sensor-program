@@ -1,12 +1,13 @@
-"""/api/db. SQLite 조회와 하루 한 번 통계 스케줄러.
+"""/api/db. SQLite 조회와 매시간 통계 스케줄러(2026-11-23 전에는 하루 한 번).
 
-통계 계산은 화면에서 시키지 않는다(최신화 버튼·API 없음, 2026-11-18). 스케줄러와
-명령줄 도구(import_csv)만 store.update_statistics를 부른다.
+통계 최신화는 화면에서 시키지 않는다(2026-11-18). 매시간 스케줄러와 명령줄 도구(import_csv)만
+store.update_statistics를 부른다. 통계는 MAC마다 한 시간 한 줄이고 계산 기준은 DB stat_profile 버전이다.
 
-예외: 설정 화면 '통계 데이터' 탭의 "CSV로 일자별 통계 다시 만들기"(관리자용).
-- POST /api/db/csv-stats  백그라운드로 시작(이미 돌고 있으면 409)
-- GET  /api/db/csv-stats  진행 상황과 마지막 결과
-data_csv_web 전체로 measurement를 일자별로 다시 만든다(csv_stats.py). 모든 사람이 같은 결과를 본다.
+설정 화면 '통계 데이터' 탭(관리자용, 모든 사람이 같은 결과를 본다)
+- GET  /api/db/stat-profile   기준 버전 목록·지금 버전·그래프 설정 파일 값·재계산 진행
+- POST /api/db/stat-profile   새 기준 버전 저장 + 그 버전으로 재계산 시작(돌고 있으면 409)
+- POST /api/db/stat-rebuild   지금(또는 가장 최근) 버전으로 재계산 시작
+- GET/POST /api/db/csv-stats  data_csv_web 전체로 시간별 통계 다시 만들기(csv_stats.py)
 """
 
 import threading
@@ -16,13 +17,24 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from web_db.src import core as gen
+from web_db.src import stat_profile as sp
 from web_db.src.csv_stats import CsvStatsJob, find_groups
 from web_db.src.grouping import group_adxl, packet_to_template
 from web_db.src.paths import DATA_CSV
 from web_db.src.runtime import replay, store
 
+from web_db.src.stats_job import StatRebuildJob
+
 router = APIRouter()
 csv_job = CsvStatsJob(store)
+rebuild_job = StatRebuildJob(store)
+
+
+class StatProfileBody(BaseModel):
+    """통계 기준 저장 요청. settings 모양은 stat_profile.py 설명."""
+    settings: dict
+    note: str = ""
 
 
 class DbLoad(BaseModel):
@@ -74,36 +86,47 @@ def _load_items(mac, sensor, mode="recent", limit=50, start="", end=""):
     return [packet_to_template(row) for row in rows]
 
 
-def _daily_stats():
-    """날짜가 바뀌었고 오늘 통계가 없으면 한 번 최신화한다.
+def _hourly_stats():
+    """매시간 한 번 통계를 최신화한다(2026-11-23, 전에는 하루 한 번).
 
-    10분마다 깨어나 stat_meta의 마지막 최신화 날짜를 본다. 오늘보다 이전이면 최신화한다.
-    그래서 자정 뒤 최대 10분 안에 하루 한 번 돈다. 서버가 꺼져 있던 날은 건너뛰고,
-    다시 켜진 뒤 첫 확인 때 그동안 쌓인 패킷을 한 구간으로 넣는다.
+    1분마다 깨어나 stat_meta의 마지막 계산 시각을 본다. 그 '시'가 지금 시보다 이전이면 최신화한다.
+    그래서 매시 정각 뒤 1분 안에 돈다. 서버가 꺼져 있던 동안 쌓인 패킷은 켜진 뒤 첫 확인 때
+    세트 시각에 맞는 시간 줄로 들어간다(한 덩어리로 뭉치지 않는다).
+    재계산·CSV 통계가 돌고 있으면 stats_lock에서 기다렸다가 이어서 한다.
     예외는 삼키고 다음 확인을 기다린다(스레드가 죽지 않게).
     """
     while True:
-        time.sleep(600)
+        time.sleep(60)
         try:
-            last = store.stats_updated_at()
-            today = datetime.now().date().isoformat()
-            if last is None or str(last)[:10] < today:
+            last = str(store.stats_updated_at() or "")
+            hour = datetime.now().strftime("%Y-%m-%dT%H")
+            if last.replace(" ", "T")[:13] < hour:
                 store.update_statistics()
         except Exception:
             continue
 
 
-_daily_thread = None
+_hourly_thread = None
 
 
 def start_daily_stats():
-    """하루 통계 스레드를 프로세스에 하나만 켠다. 두 번 불려도 새로 만들지 않는다."""
-    global _daily_thread
-    if _daily_thread is not None and _daily_thread.is_alive():
-        return _daily_thread
-    _daily_thread = threading.Thread(target=_daily_stats, name="daily-stats", daemon=True)
-    _daily_thread.start()
-    return _daily_thread
+    """매시간 통계 스레드를 프로세스에 하나만 켠다(함수 이름은 예전 그대로, server.py가 부른다).
+
+    시작할 때 통계 기준 버전이 없으면 첫 버전을 만들고, 지금 버전이 없으면(하루 통계에서 업그레이드한 직후)
+    그 버전으로 packet 전체 재계산을 백그라운드로 시작한다. 끝날 때까지 화면은 옛 하루 통계를 보인다.
+    """
+    global _hourly_thread
+    if _hourly_thread is not None and _hourly_thread.is_alive():
+        return _hourly_thread
+    try:
+        latest = store.ensure_stat_profile()
+        if not store.stat_profiles()["active"]:
+            rebuild_job.start(latest)
+    except Exception:
+        pass  # DB를 다른 프로그램이 잡고 있어도 서버는 뜬다. 다음 시작 때 다시 시도한다.
+    _hourly_thread = threading.Thread(target=_hourly_stats, name="hourly-stats", daemon=True)
+    _hourly_thread.start()
+    return _hourly_thread
 
 
 @router.get("/api/db/dashboard")
@@ -114,8 +137,13 @@ def db_dashboard():
 
 @router.get("/api/db/devices")
 def db_devices():
-    """저장된 MAC 목록."""
-    return store.devices()
+    """저장된 MAC 목록. 설정 '장치' 표의 사진 칸을 위해 photo(주소 또는 "")를 붙인다."""
+    items = store.devices()
+    photos = store.sensor_photos()
+    for item in items:
+        version = photos.get(str(item.get("mac") or "").upper())
+        item["photo"] = f"/api/site/sensors/{item['mac']}/photo?v={version}" if version else ""
+    return items
 
 
 @router.get("/api/db/stats")
@@ -179,13 +207,54 @@ def db_clear_device_name(mac: str):
 
 @router.get("/api/db/csv-stats")
 def csv_stats_state():
-    """CSV 일자별 통계 작업 상태와, 지금 data_csv_web에서 찾은 X/Y/Z CSV 묶음 수(버튼 옆 안내용)."""
+    """CSV 시간별 통계 작업 상태와, 지금 data_csv_web에서 찾은 X/Y/Z CSV 묶음 수(버튼 옆 안내용)."""
     return dict(csv_job.state(), folder=str(DATA_CSV), groups_found=len(find_groups(DATA_CSV)))
 
 
 @router.post("/api/db/csv-stats")
 def csv_stats_start():
-    """data_csv_web 전체로 일자별 통계를 다시 만든다. 백그라운드로 돌고 GET으로 진행을 본다."""
+    """data_csv_web 전체로 시간별 통계를 다시 만든다. 백그라운드로 돌고 GET으로 진행을 본다."""
+    if rebuild_job.state()["running"]:
+        raise HTTPException(409, "통계를 다시 계산하는 중입니다. 끝난 뒤 하세요.")
     if not csv_job.start(DATA_CSV):
         raise HTTPException(409, "이미 통계를 만드는 중입니다")
     return csv_job.state()
+
+
+# ---------- 통계 계산 기준(버전) ----------
+def _file_settings():
+    """그래프가 쓰는 설정 파일 값(g/LSB, MEMS 보정). 설정 화면 '그래프 설정 파일 값 가져오기'용."""
+    return {"g_per_lsb": gen.read_mems_g_per_lsb(), "correction": gen.load_mems_correction()}
+
+
+@router.get("/api/db/stat-profile")
+def stat_profile_state():
+    """기준 버전 목록(최근 50), 지금·최근 버전 id, 기본값, 그래프 설정 파일 값, 재계산 진행."""
+    data = store.stat_profiles()
+    data.update(defaults=sp.default_settings(), files=_file_settings(), job=rebuild_job.state(),
+                windows=list(gen.FFT_WINDOWS), segments=list(sp.PSD_SEGMENTS))
+    return data
+
+
+@router.post("/api/db/stat-profile")
+def stat_profile_save(body: StatProfileBody):
+    """새 기준 버전을 저장하고 그 버전으로 재계산을 시작한다. 끝나면 그 버전이 지금 버전이 된다."""
+    if rebuild_job.state()["running"] or csv_job.state()["running"]:
+        raise HTTPException(409, "통계를 다시 계산하는 중입니다. 끝난 뒤 저장하세요.")
+    try:
+        profile_id = store.add_stat_profile(body.settings, body.note)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    rebuild_job.start(profile_id)
+    return stat_profile_state()
+
+
+@router.post("/api/db/stat-rebuild")
+def stat_rebuild():
+    """지금 버전(없으면 가장 최근 버전)으로 packet 전체를 다시 계산한다."""
+    if rebuild_job.state()["running"] or csv_job.state()["running"]:
+        raise HTTPException(409, "이미 통계를 만드는 중입니다")
+    data = store.stat_profiles()
+    profile_id = data["active"] or data["latest"] or store.ensure_stat_profile()
+    rebuild_job.start(profile_id)
+    return stat_profile_state()
