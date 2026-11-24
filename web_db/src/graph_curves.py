@@ -222,19 +222,32 @@ def _piezo_curves(packet, averaged, options):
         detail = f"K=1000×{vmax:g}/{amax:g}={scale:.6g} mV/Count | RAW=(C−mean)×K | FFT=Count Peak×K"
     elif unit == "g RMS":
         # RAW g = (Count−평균) × K / 감도. FFT g RMS = Count Peak × K / (감도 × √2).
-        wave, wave_label = filtered * scale / sens, "g (instantaneous AC)"
-        spectrum, fft_label = peak * scale / sens / np.sqrt(2.0), "g RMS / bin"
+        # 축 이름(2026-11-24): 예전 'g (instantaneous AC)' / 'g RMS / bin' → 'PIEZO g' / 'g RMS'. 값과 식은 그대로.
+        wave, wave_label = filtered * scale / sens, "PIEZO g"
+        spectrum, fft_label = peak * scale / sens / np.sqrt(2.0), "g RMS"
         total = float(np.std(raw * scale / sens))
         detail = f"전체 AC g RMS={total:.6g} | RAW=(C−mean)×K/감도 | FFT=Count Peak×K/(감도×√2)"
+    elif unit.startswith("자동"):
+        # 자동 가속도(2026-11-24): MEMS '자동 가속도 (g RMS)'와 같은 규칙. 값은 g RMS 식 그대로이고,
+        # 최댓값이 1 미만이면 mg(×1000), 0.001 미만이면 µg(×1e6)로 눈금만 바꾼다(_scaled_unit). RAW·FFT 따로 고른다.
+        wave_g = filtered * scale / sens
+        spectrum_g = peak * scale / sens / np.sqrt(2.0)
+        raw_factor, raw_unit = _scaled_unit([wave_g], "")
+        fft_factor, fft_label = _scaled_unit([spectrum_g[1:]], " RMS")
+        wave, wave_label = wave_g * raw_factor, f"PIEZO {raw_unit}"
+        spectrum = spectrum_g * fft_factor
+        total = float(np.std(raw * scale / sens))
+        detail = (f"전체 AC g RMS={total:.6g} | RAW=(C−mean)×K/감도 ×{raw_factor:g} [{raw_unit}] | "
+                  f"FFT=Count Peak×K/(감도×√2) ×{fft_factor:g} [{fft_label}] | 자동: 최댓값 1 미만 mg, 0.001 미만 µg")
     else:
         wave = filtered * scale / sens
-        wave_label = "g (instantaneous AC)"
+        wave_label = "PIEZO g"
         grms = peak * scale / sens / np.sqrt(2.0)
         spectrum = np.zeros_like(grms)
         positive = freq > 0
         # mm/s RMS = g RMS × 9806.65 / (2πf), f > 0. RAW Y는 g와 같다.
         spectrum[positive] = grms[positive] * 9806.65 / (2 * np.pi * freq[positive])
-        fft_label = "mm/s RMS / bin"
+        fft_label = "mm/s RMS"
         detail = "FFT velocity = g RMS × 9806.65 / (2πf), f>0"
     time_ms = np.arange(raw.size, dtype=np.float64) / fs * 1000.0
     peak_note = ""
@@ -449,9 +462,10 @@ def _adxl_curves(packet, averaged, options, packets=None, index=0):
             "Count Peak": (1.0, "Count Peak"),
             "g Peak": (1.0 / lsb, "g Peak"),
             # g RMS = Count Peak × (g/LSB) / √2.
-            "g RMS": (1.0 / lsb / np.sqrt(2.0), "g RMS / bin"),
+            # 축 이름에서 ' / bin'을 뺐다(2026-11-24). 값은 그대로 한 칸(bin)의 성분 RMS다.
+            "g RMS": (1.0 / lsb / np.sqrt(2.0), "g RMS"),
             # 눈금은 g RMS까지 맞춘 뒤, 아래에서 주파수별로 mm/s로 바꾼다.
-            "mm/s RMS": (1.0 / lsb / np.sqrt(2.0), "mm/s RMS / bin"),
+            "mm/s RMS": (1.0 / lsb / np.sqrt(2.0), "mm/s RMS"),
         }[fft_mode]
     # Count Peak는 물리 단위가 아니므로 S(f)로 나누지 않는다. f / 1.014는 그대로 적용된다.
     physical = fft_mode != "Count Peak"

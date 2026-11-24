@@ -14,14 +14,6 @@ def _iso(value=None):
     return datetime.now().isoformat(timespec="milliseconds")
 
 
-def _samples_text(values, kind):
-    """샘플 배열을 packet.decoded_samples 칸에 넣을 문자열로 만든다."""
-    data = np.asarray(values, dtype=np.float64).reshape(-1)
-    if kind == "ULTRASONIC":
-        return ",".join(format(float(item), ".9g") for item in data)
-    return ",".join(str(int(item)) for item in data)
-
-
 def _float(value):
     """숫자가 아니면 None."""
     try:

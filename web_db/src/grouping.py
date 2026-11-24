@@ -45,18 +45,22 @@ def assign_set(conn, mac, seq, sensor_type, axis):
       아니면 +1. 축이 빠져도 번호만 넘어가고 패킷은 저장된다.
     - PIEZO·초음파: 패킷 하나가 측정 하나라 매번 +1.
     set_key는 `{종류}|{MAC}|{set_no}`이고, 분석 화면이 세트 단위로 고를 때 쓴다.
+    직전 패킷·최대 번호는 실시간 수신 줄(source='')에서만 찾는다(2026-11-24). 'CSV 데이터 가져오기'가
+    수신 중에 넣는 옛 줄(source='csv', set_key 'CSV|…')이 더 큰 id로 끼어들어도 실시간 세트가 끊기지 않는다.
     """
     if sensor_type != "ADXL":
+        # 번호는 늘 직전+1이라 가장 큰 id 줄의 set_no가 최대다. MAX(set_no)는 set_no가 큰 HEX 칸 뒤에 있어
+        # 그 MAC의 모든 줄을 읽게 되므로(패킷이 쌓일수록 느려짐) idx_packet_stream으로 마지막 줄 하나만 읽는다.
         row = conn.execute(
-            "SELECT COALESCE(MAX(set_no), 0) AS n FROM packet WHERE mac=? AND sensor_type=?",
+            "SELECT set_no FROM packet WHERE mac=? AND sensor_type=? AND source='' ORDER BY id DESC LIMIT 1",
             (mac, sensor_type),
         ).fetchone()
-        number = int(row["n"]) + 1
+        number = (int(row["set_no"] or 0) if row is not None else 0) + 1
         return f"{sensor_type}|{mac}|{number}", number
     latest = conn.execute(
         """
         SELECT set_no, axis, seq FROM packet
-        WHERE mac=? AND sensor_type='ADXL'
+        WHERE mac=? AND sensor_type='ADXL' AND source=''
         ORDER BY id DESC LIMIT 1
         """,
         (mac,),

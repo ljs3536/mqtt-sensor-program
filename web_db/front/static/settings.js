@@ -6,30 +6,34 @@ function note(text) {
   settingsNote.textContent = text;
 }
 
-/** SRSS 한계 입력이 0보다 큰 숫자인지 확인한다. 아니면 null. */
+/** 위험 기준(SRSS 한계) 입력이 0보다 큰 숫자인지 확인한다. 아니면 null. */
 function limitValue(input) {
   const value = Number(input.value);
   if (!Number.isFinite(value) || value <= 0) return null;
   return value;
 }
 
-/** 표시 이름과 SRSS 한계를 서버에 저장한다. */
-async function saveDevice(mac, name, limit) {
+/**
+ * 표시 이름·설치 위치와 진동 구간(양호 상한·주의 상한·위험 기준)을 서버에 저장한다. zones = {good, caution, limit}.
+ * 위치(device.location, 2026-11-24)는 이름과 같은 요청으로 보낸다. 통계 화면 이름 아래에 보인다.
+ */
+async function saveDevice(mac, name, zones, location) {
   const nameResponse = await fetch("/api/db/device-name", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mac, display_name: name }),
+    body: JSON.stringify({ mac, display_name: name, location }),
   });
   const nameData = await nameResponse.json();
   if (!nameResponse.ok) throw new Error(nameData.detail || "이름 저장 실패");
-  const limitResponse = await fetch("/api/analysis/srss-limit", {
+  // 양호·주의 상한을 둘 다 비우면 서버가 위험 기준의 ISO 비율(1.4/4.5, 2.8/4.5)로 계산한다(limits.zone_bounds).
+  const zoneResponse = await fetch("/api/db/zones", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device: mac, value: limit }),
+    body: JSON.stringify({ mac, good: zones.good, caution: zones.caution, limit: zones.limit }),
   });
-  const limitData = await limitResponse.json();
-  if (!limitResponse.ok) throw new Error(limitData.detail || "SRSS 한계 저장 실패");
-  return { name: nameData.display_name, limit: limitData.value };
+  const zoneData = await zoneResponse.json();
+  if (!zoneResponse.ok) throw new Error(zoneData.detail || "진동 구간 저장 실패");
+  return { name: nameData.display_name, location: nameData.location || "", zones: zoneData };
 }
 
 /* ---------- 센서 사진 (MAC마다 한 장, 2026-11-23) ----------
@@ -136,16 +140,71 @@ function appendRow(item) {
   const macCell = document.createElement("td");
   macCell.className = "settings-mac";
   macCell.textContent = item.mac;
+  // '표시'(2026-11-24): 끄면 이름이 있어도 센서 현황·분석·통계에서 숨긴다. 누르는 즉시 저장(수신·통계 계산은 그대로).
+  // 이름이 없으면 어차피 안 보이므로 칸을 끈다.
+  const showCell = document.createElement("td");
+  showCell.className = "settings-show";
+  const showBox = document.createElement("input");
+  showBox.type = "checkbox";
+  showBox.checked = item.visible == null ? true : !!item.visible;
+  showBox.disabled = !String(item.display_name || "").trim();
+  showBox.title = showBox.disabled ? "이름이 있어야 화면에 보입니다" : "센서 현황·분석·통계에 보이기";
+  showCell.appendChild(showBox);
+  showBox.onchange = async () => {
+    const response = await fetch("/api/db/device-visible", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mac: item.mac, visible: showBox.checked }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      showBox.checked = !showBox.checked;
+      note(data.detail || "표시 저장 실패");
+      return;
+    }
+    note(data.visible ? `${item.mac} 을 센서 현황·분석·통계에 보입니다.` : `${item.mac} 을 센서 현황·분석·통계에서 숨깁니다(수신·통계 계산은 계속).`);
+  };
   const nameCell = document.createElement("td");
   const nameInput = document.createElement("input");
   nameInput.className = "w-name";
   nameInput.value = item.display_name || "";
   nameCell.appendChild(nameInput);
+  // 설치 위치(예: '2공장 펌프 #3 모터측'). 비워도 된다.
+  const locationCell = document.createElement("td");
+  const locationInput = document.createElement("input");
+  locationInput.className = "w-location";
+  locationInput.value = item.location || "";
+  locationInput.placeholder = "설치 위치";
+  locationInput.maxLength = 100;
+  locationCell.appendChild(locationInput);
+  // 진동 구간 세 칸. 양호·주의 상한은 사람이 저장한 값(custom)일 때만 채우고, 자동이면 비운 채 자동 값을 흐리게 보인다.
+  const zones = item.zones || { good: 1.4, caution: 2.8, limit: item.limit ?? 4.5, custom: false };
+  const round = (value) => String(Math.round(Number(value) * 100) / 100);
+  const zoneInput = (value, auto, title) => {
+    const input = document.createElement("input");
+    input.className = "w-limit";
+    input.value = value;
+    input.placeholder = auto;
+    input.title = title;
+    return input;
+  };
   const limitCell = document.createElement("td");
-  const limitInput = document.createElement("input");
-  limitInput.className = "w-limit";
-  limitInput.value = item.limit == null ? "4.5" : String(item.limit);
-  limitCell.appendChild(limitInput);
+  const zoneBox = document.createElement("div");
+  zoneBox.className = "settings-zones";
+  // 흐린 안내 글자는 '비우면 쓰일 값' = 위험 기준 × ISO 비율(1.4/4.5, 2.8/4.5, 서버 limits.zone_bounds와 같음).
+  const autoGood = round((Number(zones.limit) * 1.4) / 4.5);
+  const autoCaution = round((Number(zones.limit) * 2.8) / 4.5);
+  const goodInput = zoneInput(zones.custom ? round(zones.good) : "", `자동 ${autoGood}`, "양호 상한: 이보다 작으면 양호, 이상이면 주의. 비우면 자동(위험 기준 × 1.4/4.5)");
+  const cautionInput = zoneInput(zones.custom ? round(zones.caution) : "", `자동 ${autoCaution}`, "주의 상한: 이상이면 경고. 비우면 자동(위험 기준 × 2.8/4.5)");
+  const limitInput = zoneInput(round(zones.limit), "4.5", "위험 기준(SRSS 한계): 이상이면 위험");
+  const dot = (state) => {
+    const mark = document.createElement("i");
+    mark.className = `state-${state}`;
+    mark.style.background = "var(--c)";
+    return mark;
+  };
+  zoneBox.append(dot("good"), goodInput, dot("caution"), cautionInput, dot("warn"), limitInput, dot("alarm"));
+  limitCell.appendChild(zoneBox);
   const packetCell = document.createElement("td");
   packetCell.className = "settings-meta";
   packetCell.textContent = String(item.packets || 0);
@@ -162,17 +221,25 @@ function appendRow(item) {
   deleteButton.textContent = "이름 삭제";
   deleteButton.style.marginLeft = "6px";
   actionCell.append(saveButton, deleteButton);
-  tr.append(macCell, nameCell, limitCell, photoCell(item), packetCell, timeCell, actionCell);
+  tr.append(showCell, macCell, nameCell, locationCell, limitCell, photoCell(item), packetCell, timeCell, actionCell);
 
   saveButton.onclick = async () => {
     const limit = limitValue(limitInput);
     if (limit == null) {
-      note("SRSS 한계는 0보다 큰 숫자여야 합니다.");
+      note("위험 기준은 0보다 큰 숫자여야 합니다.");
+      return;
+    }
+    const good = goodInput.value.trim();
+    const caution = cautionInput.value.trim();
+    if ((good === "") !== (caution === "")) {
+      note("양호 상한과 주의 상한은 둘 다 넣거나 둘 다 비워 주세요(비우면 자동).");
       return;
     }
     try {
-      const saved = await saveDevice(item.mac, nameInput.value.trim(), limit);
-      note(`${item.mac} 이름 '${saved.name}' , SRSS 한계 ${saved.limit} mm/s 를 저장했습니다.`);
+      const saved = await saveDevice(item.mac, nameInput.value.trim(), { good, caution, limit }, locationInput.value.trim());
+      const z = saved.zones;
+      note(`${item.mac} 이름 '${saved.name}'${saved.location ? `, 위치 '${saved.location}'` : ""}, 진동 구간 양호 < ${round(z.good)} ≤ 주의 < ${round(z.caution)} ≤ 경고 < ${round(z.limit)} ≤ 위험` +
+        `${z.custom ? "" : " (양호·주의 상한 자동)"} 을 저장했습니다.`);
       await load();
     } catch (error) {
       note(error.message);
@@ -204,7 +271,7 @@ async function load() {
   if (!data.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 7;
+    td.colSpan = 9;
     td.textContent = "등록된 MAC이 없습니다.";
     tr.appendChild(td);
     deviceRows.appendChild(tr);
@@ -221,14 +288,17 @@ document.querySelector("#addDevice").onclick = async () => {
   }
   const limit = limitValue(document.querySelector("#newLimit"));
   if (limit == null) {
-    note("SRSS 한계는 0보다 큰 숫자여야 합니다.");
+    note("위험 기준은 0보다 큰 숫자여야 합니다.");
     return;
   }
   try {
-    const saved = await saveDevice(mac, document.querySelector("#newName").value.trim(), limit);
+    // 추가할 때는 위험 기준만 받고 양호·주의 상한은 자동(ISO 비율). 표에서 따로 고칠 수 있다.
+    const saved = await saveDevice(mac, document.querySelector("#newName").value.trim(), { good: "", caution: "", limit },
+      document.querySelector("#newLocation").value.trim());
     document.querySelector("#newMac").value = "";
     document.querySelector("#newName").value = "";
-    note(`${mac} 이름 '${saved.name}' , SRSS 한계 ${saved.limit} mm/s 를 추가했습니다.`);
+    document.querySelector("#newLocation").value = "";
+    note(`${mac} 이름 '${saved.name}', 위험 기준 ${saved.zones.limit} mm/s(양호·주의 상한 자동)를 추가했습니다.`);
     await load();
   } catch (error) {
     note(error.message);
@@ -246,7 +316,7 @@ function showTab(name) {
   document.querySelectorAll("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
   document.querySelectorAll("[data-panel]").forEach((panel) => (panel.hidden = panel.dataset.panel !== tab));
   if (tab === "stats") {
-    loadCsvStats();
+    loadCsvImport();
     if (window.loadStatProfile) window.loadStatProfile();
   }
 }
@@ -259,60 +329,62 @@ document.querySelectorAll("[data-tab]").forEach((button) => {
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 showTab(location.hash.slice(1));
 
-/* ---------- 통계 데이터: CSV로 시간별 통계 다시 만들기 ----------
- * POST /api/db/csv-stats 로 시작하면 서버가 백그라운드로 돈다. 도는 동안 1초마다 GET으로 진행을 본다.
- * 결과는 measurement를 통째로 바꾸므로 확인을 받는다. */
+/* ---------- 통계 데이터: CSV 데이터 가져오기(2026-11-24, src/csv_import.py) ----------
+ * POST /api/db/csv-import 로 시작하면 서버가 백그라운드로 data_csv_web의 CSV를 packet에 넣는다.
+ * 도는 동안 1초마다 GET으로 진행(읽은 양 / 전체 CSV 크기)을 본다. 통계는 만들지 않으므로,
+ * 끝나면 위 '지금 기준으로 다시 계산'을 누르라고 안내한다. 이미 DB에 있는 패킷은 서버가 건너뛴다. */
 let csvTimer = null;
 function csvText(id, text) {
   document.querySelector(id).textContent = text;
 }
-function paintCsvStats(data, dashboard) {
-  csvText("#csvFolder", data.folder || "-");
-  csvText("#csvGroups", `${data.groups_found ?? "-"}개 (MAC별 X/Y/Z CSV 세트 파일 묶음)`);
-  if (dashboard) {
-    const items = (dashboard.items || []).filter((item) => item.set_count);
-    const sets = items.reduce((sum, item) => sum + item.set_count, 0);
-    const stamp = String(dashboard.updated_at || "").replace("T", " ").slice(0, 16);
-    csvText("#csvCurrent", items.length ? `${items.length}개 MAC · ${sets}세트 · 마지막 계산 ${stamp}` : "통계 없음");
+function paintCsvImport(data) {
+  if (data.folder) csvText("#csvFolder", data.folder);
+  if (data.found) csvText("#csvFound", `${data.found.files}개 파일 · ${data.found.folders}개 폴더 · ${data.found.mb} MB`);
+  if (data.packets) {
+    const p = data.packets;
+    const fill = Number(p.fill) || 0;  // 실측이 빈 시간을 채운 줄(2026-11-24)
+    csvText("#csvPackets", `${(p.live + p.csv + fill).toLocaleString()}개 (실시간 수신 ${p.live.toLocaleString()} · CSV에서 가져옴 ${p.csv.toLocaleString()}` +
+      `${fill ? ` · 빈 시간 채움 ${fill.toLocaleString()}` : ""})`);
   }
   const running = !!data.running;
-  document.querySelector("#csvStatsRun").disabled = running;
+  document.querySelector("#csvImportRun").disabled = running;
   csvText("#csvPhase", running ? `${data.phase}…` : "");
   const bar = document.querySelector("#csvProgress");
   bar.hidden = !running;
-  bar.firstElementChild.style.width = data.total ? `${Math.round((data.done / data.total) * 100)}%` : "5%";
+  bar.firstElementChild.style.width = data.total ? `${Math.max(2, Math.round((data.done / data.total) * 100))}%` : "2%";
   const result = document.querySelector("#csvResult");
   result.classList.toggle("error", !!data.error);
   if (data.error) {
     result.textContent = `실패: ${data.error}`;
+    result.title = "";
   } else if (data.result) {
     const r = data.result;
-    const hourText = (value) => String(value || "").replace("T", " ").slice(0, 13) + "시";
-    const range = r.first_hour ? ` (${hourText(r.first_hour)} ~ ${hourText(r.last_hour)})` : "";
-    const extra = [r.failed ? `계산 못 한 세트 ${r.failed}개` : "", r.duplicates ? `중복 ${r.duplicates}개 제외` : "",
-      r.skipped_groups && r.skipped_groups.length ? `읽지 못한 묶음 ${r.skipped_groups.length}개` : ""].filter(Boolean).join(" · ");
-    result.textContent = `${r.message}${range} · ${r.sets}세트 · ${r.seconds}초${extra ? " · " + extra : ""}`;
-    result.title = (r.skipped_groups || []).join("\n");
+    const time = (value) => String(value || "").replace("T", " ").slice(0, 16);
+    const range = r.first_at ? ` CSV 기간 ${time(r.first_at)} ~ ${time(r.last_at)}.` : "";
+    const types = Object.entries(r.by_type || {}).map(([kind, n]) => `${kind} ${n}`).join(", ");
+    const extra = [r.duplicates ? `이미 있어 건너뜀 ${r.duplicates}` : "", r.skipped ? `읽지 못한 줄 ${r.skipped}` : ""]
+      .filter(Boolean).join(" · ");
+    result.textContent = `${r.message}${range} 읽은 줄 ${r.rows}(${types}) · 넣음 ${r.saved}${extra ? " · " + extra : ""} · ${r.seconds}초`;
+    result.title = [`수신 저장이 기다린 최대 시간 약 ${r.max_lock_ms} ms(묶음 ${r.chunks}번)`, ...(r.skipped_examples || [])].join(String.fromCharCode(10));
   } else {
     result.textContent = "";
   }
 }
-async function loadCsvStats() {
-  const [state, dashboard] = await Promise.all([
-    fetch("/api/db/csv-stats").then((response) => response.json()),
-    fetch("/api/db/dashboard").then((response) => response.json()),
-  ]);
-  paintCsvStats(state, dashboard);
+async function loadCsvImport() {
+  const state = await fetch("/api/db/csv-import").then((response) => response.json());
+  paintCsvImport(state);
   clearTimeout(csvTimer);
-  if (state.running) csvTimer = setTimeout(loadCsvStats, 1000);
+  if (state.running) csvTimer = setTimeout(loadCsvImport, 1000);
+  // 방금 끝났으면 파일·패킷 수를 다시 받아 둔다(도는 동안 GET은 진행만 돌려준다).
+  else if (state.result && !state.packets) loadCsvImport();
 }
-document.querySelector("#csvStatsRun").onclick = async () => {
-  if (!confirm("지금 통계를 모두 지우고 CSV 폴더의 데이터로 시간별 통계를 다시 만듭니다(통계 계산 기준의 가장 최근 버전). 계속할까요?")) return;
-  const response = await fetch("/api/db/csv-stats", { method: "POST" });
+document.querySelector("#csvImportRun").onclick = async () => {
+  if (!confirm("CSV 폴더의 데이터를 DB에 넣습니다. 이미 있는 패킷은 건너뜁니다. 데이터가 많으면 수십 분 걸릴 수 있고, 그동안에도 수신은 계속됩니다. 계속할까요?")) return;
+  const response = await fetch("/api/db/csv-import", { method: "POST" });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     alert(data.detail || "시작하지 못했습니다");
     return;
   }
-  loadCsvStats();
+  loadCsvImport();
 };

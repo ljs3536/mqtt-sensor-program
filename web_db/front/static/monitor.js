@@ -7,6 +7,27 @@ document.querySelector("#sensor").onchange = () => {
   syncSensorType(true);
 };
 document.querySelector("#sensorType")?.addEventListener("change", () => syncSensorType(false));
+
+/*
+ * Fs + N 직접 입력(2026-11-24, 관리자·개발자 시험용). 체크하면 목록을 끄고 Fs·N 두 칸을 연다.
+ * 처음 열 때는 지금 목록에서 고른 값('3200 Hz + 8192')으로 채운다. 기억하지 않아 새로고침하면 목록으로 돌아간다.
+ * START·설정 적용·STOP(normal 복귀 설정)에 쓰인다. 값 검사는 서버가 한다(MEMS Fs는 센서 코드가 있는 값만, N 16~65536).
+ */
+function syncCustomFsn() {
+  const on = document.querySelector("#customFsn").checked;
+  const box = document.querySelector("#fsnCustom");
+  const select = document.querySelector("#profile");
+  box.hidden = !on;
+  select.disabled = on;
+  if (on) {
+    const match = /^(\d+)\s*Hz\s*\+\s*(\d+)/.exec(select.value || "");
+    const rate = document.querySelector("#customRate");
+    const count = document.querySelector("#customCount");
+    if (match && !rate.value) rate.value = match[1];
+    if (match && !count.value) count.value = match[2];
+  }
+}
+document.querySelector("#customFsn")?.addEventListener("change", syncCustomFsn);
 document.querySelector("#macs").onchange = (event) => {
   const input = event.target;
   if (!input.value) return;

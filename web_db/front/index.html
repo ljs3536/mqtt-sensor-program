@@ -10,7 +10,7 @@
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=31" />
+    <link rel="stylesheet" href="/static/style.css?v=32" />
     <link rel="stylesheet" href="/static/theme.css?v=14" />
   </head>
   <body>
@@ -87,7 +87,17 @@
               </select>
             </label>
             <label>주기(s)<input id="period" value="1" /></label>
-            <label>Fs + N<select id="profile"></select></label>
+            <div class="fsn-field">
+              <label>Fs + N<select id="profile"></select></label>
+              <!-- 직접 입력(2026-11-24): 관리자·개발자 시험용. 목록에 없는 Fs·N 조합을 보낸다. 값 검사는 서버(custom_profile). -->
+              <label class="fsn-check" title="목록에 없는 Fs·N 조합을 직접 보냅니다(개발·시험용). MEMS Fs는 25·50·100·200·400·800·1600·3200 Hz만, N은 16~65536.">
+                <input type="checkbox" id="customFsn" /> 직접 입력 (관리자·개발자)
+              </label>
+              <div class="fsn-custom" id="fsnCustom" hidden>
+                <label>Fs (Hz)<input id="customRate" inputmode="numeric" /></label>
+                <label>N<input id="customCount" inputmode="numeric" /></label>
+              </div>
+            </div>
             <label>센서 타입
               <select id="sensorType">
                 <option value="0">0</option>
@@ -162,6 +172,7 @@
                 <select id="piezoUnit">
                   <option value="Count">ADC (Count)</option>
                   <option value="mV" selected>전압 (mV)</option>
+                  <option value="자동 (g RMS)">자동 가속도 (g RMS)</option>
                   <option value="g RMS">가속도 (g RMS)</option>
                   <option value="mm/s RMS">속도 (mm/s RMS)</option>
                 </select>
@@ -437,8 +448,8 @@
     <script src="/static/graph.js?v=18"></script>
     <script src="/static/filters.js?v=1"></script>
     <script src="/static/monitor-draw.js?v=8"></script>
-    <script src="/static/monitor-api.js?v=9"></script>
-    <script src="/static/monitor.js?v=22"></script>
+    <script src="/static/monitor-api.js?v=10"></script>
+    <script src="/static/monitor.js?v=23"></script>
     <script src="/static/monitor-db.js?v=4"></script>
     <script src="/static/theme.js?v=4"></script>
   </body>

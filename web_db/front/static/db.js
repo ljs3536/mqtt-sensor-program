@@ -25,22 +25,26 @@ function describeStats(stats) {
   return `측정 ${stats.measurements} | SRSS 평균 ${srss} | RMS 평균 ${rms} | PEAK 최대 ${peak} ${stats.unit || ""}`.trim();
 }
 
-/** 저장된 MAC 목록을 선택 상자에 채운다. */
+/**
+ * 저장된 MAC 목록을 선택 상자에 채운다.
+ * 이름을 붙인 센서만(?named=true, 2026-11-24). 이름 없는 MAC은 설정 > 장치·센서 수신 모니터에서 보고 이름을 붙이면 여기 나온다.
+ */
 async function loadDbMacs() {
-  const response = await fetch("/api/db/devices");
+  const response = await fetch("/api/db/devices?named=true");
   const data = await response.json();
   const current = dbMac.value;
   dbMac.innerHTML = "";
   if (!data.length) {
-    dbMac.innerHTML = '<option value="">저장된 MAC 없음</option>';
-    dbStatus.textContent = "SQLite에 수신 기록이 없습니다.";
+    dbMac.innerHTML = '<option value="">이름 붙인 센서 없음</option>';
+    dbStatus.textContent = "이름을 붙인 센서가 없습니다. 설정 > 장치에서 이름을 지정하세요.";
     return;
   }
   data.forEach((item) => {
     const option = document.createElement("option");
     option.value = item.mac;
     // 패킷 수는 보이지 않는다. ADXL은 축마다 한 줄이라 세트 수와 맞지 않아 헷갈린다.
-    option.textContent = item.display_name ? `${item.mac} · ${item.display_name}` : item.mac;
+    // 이름을 앞에(같은 이름의 센서가 여럿일 수 있어 MAC도 붙인다).
+    option.textContent = `${item.display_name} · ${item.mac}`;
     dbMac.appendChild(option);
   });
   if ([...dbMac.options].some((option) => option.value === current))

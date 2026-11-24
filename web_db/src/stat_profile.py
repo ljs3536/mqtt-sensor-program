@@ -13,6 +13,8 @@
   filters     hpf/lpf {on, hz, order}, notch {on, hz, width}. FFT측 필터와 같은 계산(signal.spectral_filter).
   window      Welch 창 이름, beta(Kaiser용)
   psd         segment('전체' 또는 8192…128), overlap(%), target(평균 목표 구간 수)
+  piezo       PIEZO 환산 {vmax V, amax 계단, sensitivity mV/g}. 분석 화면 PIEZO 칸 기본값(3.89 / 4096 / 100)과 같다.
+              K = 1000 × vmax / amax [mV/Count], g = mV / sensitivity. (2026-11-23 추가. 옛 버전 JSON에는 없어 기본값으로 채운다)
 
 세트 하나 계산(set_stats) — 분석 ZIP(analysis_export)과 같은 graph_psd.axis_psd를 쓴다
   축마다: RAW − 평균 → 필터 → Welch PSD × (g/LSB)² → MEMS 보정 → 가속도 PSD Pa[g²/Hz]
@@ -20,6 +22,12 @@
   srss_mms = √(vX² + vY² + vZ²), srss(g) = √(ΣaRMS²) (aRMS = √(ΣPa·Δf))
   rms(g)  = √(Σ 축별 시간영역 RMS²) — 필터 출력 기준, peak(g) = 필터 출력 |g|의 최댓값
   세트의 Fs에서 쓸 수 없는 필터(차단 ≥ Fs/2)는 그 세트에서만 끄고 notes에 남긴다.
+
+PIEZO 패킷 하나 계산(piezo_stats) — 분석 화면 PIEZO PSD와 같은 axis_psd("PIEZO")
+  한 축이라 SRSS 대신 그 축의 vRMS 하나: srss_mms = vRMS(mm/s), srss = aRMS(g), x/y/z_mms는 비운다.
+  필터·창·PSD 구간은 MEMS와 같은 기준(필터 HPF 10 + LPF 1000 → 같은 10~1000Hz 속도 평가 대역).
+  Fs가 패킷마다 달라도(2560·12800·25600Hz, 샘플 수는 8192 고정) vRMS는 같은 대역의 면적이라 서로 비교·평균할 수 있다.
+  다만 Fs가 높을수록 한 패킷 길이(8192/Fs)가 짧고 Δf(=Fs/8192)가 커서, 저주파(10Hz 부근) 값이 덜 안정적이다.
 
 한 시간 한 줄(hour_bucket, merge_rows)
   세트 시각 = X/Y/Z 중 마지막 수신 시각. 그 시각의 '시'(YYYY-MM-DDTHH:00:00)가 묶음 키다.
@@ -46,6 +54,8 @@ DEFAULT_FILTERS = {
     "notch": {"on": False, "hz": 975.0, "width": 20.0},
 }
 DEFAULT_PSD = {"segment": "전체", "overlap": 50.0, "target": 30}
+# PIEZO 환산 기본값 = 분석 화면 PIEZO 칸 기본값(graph_options.default_options).
+DEFAULT_PIEZO = {"vmax": 3.89, "amax": 4096.0, "sensitivity": 100.0}
 # 통계 한 줄 평균에 들어가는 값(세트 수로 가중 평균). peak·srss_mms_max는 최댓값으로 합친다.
 MEAN_KEYS = ("rms", "srss", "srss_mms", "x_mms", "y_mms", "z_mms")
 
@@ -58,6 +68,7 @@ def default_settings():
         "filters": copy.deepcopy(DEFAULT_FILTERS),
         "window": {"name": "Blackman", "beta": 8.6},
         "psd": dict(DEFAULT_PSD),
+        "piezo": dict(DEFAULT_PIEZO),
     })
 
 
@@ -105,7 +116,15 @@ def validate(raw):
         raise ValueError(f"PSD 구간 N은 {', '.join(PSD_SEGMENTS)} 중 하나여야 합니다")
     psd["overlap"] = _number(psd.get("overlap"), "Overlap", 0, 95)
     psd["target"] = int(_number(psd.get("target"), "평균 목표 구간", 1, 100000))
+    piezo = dict(DEFAULT_PIEZO)
+    piezo.update(raw.get("piezo") if isinstance(raw.get("piezo"), dict) else {})
+    piezo = {
+        "vmax": _number(piezo.get("vmax"), "PIEZO Vmax", 0, None, True),
+        "amax": _number(piezo.get("amax"), "PIEZO Amax", 0, None, True),
+        "sensitivity": _number(piezo.get("sensitivity"), "PIEZO 감도", 0, None, True),
+    }
     return {
+        "piezo": piezo,
         "g_per_lsb": _number(raw.get("g_per_lsb", gen.read_mems_g_per_lsb()), "g/LSB", 0, 10, True),
         "correction": gen.validate_mems_correction(raw.get("correction") or gen.load_mems_correction()),
         "filters": filters,
@@ -126,6 +145,8 @@ def summary_text(settings):
     fix = [name for name, on in (("주파수", c["frequency_enabled"]), ("감도", c["sensitivity_enabled"])) if on]
     parts.append(("보정 " + "·".join(fix)) if fix else "보정 끔")
     parts.append(f"g/LSB {settings['g_per_lsb']:.6g}")
+    p = settings.get("piezo") or DEFAULT_PIEZO
+    parts.append(f"PIEZO {p['vmax']:g}V/{p['amax']:g}·{p['sensitivity']:g}mV/g")
     parts.append(f"{settings['window']['name']} · N={settings['psd']['segment']}")
     return " · ".join(parts)
 
@@ -159,6 +180,11 @@ def _options(settings, fs):
         "LPF": {"raw": False, "fft": lpf_on, "freq": f["lpf"]["hz"], "extra": f["lpf"]["order"], "auto": not lpf_on},
         "Notch": {"raw": False, "fft": notch_on, "freq": f["notch"]["hz"], "extra": f["notch"]["width"]},
     }
+    # PIEZO도 같은 필터·창(창 목록에 없는 창이면 graph_psd가 Blackman). 환산은 settings['piezo'].
+    piezo = options["piezo"]
+    piezo["filters"] = copy.deepcopy(adxl["filters"])
+    piezo["window"] = settings["window"]["name"]
+    piezo.update(settings.get("piezo") or DEFAULT_PIEZO)
     adxl["g_per_lsb"] = settings["g_per_lsb"]
     adxl["correction"] = dict(settings["correction"])
     adxl["window"] = settings["window"]["name"]
@@ -219,6 +245,48 @@ def set_stats(objs, settings):
     }
 
 
+def piezo_stats(obj, settings):
+    """PIEZO 패킷 하나(MQTT JSON 모양, sensorData HEX 포함)의 통계. 모양은 set_stats와 같고 x/y/z_mms는 None.
+
+    시간영역: (Count − 평균) → 필터 → × K/감도 [g] → RMS·|peak|.
+    주파수영역: axis_psd("PIEZO", 단위 g) → 속도 PSD → vRMS = √(ΣPv·Δf). PIEZO는 MEMS 주파수·감도 보정을 하지 않는다.
+    """
+    raw, fs = decode_wave("PIEZO", obj)
+    if raw.size < 2 or not math.isfinite(fs) or fs <= 0:
+        raise ValueError("PIEZO: 샘플/Fs 오류")
+    options, notes = _options(settings, fs)
+    p = settings.get("piezo") or DEFAULT_PIEZO
+    scale = 1000.0 * p["vmax"] / p["amax"] / p["sensitivity"]  # g / Count
+    filtered = gen.spectral_filter(raw - np.mean(raw), fs, **_filter_kwargs(options["piezo"]["filters"], "FFT"))
+    grams = filtered * scale
+    settings_psd = psd_settings(options)
+    freq, acc, used, _fs, _n = axis_psd("PIEZO", obj, options, settings_psd, "g", max_segments=settings_psd["target"])
+    if used < 1 or len(freq) < 2:
+        raise ValueError("PIEZO: PSD 구간 부족")
+    df = float(freq[1] - freq[0])
+    vel = np.zeros_like(acc)
+    positive = freq > 0
+    vel[positive] = acc[positive] * (G0 / (2 * np.pi * freq[positive])) ** 2
+    return {
+        "sample_rate": float(fs),
+        "sample_count": int(raw.size),
+        "rms": float(np.sqrt(np.mean(np.square(grams)))),
+        "peak": float(np.max(np.abs(grams))),
+        "srss": math.sqrt(max(0.0, float(np.sum(acc)) * df)),
+        "srss_mms": math.sqrt(max(0.0, float(np.sum(vel)) * df)),
+        "x_mms": None,
+        "y_mms": None,
+        "z_mms": None,
+        "notes": notes,
+    }
+
+
+def _mean(values):
+    """None을 뺀 평균. 다 None이면 None(PIEZO 줄의 x/y/z_mms)."""
+    values = [float(v) for v in values if v is not None]
+    return float(np.mean(values)) if values else None
+
+
 def hour_bucket(stamp):
     """세트 시각 '2026-11-23T15:37:23.979' → 묶음 키 '2026-11-23T15:00:00'."""
     text = str(stamp or "").replace(" ", "T")
@@ -238,7 +306,7 @@ def row_from_sets(items):
         for text in s.get("notes") or []:
             if text not in notes:
                 notes.append(text)
-    row = {key: float(np.mean([s[key] for s in stats])) for key in MEAN_KEYS}
+    row = {key: _mean([s.get(key) for s in stats]) for key in MEAN_KEYS}
     row.update({
         "sample_rate": next(iter(rates)) if len(rates) == 1 else None,
         "sample_count": next(iter(counts)) if len(counts) == 1 else None,

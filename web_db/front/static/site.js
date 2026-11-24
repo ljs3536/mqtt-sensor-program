@@ -11,7 +11,7 @@
  * - GET /api/site/plans → {plans:[{id,name,width,height,image}], placements:[{plan_id,mac,x,y}]}
  *   평면도 한 장에 센서 여러 개, 센서 하나는 평면도 한 장에만(서버가 지킨다). x·y는 0~1 비율.
  * - GET /api/site/status → {receiver, sensors:[{state, state_text, link, alarm, ...}], counts, rules}
- *   state = 하나의 상태(위험 alarm > 미수신 lost > 경보 warn > 지연 late > 정상 ok > 확인 불가 idle). 아이콘 색은 이것 하나다.
+ *   state = 하나의 상태(위험 alarm > 미수신 lost > 경고 warn > 지연 late > 주의 caution > 양호 good > 정상 ok > 확인 불가 idle). 아이콘 색은 이것 하나다.
  * - 고른 평면도 탭은 이 브라우저에만 기억한다(localStorage 'site-plan').
  */
 (() => {
@@ -38,15 +38,25 @@
   let timer = null;
 
   // 하나의 상태(아이콘 색). 서버 site_status.STATE_TEXT와 같다(2026-11-23: 끊김 → 미수신, 대기 → 확인 불가,
-  // 측정 이상은 경보/위험 두 단계, 수신 지연은 따로).
+  // 진동은 ISO 20816-3 네 구간 양호/주의/경고/위험, 수신 지연은 따로). 정상 = 제때 수신, 판정 기준 없음(PIEZO·초음파).
   const STATES = [
     ["alarm", "위험"],
     ["lost", "미수신"],
-    ["warn", "경보"],
+    ["warn", "경고"],
     ["late", "지연"],
+    ["caution", "주의"],
+    ["good", "양호"],
     ["ok", "정상"],
     ["idle", "확인 불가"],
   ];
+  // 진동 구간(서버 alarm 값) → 화면 이름·색 키. 'over'만 상태 키가 'alarm'이다.
+  const ZONES = [
+    ["good", "양호", "good"],
+    ["caution", "주의", "caution"],
+    ["warn", "경고", "warn"],
+    ["over", "위험", "alarm"],
+  ];
+  const mm = (value) => (value == null ? "-" : String(Math.round(Number(value) * 100) / 100));
   // 종류 이름(2026-11-23 피드백): MEMS/PIEZO 대신 Type1/2/3.
   // 번호는 센서 설정 SENSORTYPE(1 = PIEZO, 2 = MEMS)과 맞췄다. 수신 모니터의 '센서 타입 1/2'와 같은 번호라 헷갈리지 않는다.
   const KIND_TYPE = { PIEZO: "Type1", ADXL: "Type2", ULTRASONIC: "Type3", "": "-" };
@@ -291,8 +301,8 @@
     if (!focus) return true;
     const [group, key] = focus.split(":");
     if (groupOf(s) !== group) return false;
-    if (key === "alarm") return s.alarm === "over";
-    if (key === "warn") return s.alarm === "warn";
+    const zone = ZONES.find((z) => z[2] === key);
+    if (zone) return s.alarm === zone[0];
     if (key === "ok" || key === "bad" || key === "unknown") return s.link_group === key;
     return true; // "all"
   }
@@ -322,29 +332,35 @@
     $("liveDot").className = "live-dot" + (receiver.connected ? " on" : "");
     $("liveDot").title = receiver.connected ? `수신 중 (${receiver.host}:${receiver.port})` : "수신 꺼짐";
     const groups = [
-      ["vib", "진동", "Type1·Type2"],
-      ["ult", "초음파", "Type3"],
+      // 2026-11-24 피드백: 요약 머리에는 종류(Type1/2/3) 글자를 붙이지 않는다(진동·초음파만).
+      ["vib", "진동"],
+      ["ult", "초음파"],
     ];
     $("statusTiles").innerHTML = groups
-      .map(([key, name, types]) => {
+      .map(([key, name]) => {
         const list = sensors().filter((s) => groupOf(s) === key);
         if (!list.length) return "";
         const count = (test) => list.filter(test).length;
-        // 상태(측정 판정): 경보·위험 개수만 보인다. 기준이 없는 종류(Type1·Type3)는 판정이 없어 0으로 세지고,
-        // 기준이 생기면 서버 alarm 값이 채워져 같은 자리에 그대로 더해진다('기준 없음' 글씨는 2026-11-23 뺌).
-        const measure =
-          chip(`${key}:warn`, "경보", count((s) => s.alarm === "warn"), "warn", "측정값 ≥ 한계의 80%") +
-          chip(`${key}:alarm`, "위험", count((s) => s.alarm === "over"), "alarm", "측정값 ≥ 한계");
+        // 상태(측정 판정, 2026-11-23 ISO 20816-3): 양호·주의·경고·위험 개수. 기준이 없는 종류(Type1·Type3)는
+        // 판정이 없어 0으로 세지고, 기준이 생기면 서버 alarm 값이 채워져 같은 자리에 그대로 더해진다.
+        const hints = {
+          good: "최근 통계 SRSS < 양호 상한(기본 1.4 mm/s)",
+          caution: "양호 상한 ≤ SRSS < 주의 상한(기본 1.4~2.8 mm/s, ISO B 허용)",
+          warn: "주의 상한 ≤ SRSS < 위험 기준(기본 2.8~4.5 mm/s, ISO C 개선)",
+          over: "SRSS ≥ 위험 기준(기본 4.5 mm/s, ISO D 위험)",
+        };
+        const measure = ZONES.map(([zone, text, tone]) =>
+          chip(`${key}:${tone}`, text, count((s) => s.alarm === zone), tone, hints[zone])).join("");
         const unknown = count((s) => s.link_group === "unknown");
         const link =
           chip(`${key}:ok`, "정상", count((s) => s.link_group === "ok"), "ok", "제때 수신") +
           chip(`${key}:bad`, "이상", count((s) => s.link_group === "bad"), "lost", "수신 지연 또는 미수신") +
           (unknown ? chip(`${key}:unknown`, "확인 불가", unknown, "idle", "수신 꺼짐·측정 중지·데이터 없음·주기 미상") : "");
         const allActive = focus === `${key}:all`;
-        // 한 줄: [진동 Type1·Type2 총 N개] | 상태 [경보][위험] | 수신 [정상][이상][확인 불가]
+        // 한 줄: [진동 총 N개] | 상태 [경보][위험] | 수신 [정상][이상][확인 불가]
         return `<div class="sum-card${focus.startsWith(key + ":") ? " focused" : ""}">
           <button type="button" class="sum-head${allActive ? " active" : ""}" data-focus-key="${key}:all" aria-pressed="${allActive}">
-            <strong>${name}</strong><small>${types}</small><span class="sum-total">총 <b>${list.length}</b>개</span></button>
+            <strong>${name}</strong><span class="sum-total">총 <b>${list.length}</b>개</span></button>
           <div class="sum-row"><span class="sum-label">상태</span>${measure}</div>
           <div class="sum-row"><span class="sum-label">수신</span>${link}</div>
         </div>`;
@@ -352,9 +368,11 @@
       .join("");
     const rules = status.rules || {};
     $("legendInfo").title =
-      `위험: 진동(최근 통계 SRSS) ≥ 한계\n경보: 진동 ≥ 한계의 ${Math.round((rules.warn_ratio || 0.8) * 100)}%\n` +
+      "진동(최근 한 시간 통계 SRSS, mm/s RMS, ISO 20816-3 Group 2 강성 지지 기본값)\n" +
+      "  양호 < 1.4 ≤ 주의 < 2.8 ≤ 경고 < 4.5 ≤ 위험 (MAC마다 설정 > 장치에서 바꿈)\n" +
       `지연: 원래 수신 간격 + ${rules.grace_s}초를 넘김\n` +
       `미수신: 원래 수신 간격 ×${rules.late_factor} + ${rules.grace_s}초보다 오래 수신 없음\n` +
+      "정상: 제때 수신 중, 진동 판정 기준 없음(Type1·Type3) 또는 통계 전\n" +
       "확인 불가: 수신 꺼짐·측정 중지·받은 데이터 없음·주기 미상\n" +
       "Type1(PIEZO)·Type3(초음파)는 판정 기준이 아직 없다(표시만).\n" +
       "진동 값은 매시 정각 뒤 자동으로 계산되는 통계(가장 최근 한 시간)입니다.";
@@ -565,8 +583,12 @@
     // 통계 화면에서 이 MAC 줄을 강조해 연다. 주소에 MAC을 남기지 않으려고 링크에는 data-focus만 두고
     // 누를 때 sessionStorage('dashboard-focus')에 넣는다(아래 card click). 통계 화면이 한 번 읽고 지운다.
     const dashLink = "/dashboard";
-    const vibration = s.alarm === "over" ? "진동 위험 · 한계를 넘었습니다"
-      : s.alarm === "warn" ? "진동 경보 · 한계의 80%를 넘었습니다" : "";
+    // 진동 구간 안내(2026-11-23): 위험·경고·주의일 때만. 수치는 통계 화면에서 본다.
+    const z = s.zones || {};
+    const vibration = s.alarm === "over" ? `진동 위험 · 위험 기준 ${mm(z.limit)} mm/s 이상`
+      : s.alarm === "warn" ? `진동 경고 · ${mm(z.caution)} mm/s 이상`
+        : s.alarm === "caution" ? `진동 주의 · ${mm(z.good)} mm/s 이상` : "";
+    const vibrationState = { over: "alarm", warn: "warn", caution: "caution" }[s.alarm] || s.state;
     const interval = s.interval_s == null ? "모름" : `${span(s.interval_s)} (${esc(s.interval_source)})`;
     const config = s.config_type == null ? "-" : `SENSORTYPE ${esc(s.config_type)}${s.config_period != null ? ` · 주기 ${esc(s.config_period)}초` : ""}`;
     card.innerHTML = `
@@ -578,7 +600,7 @@
       </div>
       ${photoHtml(s)}
       <div class="card-state state-${s.state}"><span class="state-chip">${esc(s.state_text)}${lasting(s) ? ` · ${lasting(s)}` : ""}</span>${esc(reason(s))}</div>
-      ${vibration ? `<a class="card-alert state-${s.state}" href="${dashLink}" data-focus="${esc(s.mac)}">${vibration} · 통계에서 확인 →</a>` : ""}
+      ${vibration ? `<a class="card-alert state-${vibrationState}" href="${dashLink}" data-focus="${esc(s.mac)}">${vibration} · 통계에서 확인 →</a>` : ""}
       <dl>
         <dt>마지막 수신</dt><dd>${s.last_at ? `${ago(s.age_s)} <small>${esc(s.last_at.replace("T", " ").slice(0, 19))}</small>` : "-"}</dd>
         <dt>배터리</dt><dd>${batteryHtml(s, true) || "-"}${s.battery_state === "low" ? ' <b class="battery-warn">부족</b>' : ""}</dd>

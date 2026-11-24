@@ -8,7 +8,8 @@ from web_db.src import core as gen
 from web_db.src import core as mon
 
 
-PIEZO_UNITS = ("Count", "mV", "g RMS", "mm/s RMS")
+# "자동 (g RMS)"(2026-11-24): MEMS 자동 가속도와 같이 g RMS를 g/mg/µg 중 보기 좋은 눈금으로(graph_curves._scaled_unit).
+PIEZO_UNITS = ("Count", "mV", "자동 (g RMS)", "g RMS", "mm/s RMS")
 PIEZO_WINDOWS = ("Blackman", "Hann", "Hamming", "Rectangular")
 SRSS_MISSING = "SRSS: 완전한 XYZ 데이터 없음"
 ADXL_RAW_UNITS = ("자동 (g/mg/µg)", "Count", "g", "mg", "µg")

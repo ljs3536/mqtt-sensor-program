@@ -1,4 +1,4 @@
-"""화면 HTML. /, /generator, /studio, /dashboard, /settings.
+"""화면 HTML. /, /generator, /studio, /dashboard, /dashboard2, /settings.
 
 /generator와 /studio는 설정 서랍이 같다. 서랍은 front/partials/drawer.html 하나에 두고,
 페이지를 보낼 때 `<!-- @include partials/drawer.html -->` 자리에 넣어 한 장의 HTML로 보낸다.
@@ -63,6 +63,15 @@ def studio_page():
 def dashboard_page():
     """MAC별 최신 SRSS, RMS, PEAK."""
     return FileResponse(FRONT / "dashboard.html")
+
+
+@router.get("/dashboard2")
+def dashboard2_page():
+    """통계2(2026-11-24): 위쪽 센서별 SRSS 세로 막대 + 센서마다 속도 RMS·RMS g·PEAK 꺾은선, '+'로 크게 보기.
+
+    /dashboard와 같은 API(/api/db/dashboard)를 읽는 다른 모양의 화면이다. 메뉴에는 없고 주소로 연다.
+    """
+    return FileResponse(FRONT / "dashboard2.html")
 
 
 @router.get("/settings")

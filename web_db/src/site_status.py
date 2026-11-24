@@ -7,7 +7,10 @@
    센서는 생존 신호를 따로 보내지 않으므로 "마지막 수신 후 경과 시간"을 "원래 간격"과 비교한다.
    원래 간격 = 실제 수신 간격의 중앙값(측정 3회 이상일 때) → 없으면 설정 SENSING_PERIOD.
 2. 알람(alarm): 가장 최근 통계 한 줄(measurement)의 SRSS(mm/s)로 판정한다(2026-11-19).
-   ≥ 한계 → over, ≥ 한계×80% → warn. ADXL만 해당(PIEZO·초음파는 기준이 없다).
+   2026-11-23부터 ISO 20816-3 Group 2(강성 지지) 네 구간: 양호 good < 1.4 ≤ 주의 caution < 2.8 ≤ 경고 warn
+   < 4.5 ≤ 위험 over (mm/s RMS). 경계는 MAC마다 설정 > 장치에서 바꾸며, 비어 있으면 위험 기준(예전 SRSS 한계)의
+   ISO 비율(limits.zone_bounds). ADXL만 해당(PIEZO·초음파는 기준이 없다).
+   예전(2026-11-23 전)에는 ≥ 한계 → 위험, ≥ 한계×80% → 경보 두 단계였다.
 3. 배터리(battery): 센서가 보내는 batteryRmin(0~10). 3 이하면 low. 상태(state)와는 따로 표시한다.
 
 연결 기준(2026-11-19 확정): 무선 센서는 보통 1시간에 한 번 보낸다.
@@ -21,6 +24,8 @@ import json
 import statistics
 from datetime import datetime
 
+from web_db.src.limits import ZONE_TEXT, zone_bounds, zone_of
+
 # 정상: 경과 ≤ 간격 × LINK_OK_FACTOR + LINK_GRACE_S. 지연: ≤ 간격 × LINK_LATE_FACTOR + LINK_GRACE_S. 그 밖은 미수신.
 LINK_OK_FACTOR = 1.0
 LINK_LATE_FACTOR = 2.0
@@ -32,8 +37,10 @@ SAME_MEASURE_S = 2.0
 AXIS_RANK = {"X": 0, "Y": 1, "Z": 2}
 # 실제 수신 간격을 쓰려면 측정이 이만큼 있어야 한다(간격은 하나 적다).
 MIN_MEASURES = 3
-# 통계 화면과 같은 경보 기준(한계의 80%).
-WARN_RATIO = 0.8
+# 원래 간격의 하한(초, 2026-11-24). 옛 데이터를 몰아서 재송신하면(데이터 분석 CSV 송신 등) 최근 간격이
+# 2~3초로 잡혀, 받은 지 30여 초 만에 '미수신'이 됐다. 설정 주기(SENSING_PERIOD)보다, 그리고 이 값보다
+# 짧게 보지 않는다.
+MIN_INTERVAL_S = 60.0
 # 배터리(batteryRmin, 0~10). 이 값 이하면 부족(빨강).
 BATTERY_LOW = 3.0
 
@@ -49,28 +56,35 @@ LINK_TEXT = {
     "unknown": "주기 미상",
     "offline": "수신 꺼짐",
 }
-# 측정 이상(진동): 한계의 80% 이상 = 경보, 한계 이상 = 위험. 'na' = 판정 기준 없음(PIEZO·초음파, 표시만).
-ALARM_TEXT = {"ok": "정상", "warn": "경보", "over": "위험", "none": "통계 없음", "na": "기준 없음"}
+# 측정 판정(진동, 2026-11-23): 양호 / 주의 / 경고 / 위험. 'na' = 판정 기준 없음(PIEZO·초음파, 표시만).
+ALARM_TEXT = dict(ZONE_TEXT, none="통계 없음", na="기준 없음")
 
 # 수신 상태 묶음(위쪽 요약 '수신 정상 / 이상 / 확인 불가').
 LINK_GROUP = {"ok": "ok", "late": "bad", "lost": "bad",
               "stopped": "unknown", "none": "unknown", "unknown": "unknown", "offline": "unknown"}
 
 # 화면에 보이는 '하나의 상태'(아이콘 색). 측정과 수신 판정 중 더 나쁜 쪽 하나로 줄인다.
-# 순서(나쁜 것부터): 위험 > 미수신 > 경보 > 지연 > 정상 > 확인 불가.
-STATE_TEXT = {"alarm": "위험", "lost": "미수신", "warn": "경보", "late": "지연", "ok": "정상", "idle": "확인 불가"}
-STATE_ORDER = ["alarm", "lost", "warn", "late", "ok", "idle"]
+# 순서(나쁜 것부터): 위험 > 미수신 > 경고 > 지연 > 주의 > 양호 > 정상 > 확인 불가.
+# 양호는 제때 수신 중이고 진동이 양호 구간인 MEMS, 정상은 제때 수신 중이지만 판정 기준이 없는 센서(PIEZO·초음파)
+# 또는 아직 통계가 없는 MEMS다. 키 'warn'은 예전 '경보'(한계 80%) 자리를 이어 '경고'(ISO C 구간)로 쓴다.
+STATE_TEXT = {"alarm": "위험", "lost": "미수신", "warn": "경고", "late": "지연", "caution": "주의",
+              "good": "양호", "ok": "정상", "idle": "확인 불가"}
+STATE_ORDER = ["alarm", "lost", "warn", "late", "caution", "good", "ok", "idle"]
 
 
 def overall_state(link, alarm):
     """연결·알람 판정 → 하나의 상태.
 
-    - 위험(alarm): 최근 통계 SRSS ≥ 한계.
+    - 위험(alarm): 최근 통계 SRSS ≥ 위험 기준(4.5).
     - 미수신(lost): 원래 간격 ×2 + 30초보다 오래 수신 없음.
-    - 경보(warn): SRSS ≥ 한계의 80%.
+    - 경고(warn): SRSS ≥ 주의 상한(2.8).
     - 지연(late): 원래 간격 + 30초를 넘겼지만 ×2 + 30초 안.
-    - 정상(ok): 제때 수신 중이고 측정 이상 없음.
+    - 주의(caution): 제때 수신 중이고 SRSS ≥ 양호 상한(1.4).
+    - 양호(good): 제때 수신 중이고 SRSS < 양호 상한.
+    - 정상(ok): 제때 수신 중이지만 진동 판정이 없음(PIEZO·초음파, 통계 전 MEMS).
     - 확인 불가(idle): 판단할 수 없음(수신 꺼짐, 측정 중지, 받은 데이터 없음, 주기 미상).
+    진동 값은 마지막 통계라 수신이 끊겨도 남는다. 그래서 위험·경고는 수신 상태보다 앞서 보이고,
+    주의·양호는 제때 수신 중일 때만 보인다(끊긴 센서를 '양호'로 보이지 않게).
     """
     if alarm == "over":
         return "alarm"
@@ -81,6 +95,10 @@ def overall_state(link, alarm):
     if link == "late":
         return "late"
     if link == "ok":
+        if alarm == "caution":
+            return "caution"
+        if alarm == "good":
+            return "good"
         return "ok"
     return "idle"
 
@@ -113,12 +131,21 @@ def measure_times(times):
     packets.sort(key=lambda p: p[0])
     result = []
     last_rank = None
+    prev_ultra = None
     for value, kind, axis in packets:
         if kind == "ADXL" and axis in AXIS_RANK:
             rank = AXIS_RANK[axis]
             if last_rank is None or rank <= last_rank:
                 result.append(value)
             last_rank = rank
+        elif kind == "ULTRASONIC":
+            # 초음파는 측정 한 번에 패킷 3~4개를 약 1초 간격으로 보낸다(2026-11-24 실제 수신 15:37:07~10).
+            # 앞 패킷과 SAME_MEASURE_S 안이면 같은 측정으로 본다(패킷마다 측정으로 세면 간격이 1초가 된다).
+            if prev_ultra is None or (value - prev_ultra).total_seconds() > SAME_MEASURE_S:
+                result.append(value)
+            prev_ultra = value
+            last_rank = None
+            continue
         elif kind:
             result.append(value)
             last_rank = None
@@ -137,20 +164,30 @@ def _config(row):
 
 
 def expected_interval(row):
-    """(원래 간격 초, 출처). 실제 수신 간격 중앙값 → 설정 SENSING_PERIOD → (None, '')."""
+    """(원래 간격 초, 출처). 실제 수신 간격 중앙값과 설정 SENSING_PERIOD 중 긴 값, 하한 MIN_INTERVAL_S.
+
+    2026-11-24: 예전에는 실제 간격이 있으면 그것만 썼다. 옛 데이터를 몰아 재송신하면 간격이 2~3초로 잡혀
+    받자마자 '미수신'이 됐으므로, 설정 주기보다 짧게 보지 않는다(실제가 더 길면 실제 간격).
+    둘 다 없으면 (None, '').
+    """
+    measured = None
     measures = measure_times(row.get("recent_times") or [])
     if len(measures) >= MIN_MEASURES:
         gaps = [(b - a).total_seconds() for a, b in zip(measures, measures[1:])]
         gaps = [g for g in gaps if g > 0]
         if gaps:
-            return float(statistics.median(gaps)), "실제 수신 간격"
+            measured = float(statistics.median(gaps))
     try:
         period = float(_config(row).get("SENSING_PERIOD"))
     except (TypeError, ValueError):
         period = 0.0
-    if period > 0:
-        return period, "설정 주기"
-    return None, ""
+    if measured is None and period <= 0:
+        return None, ""
+    if measured is not None and measured >= period:
+        interval, source = measured, "실제 수신 간격"
+    else:
+        interval, source = period, "설정 주기"
+    return max(interval, MIN_INTERVAL_S), source
 
 
 def link_state(row, receiver_on, now):
@@ -182,19 +219,26 @@ def battery_state(row):
     return value, ("low" if value <= BATTERY_LOW else "ok")
 
 
+# 진동 구간 판정을 하는 통계 종류. PIEZO는 2026-11-23부터 통계(Vrms)는 내지만, 환산(Vmax/Amax/감도·게인)이
+# 확정되지 않아(실측 D25871312270 28~208 mm/s, MEMS 1~6 mm/s) ISO 경계로 판정하지 않는다. 확정되면 "PIEZO"를 더한다.
+JUDGED_KINDS = ("ADXL",)
+
+
 def alarm_state(row):
-    """알람 판정 (state, 최근 통계 SRSS 또는 None, 한계). MEMS(ADXL)가 아닌 센서는 'na'."""
-    limit = float(row.get("limit") or 4.5)
+    """알람 판정 (구간, 최근 통계 SRSS 또는 None, 구간 경계 dict). MEMS(ADXL)가 아닌 센서는 'na'.
+
+    구간: good 양호 / caution 주의 / warn 경고 / over 위험(limits.zone_of). 경계는 row['zones'](store.site_rows),
+    없으면 row['limit']를 위험 기준으로 ISO 비율.
+    """
+    zones = row.get("zones") or zone_bounds(row.get("limit") or 4.5)
     value = row.get("srss_mms")
     if value is None:
         # 통계가 없으면: MEMS면 아직 최신화 전('none'), 그 밖(PIEZO·초음파·종류 모름)은 알람 대상 아님.
-        return ("none" if sensor_kind(row) == "ADXL" else "na"), None, limit
+        return ("none" if sensor_kind(row) == "ADXL" else "na"), None, zones
     value = float(value)
-    if value >= limit:
-        return "over", value, limit
-    if value >= limit * WARN_RATIO:
-        return "warn", value, limit
-    return "ok", value, limit
+    if (row.get("stat_sensor") or "ADXL") not in JUDGED_KINDS:
+        return "na", value, zones  # 값은 있지만 판정 안 함(PIEZO, 위 JUDGED_KINDS)
+    return zone_of(value, zones), value, zones
 
 
 def sensor_kind(row):
@@ -219,7 +263,7 @@ def build_status(rows, receiver, now=None):
 
     rows: store.site_rows(). receiver: {"connected": bool, "host", "port"} (MonitorService에서).
     돌려주는 dict: now, receiver, sensors[...], counts{link 상태별, alarm 상태별, state(하나의 상태)별}.
-    sensors는 나쁜 상태부터(위험 → 미수신 → 경보 → 지연 → 정상 → 확인 불가), 같은 상태 안에서는 원래 순서.
+    sensors는 나쁜 상태부터(STATE_ORDER), 같은 상태 안에서는 원래 순서.
     """
     now = now or datetime.now()
     receiver_on = bool(receiver.get("connected"))
@@ -227,7 +271,7 @@ def build_status(rows, receiver, now=None):
     counts = {"total": 0, "link": {}, "alarm": {}, "state": {}}
     for row in rows:
         link, age, interval, source = link_state(row, receiver_on, now)
-        alarm, value, limit = alarm_state(row)
+        alarm, value, zones = alarm_state(row)
         battery, battery_flag = battery_state(row)
         config = _config(row)
         state = overall_state(link, alarm)
@@ -252,7 +296,8 @@ def build_status(rows, receiver, now=None):
             "alarm": alarm,
             "alarm_text": ALARM_TEXT[alarm],
             "srss_mms": value,
-            "limit": limit,
+            "limit": zones["limit"],
+            "zones": zones,
             "set_count": int(row.get("set_count") or 0),
             "stat_last_at": row.get("stat_last_at") or "",
             "stat_first_at": row.get("stat_first_at") or "",
@@ -271,7 +316,7 @@ def build_status(rows, receiver, now=None):
             "ok_factor": LINK_OK_FACTOR,
             "late_factor": LINK_LATE_FACTOR,
             "grace_s": LINK_GRACE_S,
-            "warn_ratio": WARN_RATIO,
+            "zone_text": ZONE_TEXT,
             "battery_low": BATTERY_LOW,
         },
     }

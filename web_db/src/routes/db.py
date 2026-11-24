@@ -7,7 +7,8 @@ store.update_statistics를 부른다. 통계는 MAC마다 한 시간 한 줄이�
 - GET  /api/db/stat-profile   기준 버전 목록·지금 버전·그래프 설정 파일 값·재계산 진행
 - POST /api/db/stat-profile   새 기준 버전 저장 + 그 버전으로 재계산 시작(돌고 있으면 409)
 - POST /api/db/stat-rebuild   지금(또는 가장 최근) 버전으로 재계산 시작
-- GET/POST /api/db/csv-stats  data_csv_web 전체로 시간별 통계 다시 만들기(csv_stats.py)
+- GET/POST /api/db/csv-import data_csv_web의 누적 CSV를 packet으로 가져오기(csv_import.py, 2026-11-24).
+  끝나면 '지금 기준으로 다시 계산'으로 통계를 만든다. 가져오기와 재계산·기준 저장은 서로 409로 막는다.
 """
 
 import threading
@@ -19,7 +20,7 @@ from pydantic import BaseModel
 
 from web_db.src import core as gen
 from web_db.src import stat_profile as sp
-from web_db.src.csv_stats import CsvStatsJob, find_groups
+from web_db.src.csv_import import CsvImportJob, scan
 from web_db.src.grouping import group_adxl, packet_to_template
 from web_db.src.paths import DATA_CSV
 from web_db.src.runtime import replay, store
@@ -27,7 +28,7 @@ from web_db.src.runtime import replay, store
 from web_db.src.stats_job import StatRebuildJob
 
 router = APIRouter()
-csv_job = CsvStatsJob(store)
+csv_job = CsvImportJob(store)
 rebuild_job = StatRebuildJob(store)
 
 
@@ -49,9 +50,26 @@ class DbLoad(BaseModel):
 
 
 class DeviceName(BaseModel):
-    """표시 이름 저장 요청."""
+    """표시 이름 저장 요청. location(설치 위치, 2026-11-24)은 보낼 때만 바꾼다(None이면 그대로).
+
+    수신 모니터의 이름 저장(monitor-db.js)은 이름만 보내므로 위치가 지워지지 않는다."""
     mac: str
     display_name: str = ""
+    location: str | None = None
+
+
+class DeviceVisible(BaseModel):
+    """설정 > 장치 '표시' 체크 저장 요청."""
+    mac: str
+    visible: bool = True
+
+
+class Zones(BaseModel):
+    """진동 구간 저장 요청(mm/s RMS). good·caution을 둘 다 비우면 자동(위험 기준의 ISO 비율)."""
+    mac: str
+    good: float | str | None = None
+    caution: float | str | None = None
+    limit: float
 
 
 def _query_time(value, end):
@@ -92,7 +110,7 @@ def _hourly_stats():
     1분마다 깨어나 stat_meta의 마지막 계산 시각을 본다. 그 '시'가 지금 시보다 이전이면 최신화한다.
     그래서 매시 정각 뒤 1분 안에 돈다. 서버가 꺼져 있던 동안 쌓인 패킷은 켜진 뒤 첫 확인 때
     세트 시각에 맞는 시간 줄로 들어간다(한 덩어리로 뭉치지 않는다).
-    재계산·CSV 통계가 돌고 있으면 stats_lock에서 기다렸다가 이어서 한다.
+    재계산이 돌고 있으면 stats_lock에서 기다렸다가 이어서 한다.
     예외는 삼키고 다음 확인을 기다린다(스레드가 죽지 않게).
     """
     while True:
@@ -130,15 +148,21 @@ def start_daily_stats():
 
 
 @router.get("/api/db/dashboard")
-def db_dashboard():
-    """저장된 통계만 조회한다. 계산은 하지 않는다."""
-    return store.dashboard()
+def db_dashboard(period: str = "24h", mac: str = "", bucket: str = ""):
+    """저장된 통계만 조회한다. 계산은 하지 않는다. period: 24h(기본)·7d·30d·all(store.DASHBOARD_PERIODS).
+
+    mac·bucket(hour/day)은 통계2 화면의 자세히 보기가 한 MAC만, 원하는 점 묶음으로 읽을 때 쓴다(2026-11-24).
+    """
+    return store.dashboard(period, mac or None, bucket or None)
 
 
 @router.get("/api/db/devices")
-def db_devices():
-    """저장된 MAC 목록. 설정 '장치' 표의 사진 칸을 위해 photo(주소 또는 "")를 붙인다."""
-    items = store.devices()
+def db_devices(named: bool = False):
+    """저장된 MAC 목록. 설정 '장치' 표의 사진 칸을 위해 photo(주소 또는 "")를 붙인다.
+
+    named=true면 이름이 있는 MAC만(센서 데이터 분석, 2026-11-24). 설정 > 장치 표는 전부(이름을 붙일 곳).
+    """
+    items = store.devices(named)
     photos = store.sensor_photos()
     for item in items:
         version = photos.get(str(item.get("mac") or "").upper())
@@ -191,7 +215,25 @@ def db_profile(mac: str):
 def db_device_name(body: DeviceName):
     """표시 이름을 저장한다."""
     try:
-        return store.save_display_name(body.mac, body.display_name)
+        return store.save_display_name(body.mac, body.display_name, body.location)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/db/device-visible")
+def db_device_visible(body: DeviceVisible):
+    """'표시'를 끄면 이름이 있어도 센서 현황·분석·통계에서 숨긴다(2026-11-24). 수신 저장·통계 계산은 그대로."""
+    try:
+        return store.set_device_visible(body.mac, body.visible)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/db/zones")
+def db_zones(body: Zones):
+    """진동 구간(양호 상한·주의 상한·위험 기준)을 저장한다. 위험 기준은 예전 SRSS 한계와 같은 칸이다."""
+    try:
+        return store.save_zones(body.mac, body.good, body.caution, body.limit)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -205,19 +247,22 @@ def db_clear_device_name(mac: str):
         raise HTTPException(400, str(exc)) from exc
 
 
-@router.get("/api/db/csv-stats")
-def csv_stats_state():
-    """CSV 시간별 통계 작업 상태와, 지금 data_csv_web에서 찾은 X/Y/Z CSV 묶음 수(버튼 옆 안내용)."""
-    return dict(csv_job.state(), folder=str(DATA_CSV), groups_found=len(find_groups(DATA_CSV)))
+@router.get("/api/db/csv-import")
+def csv_import_state():
+    """CSV 가져오기 진행 상태 + 버튼 옆 안내(data_csv_web에서 찾은 CSV 파일 수·크기, DB packet 줄 수)."""
+    state = csv_job.state()
+    if state["running"]:
+        return state  # 도는 동안(1초마다 부름)은 진행만. 폴더 훑기·줄 세기는 하지 않는다
+    return dict(state, folder=str(DATA_CSV), found=scan(DATA_CSV), packets=store.packet_counts())
 
 
-@router.post("/api/db/csv-stats")
-def csv_stats_start():
-    """data_csv_web 전체로 시간별 통계를 다시 만든다. 백그라운드로 돌고 GET으로 진행을 본다."""
+@router.post("/api/db/csv-import")
+def csv_import_start():
+    """data_csv_web의 CSV를 packet으로 가져온다. 백그라운드로 돌고 GET으로 진행을 본다. 수신은 그대로 계속된다."""
     if rebuild_job.state()["running"]:
         raise HTTPException(409, "통계를 다시 계산하는 중입니다. 끝난 뒤 하세요.")
     if not csv_job.start(DATA_CSV):
-        raise HTTPException(409, "이미 통계를 만드는 중입니다")
+        raise HTTPException(409, "이미 CSV를 가져오는 중입니다")
     return csv_job.state()
 
 
@@ -240,7 +285,7 @@ def stat_profile_state():
 def stat_profile_save(body: StatProfileBody):
     """새 기준 버전을 저장하고 그 버전으로 재계산을 시작한다. 끝나면 그 버전이 지금 버전이 된다."""
     if rebuild_job.state()["running"] or csv_job.state()["running"]:
-        raise HTTPException(409, "통계를 다시 계산하는 중입니다. 끝난 뒤 저장하세요.")
+        raise HTTPException(409, "통계를 다시 계산하거나 CSV를 가져오는 중입니다. 끝난 뒤 저장하세요.")
     try:
         profile_id = store.add_stat_profile(body.settings, body.note)
     except ValueError as exc:
@@ -253,7 +298,7 @@ def stat_profile_save(body: StatProfileBody):
 def stat_rebuild():
     """지금 버전(없으면 가장 최근 버전)으로 packet 전체를 다시 계산한다."""
     if rebuild_job.state()["running"] or csv_job.state()["running"]:
-        raise HTTPException(409, "이미 통계를 만드는 중입니다")
+        raise HTTPException(409, "이미 통계를 다시 계산하거나 CSV를 가져오는 중입니다")
     data = store.stat_profiles()
     profile_id = data["active"] or data["latest"] or store.ensure_stat_profile()
     rebuild_job.start(profile_id)

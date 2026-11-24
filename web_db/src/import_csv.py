@@ -6,10 +6,14 @@
     python -m web_db.src.import_csv D:\\20261106_100046 --reset
     python -m web_db.src.import_csv D:\\20261106_100046            # 지우지 않고 뒤에 더 넣기
 
+서버를 켠 채 옛 CSV를 더 넣을 때는 이 명령 대신 설정 > 통계 데이터 'CSV 데이터 가져오기'(csv_import.py, 2026-11-24)를
+쓴다. 여기 '지우지 않고 더 넣기'는 중복을 확인하지 않아, DB에 이미 있는 기간의 CSV를 넣으면 같은 패킷이 두 번 들어간다.
+_item(CSV 한 줄 → item)은 csv_import도 같이 쓴다.
+
 읽는 파일: 폴더 안의 `{MAC}_{종류}_sensorData_hex.csv`만 읽는다.
 - HEX가 수신 원본이다. `_decoded_samples.csv`는 HEX를 푼 결과라서 읽지 않고,
-  실시간 수신(MonitorService._remember)과 같은 디코드 함수로 HEX를 다시 푼다.
-  그래야 DB의 decoded_samples가 실시간으로 받은 것과 똑같아진다.
+  실시간 수신(MonitorService._remember)과 같은 디코드 함수로 HEX를 다시 푼다(디코드가 안 되는 줄은 건너뜀).
+  DB에는 HEX만 남는다(packet.decoded_samples는 2026-11-23부터 쓰지 않음).
 - received_at, seq, tick, 배터리, samplerate, numofsample, payload_bytes는 CSV 값을 그대로 쓴다.
 
 넣는 순서: 모든 파일의 줄을 received_at 순으로 섞어서 넣는다.

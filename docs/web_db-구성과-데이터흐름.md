@@ -22,7 +22,7 @@
 | `web_db/src/store_site.py` | 앱 설정(`app_setting`), 평면도(`floor_plan`, 이미지는 `site_files/`), 센서 위치(`sensor_placement`), 대문 상태용 원자료 |
 | `web_db/src/site_status.py` | 대문의 센서 연결·알람 판정. 임시 기준값 상수가 맨 위에 있다 |
 | `web_db/src/paths.py` | 코드·데이터 경로. 수신 CSV는 어디서나 `data_csv_web`. 환경변수 `SENSOR_DATA_DIR`가 있으면 DB·평면도·MEMS JSON을 그 폴더에, CSV를 그 아래 `data_csv_web`에 둔다(Docker: `/data` = `./sensor_web_db`, `/data/data_csv_web` = `./data_csv_web`). 배포는 `docs/웹-기능상세.md` "실행" |
-| `web_db/src/csv_stats.py` | data_csv_web의 CSV로 시간별 통계(measurement) 다시 만들기. 설정 '통계 데이터' 탭 |
+| `web_db/src/csv_import.py` | data_csv_web의 누적 CSV를 packet으로 가져오기(2026-11-24, 설정 '통계 데이터' 탭). 전에는 `csv_stats.py`(CSV로 통계만) |
 | `web_db/src/stat_profile.py` | 통계 계산 기준(버전) 검사·기본값, 세트 하나 통계(`set_stats`), 한 시간 묶음·합치기 |
 | `web_db/src/stats_job.py` | 통계 재계산 백그라운드 작업(기준 저장·재계산 버튼·업그레이드 직후) |
 | `web_db/src/import_csv.py` | CSV 폴더를 SQLite `packet`에 다시 채우기(명령줄 전용). 아래 "CSV 폴더로 DB 채우기" |
@@ -70,7 +70,7 @@
 | `generator.js` | 분석 화면 버튼을 위 함수에 연결. 전송 중일 때만 1초마다 송신 숫자와 로그를 갱신한다. 그 밖에는 버튼 동작 뒤에 한 번 읽는다 |
 | `studio.js` | DB 분석 서랍과 센서 탭. 계산 API는 `generator-*.js`를 그대로 쓴다 |
 | `db.js` | `/api/db/devices`, `/api/db/stats`, `/api/db/load`. 연 패킷은 `draw`로 넘긴다 |
-| `settings.js` | 설정 탭, 장치 이름과 SRSS 한계 저장, CSV 시간별 통계. `/api/db/device-name`, `/api/db/csv-stats` |
+| `settings.js` | 설정 탭, 장치 이름과 SRSS 한계 저장, CSV 데이터 가져오기. `/api/db/device-name`, `/api/db/csv-import` |
 | `stat-profile.js` | 설정 > 통계 데이터의 '통계 계산 기준'(버전 저장·재계산·JSON 내보내기/가져오기). `/api/db/stat-profile`, `/api/db/stat-rebuild` |
 | `site.js` | 대문. 평면도 탭(여러 장, 탭마다 문제 수 배지), 아이콘 그리기, 정보 카드, 배치 편집(평면도 추가·교체·이름·순서·삭제, 끌어 놓기·이동·빼기·저장), 15초 상태 갱신 |
 
@@ -82,7 +82,8 @@
 
 1. `routes`를 import하면서 `runtime.py`가 프로세스에 하나뿐인 객체 셋을 만든다.
    - `Store()`가 `sensor.sqlite`를 열고(WAL 모드) `_migrate`를 한다. 테이블과 인덱스가 없으면 만든다.
-     이미 있는 테이블은 그대로 두고, 쓰지 않는 옛 `daily_stat`만 지운다. 저장된 패킷을 다시 쓰는 일은 없다.
+     이미 있는 테이블은 그대로 두고, 쓰지 않는 옛 `daily_stat`과 옛 열(`device.asset_no` 등)을 지운다. `device.location`은 없으면 다시 만든다(2026-11-24, 설정 '위치' 칸). 저장된 패킷을 다시 쓰는 일은 없다.
+     옛 DB로 새 버전을 켤 때 일어나는 일과 `decoded_samples` 정리(`compact_db`)는 `docs/web_db-DB명세서.md` "기존 DB로 새 버전을 켤 때".
    - `MonitorService(store)`는 CSV 기록 스레드를 켠다. MQTT에는 아직 붙지 않는다.
    - `ReplayService()`는 빈 재전송 목록으로 시작한다.
 2. FastAPI 앱에 `/static`과 라우터 다섯 개(`pages`, `generator`, `monitor`, `analysis`, `db`)를 붙인다.
@@ -138,10 +139,12 @@
 | `GET /api/analysis/defaults`, `GET·POST /srss-limit`, `POST /mems-scale`, `/mems-correction` | 그래프 기본값, SRSS 한계, 1 LSB, MEMS 보정 저장 |
 | `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON. 분석 화면 MAC 선택 상자는 `MAC · 이름`만 보이고 패킷 수는 보이지 않는다. 패킷 수는 설정 화면이 이름 삭제 때 목록에서 뺄지 정하는 데 쓴다 |
 | `POST /api/db/load` | DB 패킷을 골라 재전송 목록에 올리고 첫 미리보기를 준다 |
-| `GET /api/db/dashboard` | 저장된 통계 읽기(지금 기준 버전 줄만, 계산 기준 요약 포함. 최신화 API는 없앴다) |
+| `POST /api/db/device-visible` | 설정 > 장치 '표시' 체크 저장 `{mac, visible}`(2026-11-24) |
+| `GET /api/db/devices?named=` | MAC 목록(설정 표는 전부, `named=true`면 이름 있는 MAC만: 센서 데이터 분석, 2026-11-24) |
+| `GET /api/db/dashboard?period=&mac=&bucket=` | 저장된 통계 읽기(지금 기준 버전 줄만, 계산 기준 요약 포함. 기간 24h 기본·7d·30d·all. 초음파 MAC 제외. mac은 한 MAC만, bucket(hour/day)은 그래프 점 묶음 — 통계2 자세히 보기용. 최신화 API는 없앴다) |
 | `GET·POST /api/db/stat-profile` | 통계 기준 버전 목록·기본값·그래프 설정 파일 값·재계산 진행 / 새 버전 저장 + 재계산 시작(돌고 있으면 409) |
 | `POST /api/db/stat-rebuild` | 지금 버전으로 재계산 시작(돌고 있으면 409) |
-| `GET·POST /api/db/csv-stats` | CSV 시간별 통계 작업 상태·찾은 CSV 묶음 수 / 백그라운드 시작(이미 돌면 409) |
+| `GET·POST /api/db/csv-import` | CSV 가져오기 상태·찾은 CSV 파일 수·크기·DB 패킷 수(실시간/가져옴) / 백그라운드 시작(이미 돌거나 재계산 중이면 409) |
 | `POST·DELETE /api/db/device-name` | 표시 이름 저장·삭제 |
 
 ## 수신해서 저장하기
@@ -286,20 +289,27 @@ PIEZO와 MEMS 그래프 옵션에 `Window 보정`이 있다. 세 화면(수신 �
 
 LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같음). 켜져 있으면 차단 주파수가 Nyquist라서 LPF를 실제로 걸지 않는다(`lp_cutoff=None`). 직접 차단 주파수를 쓰려면 체크를 끈다. 계산식 줄의 필터 목록에는 `LPF(자동 Fs/2→우회)`로 나온다.
 
-## CSV 시간별 통계
+## CSV 데이터 가져오기 (2026-11-24)
 
-설정 '통계 데이터' 탭의 버튼(`POST /api/db/csv-stats`) → `csv_stats.CsvStatsJob`. 운영 서버처럼 DB 없이 CSV만 있는 곳에서 통계를 채운다.
+설정 '통계 데이터' 탭의 'CSV 데이터 가져오기' 버튼(`POST /api/db/csv-import`) → `csv_import.CsvImportJob`. 이전 웹(SQLite 없음) 때 CSV만 쌓인 운영 서버에서 그 CSV를 `packet`에 넣는다. 통계는 여기서 만들지 않고, 끝난 뒤 '지금 기준으로 다시 계산'으로 모든 기간을 같은 길(packet → 시간별 통계)로 만든다.
+(2026-11-23까지의 'CSV로 시간별 통계 다시 만들기'(`csv_stats.py`)를 대신한다. 그 방식은 통계만 만들고 packet에는 없어서, '다시 계산'을 누르면 CSV 기간 통계가 지워지고 분석 화면(DB)에서 옛 기간을 열 수 없었다.)
 
-1. `data_csv_web` 아래(하위 폴더 포함) `{MAC}_ADXL-X/Y/Z_sensorData_hex.csv` 세 파일 묶음을 모두 찾는다. 다른 곳의 CSV 폴더도 `data_csv_web` 안에 넣으면 같이 읽는다.
-2. 묶음마다 CSV 분석 화면과 같은 `load_adxl_csv_xyz`로 X/Y/Z 세트를 묶는다(packet_no → seq). 깨진 HEX는 복구하지 않고 그 세트를 뺀다.
-3. 세트마다 매시간 통계와 같은 `stat_profile.set_stats`로 계산한다. 기준은 DB의 가장 최근 통계 기준 버전이다. 같은 데이터면 DB 통계와 값이 같다.
-4. 같은 세트(MAC + 세 축 수신 시각)가 여러 폴더에 있으면 한 번만 센다.
-5. 세트 시(세 축 중 마지막 수신 시각의 시)별로 MAC·시간마다 `measurement` 한 줄(`set_key = CSV|버전|MAC|시`).
-6. 한 commit으로 `measurement`를 전부 지우고 이 줄들로 바꾼다. 세트를 하나도 못 찾으면 아무것도 지우지 않는다.
-7. `stat_cursor`를 시작 순간의 MAC별 마지막 packet id로 옮긴다. 그 패킷은 CSV에도 있으므로 매시간 스케줄러가 다시 세지 않고, 그 뒤 수신분만 더한다. 그 기준 버전이 지금 버전이 된다.
-8. `device`에 없는 MAC은 등록한다(통계 화면 목록이 device 기준). 마지막 수신이 비어 있으면 CSV 마지막 시각을 넣는다.
+1. `data_csv_web` 아래(하위 폴더 포함) 모든 `{MAC}_{종류}_sensorData_hex.csv`(ADXL-X/Y/Z, PIEZO, ULTRASONIC)를 찾는다. `_decoded_samples.csv`는 읽지 않는다.
+2. 폴더마다 그 폴더 파일들을 수신 시각 순으로 합쳐 **한 줄씩 흘려** 읽는다(파일 전체를 메모리에 올리지 않음). 줄마다 실시간 수신과 같은 디코드로 HEX를 확인하고(`import_csv._item`), 안 되면 건너뛰고 개수를 결과에 남긴다.
+3. ADXL은 MAC마다 실시간과 같은 규칙(`grouping.continues_set`, seq 하위 4비트 X→Y→Z)으로 세트를 묶는다. PIEZO·초음파는 패킷 하나가 한 묶음.
+4. HEX 약 1MB(ADXL 약 10세트)씩 모아 `Store.import_packets`로 넣는다. 세트는 끊지 않는다. DB 잠금은 이 한 번(중복 확인 + INSERT + commit)만 잡고, 묶음 사이에 5ms 쉰다.
+5. 중복: 같은 MAC·종류·축·수신 시각이 이미 `packet`에 있으면(실시간으로 받음, 전에 가져옴, 다른 폴더의 같은 CSV) 그 묶음을 통째로 건너뛴다. 여러 번 눌러도 두 번 들어가지 않는다.
+6. 가져온 줄은 `packet.source='csv'`, `set_key = CSV|종류|MAC|n`(n은 MAC·종류마다 가져온 줄의 최대+1부터).
+7. `device`: 없는 MAC은 등록. 마지막 수신(`last_at` 등)은 비어 있을 때만 CSV 시각으로 채운다(실시간 값을 옛 값으로 덮지 않음).
 
-전제: CSV가 원본 전체다. CSV 저장을 꺼 둔 기간은 통계에서 빠진다(`docs/packet-보관-정리-예정.md`의 CSV 상시 저장과 같은 이유). `Store.stats_lock`을 처음부터 끝까지 잡으므로 매시간 스케줄러·재계산과 겹치지 않는다. 로컬 `data_csv_web`(74묶음, 1279세트)는 약 8초(2026-11-23).
+수신 중에 돌려도 되는 이유
+- CSV 저장은 CsvWriter 스레드라 DB와 상관없다.
+- 실시간 DB 저장(`save_packet`)은 가져오기 묶음 하나의 잠금 시간만 기다린다. 측정(2026-11-24, 로컬 `data_csv_web` 256파일 154MB, 5232줄, 7.5초): 묶음 잠금 대부분 60~100ms, 최대 275ms. 그동안 0.05초마다 저장한 가짜 실시간 패킷의 대기 중앙 2.8ms, 최대 231ms. MQTT keepalive(수십 초)에 비해 짧다.
+- 가져온 줄은 실시간 줄보다 큰 id로 끼어든다. 그래서 실시간 세트 묶기(`assign_set`)는 `source=''` 줄만 보고, 통계는 ADXL을 source별로 따로 읽는다(읽기 위치 `stat_cursor` 키: 실시간 `MAC`, 가져온 줄 `CSV|MAC`). 시험에서 가져오는 동안 저장된 실시간 47세트가 모두 X/Y/Z로 묶였다.
+- 가져오기와 재계산·기준 저장은 서로 409로 막는다. 매시간 통계는 막지 않는다(가져온 줄도 새 줄로 보고 시간 줄에 더한다. 끝난 뒤 '다시 계산'을 누르면 처음부터 정리된다).
+- 한 달치(수 GB)면 수 분~수십 분으로 예상한다(로컬 154MB 7.5초 기준, 디스크 속도에 따라 다름).
+
+명령줄 `python -m web_db.src.import_csv 폴더 --reset`은 그대로 있다(서버를 멈추고 DB를 비운 뒤 실시간 길로 넣음). 운영 서버에서는 위 버튼을 쓴다.
 
 ## CSV 폴더로 DB 채우기
 
@@ -309,6 +319,8 @@ LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같�
 python -m web_db.src.import_csv D:\20261106_100046 --reset   # 지우고 채우기
 python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 더 넣기
 ```
+
+서버를 켠 채로 옛 CSV를 더 넣을 때(운영 서버)는 이 명령 대신 설정 'CSV 데이터 가져오기'를 쓴다(위 절). 이 명령의 '지우지 않고 더 넣기'는 중복을 확인하지 않아, DB에 이미 있는 기간의 CSV를 넣으면 같은 패킷이 두 번 들어간다.
 
 - `*_sensorData_hex.csv`만 읽는다. HEX를 수신과 같은 디코드 함수로 다시 푼다(`_decoded_samples.csv`는 안 읽음). 디코드가 안 되는 줄은 실시간 수신처럼 건너뛴다.
 - 모든 파일의 줄을 `received_at` 순으로 넣는다. `assign_set`이 MAC의 직전 패킷과 seq를 비교해 X/Y/Z 세트를 묶으므로 받은 순서대로 넣어야 한다.
@@ -343,7 +355,7 @@ python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 
 
 최신화 한 번은 MAC마다 다음 순서로 돈다. 패킷 수신은 그동안에도 계속된다.
 
-1. `Store.lock` 안에서 읽기 위치(`stat_cursor`) 뒤의 ADXL 줄을 300줄 읽는다(HEX만, `decoded_samples`는 안 읽음).
+1. `Store.lock` 안에서 읽기 위치(`stat_cursor`) 뒤의 ADXL 줄을 300줄 읽는다(HEX 칸만).
 2. 잠금을 풀고 `complete_sets`로 seq를 보며 X/Y/Z를 다시 묶는다. 세트마다 `stat_profile.set_stats`(필터 → Welch PSD → 보정 → 속도 RMS)를 계산하고, 세트 시각의 '시'로 모은다.
 3. `settled_through`로 이번에 다 본 마지막 id를 정한다. 계산에 실패한 세트와 축이 빠진 묶음도 다 본 것이다. 맨 끝 묶음에 Z가 아직 없으면 그 묶음 앞까지만 본 것으로 한다.
 4. 다시 `Store.lock` 안에서, 시간 줄이 이미 있으면 세트 수로 가중해 합치고 없으면 넣는다. `stat_cursor`도 같은 commit으로 옮긴다.
@@ -355,7 +367,7 @@ python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 
 
 `set_no`는 수신할 때 `assign_set`이 붙이고, 그 뒤로 바꾸지 않는다. 통계는 `set_no`를 믿지 않고 seq로 다시 묶으므로, 번호가 어긋나 있어도 통계 결과는 같다. `set_no`는 분석 화면이 세트 단위로 고를 때만 쓴다.
 
-통계 화면의 막대와 RMS 숫자는 시간 줄을 세트 수로 가중한 전체 평균이다. PEAK 숫자는 최댓값이다. 작은 그래프는 최근 시간 줄 최대 168개(7일)의 변화다. 센서 현황 경보는 가장 늦은 시간 줄의 SRSS(mm/s)다.
+통계 화면의 막대와 RMS 숫자는 고른 기간(24시간 기본·7일·30일·전체, 2026-11-24)의 시간 줄을 세트 수로 가중한 평균이다. PEAK 숫자는 그 기간 최댓값이다. 작은 그래프는 그 기간의 변화다(7일·30일·전체는 하루 한 점, 7일 = 오늘 포함 7일). 센서 현황 경보는 가장 늦은 시간 줄의 SRSS(mm/s)다.
 
 ## 값을 자르는 곳
 

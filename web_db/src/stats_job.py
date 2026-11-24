@@ -7,7 +7,7 @@
 
 SQLite를 붙잡지 않는다: 계산은 store.rebuild_statistics가 300줄씩 짧게 읽고 잠금 밖에서 계산한다.
 수신 저장은 그동안에도 그대로 된다. 끝나기 전까지 화면·경보는 이전 통계를 본다.
-한 번에 하나만 돈다(Store.stats_lock을 잡으므로 매시간 최신화·CSV 통계와도 겹치지 않는다).
+한 번에 하나만 돈다(Store.stats_lock을 잡으므로 매시간 최신화와도 겹치지 않는다).
 """
 
 from __future__ import annotations

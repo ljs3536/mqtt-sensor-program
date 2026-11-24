@@ -132,6 +132,10 @@ async function command(action) {
     // (예전에는 Number()로 바꿔 빈칸이 0이 되고, 서버가 0을 1로 바꿨다).
     period: period.value.trim(),
     profile: profile.value,
+    // 직접 입력을 켰으면 목록 대신 이 두 값(서버가 custom_profile로 검사, 잘못되면 아무것도 보내지 않음).
+    custom: !!document.querySelector("#customFsn")?.checked,
+    custom_rate: document.querySelector("#customRate")?.value.trim() || "",
+    custom_count: document.querySelector("#customCount")?.value.trim() || "",
     sensor_type: document.querySelector("#sensorType") ? sensorType.value : "",
     g_range: document.querySelector("#gRange") ? gRange.value : "16",
     piezo_gain: document.querySelector("#piezoGain") ? piezoGain.value : "30",

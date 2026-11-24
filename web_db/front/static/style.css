@@ -347,6 +347,12 @@ pre.short { height: 72px; }
 }
 .cmd-grid input, .cmd-grid select, .cmd-target input, .cmd-name-row input, .cmd-name-row select { width: 100%; }
 .field-note { font-size: 11px; color: #7b8b9c; font-weight: 400; }
+/* Fs + N 직접 입력(2026-11-24, 개발·시험용): 체크하면 목록 대신 Fs·N 두 칸 */
+.fsn-field { display: grid; gap: 4px; align-content: start; }
+.cmd-grid label.fsn-check { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 4px; font-size: 12px; color: #7b8b9c; font-weight: 400; }
+.cmd-grid .fsn-check input { width: auto; }
+.fsn-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.fsn-custom[hidden] { display: none; }
 /* Window 보정계수 문구. 숫자가 바뀌어도 칸 폭이 흔들리지 않게 고정폭 숫자를 쓴다. */
 .window-factor { color: #365a78; font-variant-numeric: tabular-nums; white-space: nowrap; }
 p.window-factor { margin: 0; }

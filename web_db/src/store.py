@@ -14,10 +14,12 @@ import json
 import math
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
-from web_db.src.db_util import _float, _int, _iso, _rate, _samples_text
+from web_db.src.db_util import _float, _int, _iso, _rate
 from web_db.src.grouping import assign_set
+from web_db.src.limits import zone_bounds
 from web_db.src.store_query import QueryMixin
 from web_db.src.store_site import SiteMixin
 
@@ -72,6 +74,8 @@ class Store(QueryMixin, SiteMixin):
             CREATE TABLE IF NOT EXISTS device (
                 mac TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL DEFAULT '',
+                location TEXT NOT NULL DEFAULT '',
+                visible INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_gw TEXT NOT NULL DEFAULT '',
@@ -93,7 +97,6 @@ class Store(QueryMixin, SiteMixin):
                 sample_count INTEGER,
                 payload_bytes INTEGER,
                 sensor_data_hex TEXT NOT NULL,
-                decoded_samples TEXT NOT NULL,
                 min_khz REAL,
                 interval_hz REAL,
                 freq_start_khz REAL,
@@ -225,6 +228,47 @@ class Store(QueryMixin, SiteMixin):
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_measurement_profile ON measurement(profile_id, mac, hour)"
         )
+        # 진동 평가 구간(2026-11-23, limits.zone_bounds): MAC마다 양호 상한·주의 상한. 비어 있으면 한계의 ISO 비율.
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(srss_limit)")}
+        for name in ("good_mm_s", "caution_mm_s"):
+            if name not in columns:
+                self._conn.execute(f"ALTER TABLE srss_limit ADD COLUMN {name} REAL")
+        # 지금 코드가 읽지도 쓰지도 않는 옛 열은 지운다(2026-11-23). device·measurement는 작은 표라 바로 끝난다.
+        # 다른 프로그램이 DB를 잡고 있는 등으로 실패하면 그대로 두고 서버는 뜬다(값이 비어 있을 뿐 동작 영향 없음).
+        # device.location(설치 위치)은 2026-11-23에 지웠다가 2026-11-24에 다시 쓴다(설정 > 장치 '위치' 칸).
+        # 그래서 지우는 목록에서 빼고, 없으면(이미 지운 DB) 빈 값으로 다시 만든다. 지워졌던 값은 돌아오지 않는다.
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(device)")}
+        if "location" not in columns:
+            self._conn.execute("ALTER TABLE device ADD COLUMN location TEXT NOT NULL DEFAULT ''")
+        # device.visible(2026-11-24): 설정 > 장치 '표시' 체크. 0이면 이름이 있어도 센서 현황·분석·통계에서 숨긴다.
+        # 옛 줄은 모두 보이게(1). 수신 저장·통계 계산과는 상관없다.
+        if "visible" not in columns:
+            self._conn.execute("ALTER TABLE device ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
+        for table, names in (("device", ("asset_no",)),
+                             ("measurement", ("packet_id", "packet_x_id", "packet_y_id", "packet_z_id"))):
+            columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            for name in names:
+                if name in columns:
+                    try:
+                        self._conn.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+                    except sqlite3.DatabaseError:
+                        pass
+        # packet.decoded_samples(HEX를 푼 샘플 글자): 2026-11-23부터 읽는 곳이 없다(통계도 HEX를 읽음).
+        # DB 크기의 절반쯤이라 새 DB에는 만들지 않는다. 옛 DB는 열이 남아 있으면 빈 글자로만 채운다
+        # (NOT NULL). 이미 쌓인 값을 지우고 파일을 줄이는 것은 packet 표 전체를 다시 쓰는 일이라
+        # 서버 시작 때 하지 않고, 서버를 멈춘 뒤 `python -m web_db.src.compact_db`로 한다.
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(packet)")}
+        self._packet_has_decoded = "decoded_samples" in columns
+        # packet.source(2026-11-24): 이 줄이 어디서 왔는지. '' = 실시간 수신(save_packet),
+        # 'csv' = 설정 > 통계 데이터 'CSV 데이터 가져오기'로 넣은 옛 CSV 줄(import_packets, csv_import.py).
+        # 가져오기는 수신 중에도 돌아서 옛 줄과 실시간 줄이 id 순서로 섞인다. 그래서
+        # - 실시간 세트 묶기(grouping.assign_set)는 source=''인 직전 패킷만 보고,
+        # - 매시간 통계·재계산은 source별로 따로 읽는다(store_query._compute_adxl, 읽기 위치 키도 따로).
+        # 옛 DB의 줄은 모두 실시간 수신이라 기본값 ''가 맞다.
+        if "source" not in columns:
+            self._conn.execute("ALTER TABLE packet ADD COLUMN source TEXT NOT NULL DEFAULT ''")
+        # 세트 묶기·통계가 'MAC·종류·source 안에서 id 순'으로 읽는 길(가져온 줄이 많아도 실시간 저장이 느려지지 않게).
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_packet_stream ON packet(mac, sensor_type, source, id)")
         # 옛 스키마에서 남은 MAC 빈 device 줄(mac이 NULL)은 화면 목록을 어지럽히므로 지운다.
         # 있을 때만 지운다. 늘 DELETE를 하면 다른 프로그램(DB Browser 등)이 쓰기 잠금을 잡고 있을 때
         # 서버가 시작조차 못 한다(읽기는 WAL이라 잠금과 상관없이 된다).
@@ -233,27 +277,44 @@ class Store(QueryMixin, SiteMixin):
             self._conn.execute("DELETE FROM device WHERE mac IS NULL OR TRIM(mac)=''")
         self._conn.commit()
 
-    def save_display_name(self, mac, name):
-        """MAC의 표시 이름을 device에 저장한다."""
+    def save_display_name(self, mac, name, location=None):
+        """MAC의 표시 이름(과 설치 위치)을 device에 저장한다.
+
+        location이 None이면 위치는 그대로 둔다(이름만 저장하는 수신 모니터용). 새 MAC이면 빈 위치로 만든다.
+        """
         mac = str(mac or "").strip()
         if not mac:
             raise ValueError("MAC이 필요합니다")
         now = _iso()
         label = str(name or "").strip()
+        place = None if location is None else str(location).strip()[:100]
         with self.lock:
             self._conn.execute(
                 """
                 INSERT INTO device(
-                    mac, display_name, created_at, updated_at, last_gw, last_battery, last_sensor, last_at
-                ) VALUES (?, ?, ?, ?, '', '', '', '')
+                    mac, display_name, location, created_at, updated_at, last_gw, last_battery, last_sensor, last_at
+                ) VALUES (?, ?, COALESCE(?, ''), ?, ?, '', '', '', '')
                 ON CONFLICT(mac) DO UPDATE SET
                     display_name=excluded.display_name,
+                    location=COALESCE(?, device.location),
                     updated_at=excluded.updated_at
                 """,
-                (mac, label, now, now),
+                (mac, label, place, now, now, place),
             )
+            place = self._conn.execute("SELECT location FROM device WHERE mac=?", (mac,)).fetchone()["location"]
             self._conn.commit()
-        return {"mac": mac, "display_name": label}
+        return {"mac": mac, "display_name": label, "location": place}
+
+    def set_device_visible(self, mac, visible):
+        """설정 > 장치 '표시' 체크를 저장한다. 없는 MAC이면 ValueError."""
+        mac = str(mac or "").strip()
+        with self.lock:
+            changed = self._conn.execute(
+                "UPDATE device SET visible=?, updated_at=? WHERE mac=?", (1 if visible else 0, _iso(), mac)).rowcount
+            self._conn.commit()
+        if not changed:
+            raise ValueError("등록되지 않은 MAC입니다")
+        return {"mac": mac, "visible": bool(visible)}
 
     def clear_display_name(self, mac):
         """표시 이름을 지운다. 수신 패킷이 없는 MAC은 목록에서도 뺀다."""
@@ -311,8 +372,58 @@ class Store(QueryMixin, SiteMixin):
         with self.lock:
             return self._read_srss_limit(mac)
 
+    def _read_zones(self, mac):
+        """lock을 가진 상태에서 진동 평가 구간 {good, caution, limit, custom}(limits.zone_bounds)."""
+        key = self.limit_key(mac)
+        row = self._conn.execute(
+            "SELECT limit_mm_s, good_mm_s, caution_mm_s FROM srss_limit WHERE mac=?", (key,)
+        ).fetchone() if key else None
+        if row is None:
+            return zone_bounds(4.5)
+        return zone_bounds(self._limit_number(row["limit_mm_s"]), row["good_mm_s"], row["caution_mm_s"])
+
+    def get_zones(self, mac):
+        """진동 평가 구간 {good, caution, limit, custom}. 양호 < good ≤ 주의 < caution ≤ 경고 < limit ≤ 위험."""
+        with self.lock:
+            return self._read_zones(mac)
+
+    def save_zones(self, mac, good, caution, limit):
+        """세 경계를 저장한다. good·caution이 둘 다 비어 있으면(None·'') 자동(ISO 비율)으로 되돌린다.
+
+        0 < 양호 상한 < 주의 상한 < 위험 기준이어야 한다. 위험 기준은 예전 SRSS 한계와 같은 칸이다.
+        """
+        key = self.limit_key(mac)
+        number = float(limit)
+        if not key or not math.isfinite(number) or number <= 0:
+            raise ValueError("장치 ID와 0보다 큰 위험 기준이 필요합니다")
+        blank = lambda value: value is None or str(value).strip() == ""
+        if blank(good) and blank(caution):
+            good_value = caution_value = None
+        else:
+            try:
+                good_value, caution_value = float(good), float(caution)
+            except (TypeError, ValueError):
+                raise ValueError("양호 상한과 주의 상한은 둘 다 숫자여야 합니다(둘 다 비우면 자동)") from None
+            if not (0 < good_value < caution_value < number):
+                raise ValueError("0 < 양호 상한 < 주의 상한 < 위험 기준 순서여야 합니다")
+        with self.lock:
+            self._conn.execute(
+                """
+                INSERT INTO srss_limit(mac, limit_mm_s, good_mm_s, caution_mm_s, updated_at) VALUES (?,?,?,?,?)
+                ON CONFLICT(mac) DO UPDATE SET
+                    limit_mm_s=excluded.limit_mm_s, good_mm_s=excluded.good_mm_s,
+                    caution_mm_s=excluded.caution_mm_s, updated_at=excluded.updated_at
+                """,
+                (key, number, good_value, caution_value, _iso()),
+            )
+            self._conn.commit()
+            return self._read_zones(key)
+
     def save_srss_limit(self, mac, value):
-        """장치 SRSS 한계를 srss_limit 테이블에 저장한다."""
+        """장치 SRSS 한계(= 위험 기준)를 저장한다. 분석 화면의 '한계 적용'이 부른다.
+
+        저장해 둔 양호·주의 상한이 새 한계보다 크거나 같아지면 그 둘은 비워 자동(ISO 비율)으로 되돌린다.
+        """
         key = self.limit_key(mac)
         number = float(value)
         if not key or not math.isfinite(number) or number <= 0:
@@ -327,6 +438,11 @@ class Store(QueryMixin, SiteMixin):
                     updated_at=excluded.updated_at
                 """,
                 (key, number, now),
+            )
+            self._conn.execute(
+                "UPDATE srss_limit SET good_mm_s=NULL, caution_mm_s=NULL "
+                "WHERE mac=? AND (caution_mm_s IS NOT NULL AND caution_mm_s>=?)",
+                (key, number),
             )
             self._conn.commit()
         return number
@@ -414,10 +530,28 @@ class Store(QueryMixin, SiteMixin):
         - 센서 종류: kind가 ULTRASONIC이면 초음파(축 H), ADXL-로 시작하면 ADXL, 나머지는 PIEZO.
         - sample_rate: 수신 JSON 값을 그대로 둔다(_rate). 장비 코드 `0x0F`도 글자로 남고,
           Hz로 읽는 것은 쓰는 쪽(통계 stat_profile, 그래프)이 normalize_sample_rate로 한다.
-        - decoded_samples: 디코드한 샘플을 쉼표 문자열로. 통계가 HEX를 다시 풀지 않게 한다.
+        - decoded_samples는 2026-11-23부터 쓰지 않는다. 옛 DB에 열이 남아 있으면 빈 글자를 넣는다(_migrate 설명).
         - set_key / set_no: assign_set이 직전 패킷과 seq를 비교해 정한다. 같은 lock 안에서
           '직전 패킷 조회 → INSERT'를 하므로, 두 패킷이 같은 직전 값을 보고 번호가 꼬이지 않는다.
         한 패킷마다 commit한다. 서버가 꺼져도 받은 패킷까지는 남는다.
+        """
+        mac, sensor_type, axis, seq, received, names, values = self._packet_values(item)
+        with self.lock:
+            key, set_no = assign_set(self._conn, mac, seq, sensor_type, axis)
+            self._touch_device(mac, received, str(item.get("gw") or ""), str(item.get("battery") or ""), sensor_type)
+            cursor = self._conn.execute(
+                f"INSERT INTO packet({', '.join(names + ['set_key', 'set_no'])}) "
+                f"VALUES ({', '.join('?' for _ in range(len(names) + 2))})",
+                values + [key, set_no],
+            )
+            packet_id = int(cursor.lastrowid)
+            self._conn.commit()
+            return packet_id
+
+    def _packet_values(self, item):
+        """save_packet·import_packets 공용: item → (mac, 종류, 축, seq, 수신 시각, packet 칸 이름, 값).
+
+        set_key·set_no·source는 넣지 않는다(부르는 쪽이 붙인다).
         """
         mac = str(item.get("device") or "UNKNOWN").strip() or "UNKNOWN"
         kind = str(item.get("kind") or "")
@@ -426,45 +560,118 @@ class Store(QueryMixin, SiteMixin):
         seq = str(item.get("seq") or "")
         tick = str(item.get("tick") or "")
         received = _iso(item.get("received_at"))
-        decoded = _samples_text(item.get("decoded"), kind)
         meta = item.get("meta") or {}
+        names = ["mac", "received_at", "gw_mac", "sensor_type", "axis", "seq", "tick", "battery",
+                 "sample_rate", "sample_count", "payload_bytes", "sensor_data_hex",
+                 "min_khz", "interval_hz", "freq_start_khz", "freq_end_khz"]
+        values = [
+            mac,
+            received,
+            str(item.get("gw") or ""),
+            sensor_type,
+            axis,
+            seq,
+            tick,
+            str(item.get("battery") or ""),
+            _rate(item.get("sample_rate")),
+            _int(item.get("num_samples")),
+            _int(item.get("payload_bytes")),
+            str(item.get("sensor_data") or ""),
+            _float(meta.get("minKhz")) if meta else None,
+            _float(meta.get("intervalHz")) if meta else None,
+            _float(meta.get("freq_start_khz")) if meta else None,
+            _float(meta.get("freq_end_khz")) if meta else None,
+        ]
+        if self._packet_has_decoded:
+            names.append("decoded_samples")
+            values.append("")
+        return mac, sensor_type, axis, seq, received, names, values
+
+    def import_packets(self, sets):
+        """옛 CSV 패킷 묶음을 packet에 넣는다(설정 'CSV 데이터 가져오기', csv_import.py).
+
+        sets: [[item, ...], ...]. 묶음 하나 = ADXL X/Y/Z 한 세트(축이 빠질 수 있음) 또는 PIEZO·초음파 패킷 하나.
+              item은 save_packet과 같은 모양(import_csv._item).
+        돌려줌: {"saved": 넣은 패킷 수, "duplicates": 이미 있어 건너뛴 패킷 수, "lock_ms": 잠금을 잡은 시간}
+        - source='csv'로 넣는다. 실시간 세트 묶기와 통계는 source별로 따로 보므로 수신 중에 넣어도 섞이지 않는다.
+        - 중복: 같은 MAC·종류·축·수신 시각이 이미 packet에 있으면(실시간으로 받았거나 전에 가져옴) 그 묶음을
+          통째로 건너뛴다. 세트 일부만 들어가 반쪽 세트가 생기지 않게 한다. 버튼을 여러 번 눌러도 안전하다.
+        - set_key 'CSV|종류|MAC|n'(실시간 '종류|MAC|n'과 겹치지 않음), set_no n은 MAC·종류마다 가져온 줄의 최대+1부터.
+        - device: 없는 MAC은 등록한다. 마지막 수신(last_at 등)은 비어 있을 때만 이 묶음의 가장 늦은 시각으로
+          채운다(실시간 수신 값을 옛 값으로 덮지 않는다).
+        잠금은 이 함수 안에서만 잡고 한 commit으로 끝낸다. 부르는 쪽이 HEX 약 1MB씩 나눠 불러,
+        실시간 수신 저장이 기다리는 시간은 한 번에 그 commit 시간 정도다(결과 lock_ms).
+        """
+        prepared = []
+        for group in sets:
+            rows = [self._packet_values(item) + (item,) for item in group]
+            if rows:
+                prepared.append(rows)
+        began = time.perf_counter()
+        saved = duplicates = 0
         with self.lock:
-            key, set_no = assign_set(self._conn, mac, seq, sensor_type, axis)
-            self._touch_device(mac, received, str(item.get("gw") or ""), str(item.get("battery") or ""), sensor_type)
-            cursor = self._conn.execute(
-                """
-                INSERT INTO packet(
-                    mac, received_at, gw_mac, sensor_type, axis, seq, tick,
-                    battery, sample_rate, sample_count, payload_bytes, sensor_data_hex,
-                    decoded_samples, min_khz, interval_hz, freq_start_khz, freq_end_khz,
-                    set_key, set_no
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    mac,
-                    received,
-                    str(item.get("gw") or ""),
-                    sensor_type,
-                    axis,
-                    seq,
-                    tick,
-                    str(item.get("battery") or ""),
-                    _rate(item.get("sample_rate")),
-                    _int(item.get("num_samples")),
-                    _int(item.get("payload_bytes")),
-                    str(item.get("sensor_data") or ""),
-                    decoded,
-                    _float(meta.get("minKhz")) if meta else None,
-                    _float(meta.get("intervalHz")) if meta else None,
-                    _float(meta.get("freq_start_khz")) if meta else None,
-                    _float(meta.get("freq_end_khz")) if meta else None,
-                    key,
-                    set_no,
-                ),
-            )
-            packet_id = int(cursor.lastrowid)
+            numbers = {}
+            latest = {}
+            # 중복 확인: MAC마다 이 묶음의 수신 시각 범위를 (mac, received_at) 인덱스로 한 번에 읽어 둔다.
+            # 줄마다 따로 물으면 SQLite가 다른 인덱스를 골라 표 본문을 읽느라 묶음당 100ms 넘게 걸렸다(2026-11-24 측정).
+            span = {}
+            for rows in prepared:
+                for mac, _type, _axis, _seq, received, _n, _v, _i in rows:
+                    low, high = span.get(mac, (received, received))
+                    span[mac] = (min(low, received), max(high, received))
+            seen = set()
+            for mac, (low, high) in span.items():
+                for row in self._conn.execute(
+                    "SELECT sensor_type, axis, received_at FROM packet INDEXED BY idx_packet_mac_time "
+                    "WHERE mac=? AND received_at BETWEEN ? AND ?",
+                    (mac, low, high),
+                ):
+                    seen.add((mac, row["sensor_type"], row["axis"], row["received_at"]))
+            for rows in prepared:
+                keys = [(mac, sensor_type, axis, received) for mac, sensor_type, axis, _seq, received, _n, _v, _i in rows]
+                exists = any(key in seen for key in keys)
+                seen.update(keys)  # 같은 묶음 안에서 두 폴더의 같은 줄도 한 번만
+                if exists:
+                    duplicates += len(rows)
+                    continue
+                mac, sensor_type = rows[0][0], rows[0][1]
+                if (mac, sensor_type) not in numbers:
+                    # 번호는 늘 최대+1로 매기므로 가장 큰 id 줄의 set_no가 최대다. MAX(set_no)로 찾으면 set_no가 큰 HEX 칸
+                    # 뒤에 있어 그 MAC의 가져온 줄을 전부(넘침 페이지까지) 읽게 되어 잠금이 길어진다(2026-11-24 측정 0.7초).
+                    row = self._conn.execute(
+                        "SELECT set_no FROM packet WHERE mac=? AND sensor_type=? AND source='csv' ORDER BY id DESC LIMIT 1",
+                        (mac, sensor_type),
+                    ).fetchone()
+                    numbers[(mac, sensor_type)] = int(row["set_no"] or 0) if row is not None else 0
+                numbers[(mac, sensor_type)] += 1
+                number = numbers[(mac, sensor_type)]
+                key = f"CSV|{sensor_type}|{mac}|{number}"
+                for _mac, _type, _axis, _seq, received, names, values, item in rows:
+                    self._conn.execute(
+                        f"INSERT INTO packet({', '.join(names + ['set_key', 'set_no', 'source'])}) "
+                        f"VALUES ({', '.join('?' for _ in range(len(names) + 3))})",
+                        values + [key, number, "csv"],
+                    )
+                    saved += 1
+                    last = latest.get(mac)
+                    if last is None or received > last[0]:
+                        latest[mac] = (received, str(item.get("gw") or ""), str(item.get("battery") or ""), sensor_type)
+            now = _iso()
+            for mac, (received, gw, battery, sensor_type) in latest.items():
+                self._conn.execute(
+                    """
+                    INSERT INTO device(mac, created_at, updated_at, last_gw, last_battery, last_sensor, last_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(mac) DO UPDATE SET
+                        last_gw=CASE WHEN device.last_at='' THEN excluded.last_gw ELSE device.last_gw END,
+                        last_battery=CASE WHEN device.last_at='' THEN excluded.last_battery ELSE device.last_battery END,
+                        last_sensor=CASE WHEN device.last_at='' THEN excluded.last_sensor ELSE device.last_sensor END,
+                        last_at=CASE WHEN device.last_at='' THEN excluded.last_at ELSE device.last_at END
+                    """,
+                    (mac, now, now, gw, battery, sensor_type, received),
+                )
             self._conn.commit()
-            return packet_id
+        return {"saved": saved, "duplicates": duplicates, "lock_ms": (time.perf_counter() - began) * 1000}
 
     def _touch_device(self, mac, now, gw, battery, sensor_type):
         """패킷이 온 MAC을 device에 등록하거나 마지막 수신 정보를 갱신한다."""

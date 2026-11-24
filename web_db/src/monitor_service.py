@@ -88,8 +88,35 @@ def _sliding_ac_rms(values, window_n):
     return curve
 
 
+# Fs·N 직접 입력(2026-11-24, 센서 수신 모니터 '직접 입력' 체크): 표에 없는 조합을 개발·시험용으로 보낸다.
+# N은 오타로 센서를 멈추게 하지 않도록 이 범위만 받는다. MEMS Fs는 센서가 레지스터 코드로 받으므로 ADXL_RATE_TO_CODE 값만.
+CUSTOM_COUNT_RANGE = (16, 65536)
+CUSTOM_PIEZO_RATE_RANGE = (1, 102400)
+
+
+def custom_profile(sensor, rate, count):
+    """직접 입력한 Fs·N을 검사해 (rate, count) 글자 쌍으로 돌려준다. 잘못되면 ValueError(이유)."""
+    rate_text, count_text = str(rate if rate is not None else "").strip(), str(count if count is not None else "").strip()
+    if not rate_text.isdigit() or not count_text.isdigit():
+        raise ValueError("직접 입력 Fs와 N은 양의 정수여야 합니다")
+    rate_value, count_value = int(rate_text), int(count_text)
+    low, high = CUSTOM_COUNT_RANGE
+    if not low <= count_value <= high:
+        raise ValueError(f"직접 입력 N은 {low}~{high} 사이여야 합니다")
+    if str(sensor).upper() == "PIEZO":
+        low, high = CUSTOM_PIEZO_RATE_RANGE
+        if not low <= rate_value <= high:
+            raise ValueError(f"PIEZO Fs는 {low}~{high} Hz 사이여야 합니다")
+    elif str(rate_value) not in mon.ADXL_RATE_TO_CODE:
+        allowed = ", ".join(mon.ADXL_RATE_TO_CODE)
+        raise ValueError(f"MEMS Fs는 센서 코드가 있는 값만 됩니다: {allowed} Hz")
+    return str(rate_value), str(count_value)
+
+
 def _sensor_config(sensor, period, profile, stop=False, sensor_type=None, g_range="16", piezo_gain="30"):
     """모니터 명령 JSON. COMMPATH는 0으로 고정한다.
+
+    profile: Fs+N 목록 글자('3200 Hz + 8192') 또는 직접 입력을 검사한 (rate, count) 쌍(custom_profile).
 
     0은 종료, 1/3은 PIEZO normal/collection, 2/4는 MEMS normal/collection이다.
     G Range와 PIEZO 게인은 화면 환산 LSB와 별개로 센서에 보낸다.
@@ -114,7 +141,7 @@ def _sensor_config(sensor, period, profile, stop=False, sensor_type=None, g_rang
         raise ValueError("측정 주기는 0 이상의 정수(초)여야 합니다")
     payload = {"COMMPATH": "0", "SENSORTYPE": code, "SENSING_PERIOD": str(period_value)}
     if code in ("1", "3"):
-        rate, count = mon.PIEZO_PROFILE_MAP[profile]
+        rate, count = profile if isinstance(profile, tuple) else mon.PIEZO_PROFILE_MAP[profile]
         gain = str(piezo_gain).strip()
         if not gain.isdigit():
             raise ValueError("PIEZO_GAIN은 0 이상의 정수여야 합니다")
@@ -124,7 +151,7 @@ def _sensor_config(sensor, period, profile, stop=False, sensor_type=None, g_rang
             "PIEZO_GAIN": gain,
         })
         return payload
-    rate, count = mon.ADXL_PROFILE_MAP[profile]
+    rate, count = profile if isinstance(profile, tuple) else mon.ADXL_PROFILE_MAP[profile]
     sample_code = mon.ADXL_RATE_TO_CODE.get(str(rate))
     if not sample_code:
         raise ValueError(f"ADXL Sample Rate 코드 변환 실패: {rate}")

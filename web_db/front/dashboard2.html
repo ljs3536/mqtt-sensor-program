@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>센서 통계 2</title>
+  <script>
+    (function () {
+      var theme = localStorage.getItem("sensor-theme") || "white";
+      document.documentElement.setAttribute("data-theme", theme);
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v=32">
+  <link rel="stylesheet" href="/static/theme.css?v=14">
+  <style>
+    /*
+     * 통계 2 (/dashboard2, 2026-11-24 다시 꾸밈). /dashboard와 같은 값(/api/db/dashboard)을 보기 좋게 정리한 화면.
+     * - 위: 제목·마지막 계산·기간 버튼 → 구간별 센서 수 → 센서별 속도 RMS 기간 평균 세로 막대(높은 순, MEMS / PIEZO 따로).
+     * - 아래: 센서 카드(이름·구간·자세히 / 전체 MAC·위치·세트 수·최근 값 / 속도 RMS·RMS·PEAK 작은 그래프).
+     * - '자세히'는 그 센서 통계 창(요약 칸, 큰 그래프, 시간·일별 표).
+     * 색은 이 화면 안에서만 쓰는 변수(--d2-*)로 정하고, 테마(white / gray / dark)마다 다시 정한다.
+     */
+    :root {
+      --d2-bg: #e9eef3;
+      --d2-panel: #ffffff;
+      --d2-panel-2: #f4f7fa;
+      --d2-line: #dde5ed;
+      --d2-ink: #16212c;
+      --d2-ink-2: #536476;
+      --d2-ink-3: #8797a8;
+      --d2-accent: #1f6aa5;
+      --d2-accent-soft: rgba(31, 106, 165, 0.1);
+      --d2-track: #e7edf3;
+      --d2-shadow: 0 1px 2px rgba(16, 33, 52, 0.06), 0 4px 14px rgba(16, 33, 52, 0.05);
+      --z-good: #16a34a;
+      --z-caution: #a3a01c;
+      --z-warn: #f97316;
+      --z-over: #dc2626;
+      --z-none: #94a3b8;
+    }
+    html[data-theme="gray"] {
+      --d2-bg: #c7cfd6;
+      --d2-panel: #e4e9ed;
+      --d2-panel-2: #d9e0e5;
+      --d2-line: #b3bec6;
+      --d2-ink: #2c3338;
+      --d2-ink-2: #4e5a63;
+      --d2-ink-3: #6f7b84;
+      --d2-accent: #c45c12;
+      --d2-accent-soft: rgba(196, 92, 18, 0.12);
+      --d2-track: #cbd3d9;
+      --d2-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    }
+    html[data-theme="dark"] {
+      --d2-bg: #141414;
+      --d2-panel: #1f1f1f;
+      --d2-panel-2: #262626;
+      --d2-line: #333333;
+      --d2-ink: #ededed;
+      --d2-ink-2: #b3b3b3;
+      --d2-ink-3: #8a8a8a;
+      --d2-accent: #f0a05a;
+      --d2-accent-soft: rgba(240, 160, 90, 0.14);
+      --d2-track: #2e2e2e;
+      --d2-shadow: none;
+    }
+    body { background: var(--d2-bg); }
+    main.d2 { max-width: 1480px; margin: 0 auto; padding: 18px 18px 40px; color: var(--d2-ink); }
+    .panel { background: var(--d2-panel); border: 1px solid var(--d2-line); border-radius: 12px; box-shadow: var(--d2-shadow); }
+
+    /* 머리 */
+    .d2-top { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px 20px; margin-bottom: 14px; }
+    .d2-top h1 { margin: 0; font-size: 22px; font-weight: 800; letter-spacing: -0.01em; color: var(--d2-ink); }
+    .d2-top p { margin: 4px 0 0; color: var(--d2-ink-2); font-size: 12.5px; max-width: 900px; }
+    .seg { display: inline-flex; gap: 2px; background: var(--d2-panel-2); border: 1px solid var(--d2-line); border-radius: 10px; padding: 3px; }
+    :root .seg button { background: transparent; color: var(--d2-ink-2); box-shadow: none; border: 0; height: 30px; padding: 0 14px; border-radius: 7px; font-weight: 700; font-size: 13px; }
+    :root .seg button:hover { color: var(--d2-ink); }
+    :root .seg button.active { background: var(--d2-panel); color: var(--d2-accent); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+
+    /* 구간별 센서 수 */
+    .kpis { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .kpi { padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; border-left: 4px solid var(--z-none); }
+    .kpi span { font-size: 12px; color: var(--d2-ink-2); }
+    .kpi b { font-size: 26px; font-weight: 800; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .kpi small { font-size: 11px; color: var(--d2-ink-3); }
+    .kpi.total { border-left-color: var(--d2-accent); }
+    .kpi.good { border-left-color: var(--z-good); } .kpi.caution { border-left-color: var(--z-caution); }
+    .kpi.warn { border-left-color: var(--z-warn); } .kpi.over { border-left-color: var(--z-over); }
+
+    /* 세로 막대 순위(2026-11-24: 밑에서 위로). 색·점선·위험 기준 선·이름/MAC 글자는 가로 막대 때와 같다 */
+    .ranks { display: grid; grid-template-columns: minmax(0, 2.2fr) minmax(0, 1fr); gap: 14px; margin-bottom: 18px; align-items: stretch; }
+    .ranks.single { grid-template-columns: minmax(0, 1fr); }
+    .rank { padding: 14px 16px 10px; display: flex; flex-direction: column; }
+    .rank-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+    .rank-head h2 { margin: 0; font-size: 15px; font-weight: 800; color: var(--d2-ink); background: none; }
+    .rank-head small { color: var(--d2-ink-3); font-size: 11.5px; }
+    .cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(92px, 1fr); gap: 6px; overflow-x: auto; padding-bottom: 4px; flex: 1; }
+    .col { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 4px 8px; border-radius: 8px; cursor: pointer; min-width: 0; }
+    .col:hover { background: var(--d2-accent-soft); }
+    .col-val { text-align: center; font-variant-numeric: tabular-nums; white-space: nowrap; min-height: 20px; }
+    .col-val b { font-size: 14px; }
+    .col-val small { color: var(--d2-ink-3); font-size: 10.5px; margin-left: 2px; }
+    .vbar { position: relative; width: 26px; height: 200px; background: var(--d2-track); border-radius: 6px; }
+    .vbar i { position: absolute; left: 0; right: 0; bottom: 0; border-radius: 6px; }
+    .vbar .mark { position: absolute; left: -5px; right: -5px; height: 0; border-top: 1px dashed var(--d2-ink-3); opacity: 0.75; }
+    .vbar .limit { position: absolute; left: -8px; right: -8px; height: 2px; background: var(--z-over); border-radius: 1px; }
+    .col-name { text-align: center; min-width: 0; width: 100%; }
+    .col-name b { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 12.5px; line-height: 1.3; color: var(--d2-ink); word-break: keep-all; }
+    .col-name small { display: block; font-size: 10.5px; color: var(--d2-ink-3); font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 11.5px; color: var(--d2-ink-2); padding: 8px 6px 2px; border-top: 1px solid var(--d2-line); margin-top: 6px; }
+    .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 5px; vertical-align: 0; }
+    .legend i.lim { width: 2px; height: 12px; border-radius: 1px; vertical-align: -2px; }
+    .legend i.dash { width: 0; height: 12px; border-radius: 0; border-left: 1px dashed var(--d2-ink-3); vertical-align: -2px; }
+
+    /* 구간 표시 */
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; background: var(--d2-panel-2); color: var(--d2-ink-2); }
+    .pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--z-none); }
+    .pill.good { color: var(--z-good); background: rgba(22, 163, 74, 0.1); } .pill.good::before { background: var(--z-good); }
+    .pill.caution { color: #7a7810; background: rgba(163, 160, 28, 0.14); } .pill.caution::before { background: var(--z-caution); }
+    .pill.warn { color: #c2410c; background: rgba(249, 115, 22, 0.12); } .pill.warn::before { background: var(--z-warn); }
+    .pill.over { color: var(--z-over); background: rgba(220, 38, 38, 0.1); } .pill.over::before { background: var(--z-over); }
+    html[data-theme="dark"] .pill.caution { color: #d6d24a; } html[data-theme="dark"] .pill.warn { color: #fb923c; }
+    .good-t { color: var(--z-good); } .caution-t { color: #8a8714; } .warn-t { color: #ea580c; } .over-t { color: var(--z-over); }
+    html[data-theme="dark"] .caution-t { color: #d6d24a; }
+
+    /* 센서 카드 */
+    .section-title { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 12px; margin: 4px 2px 10px; }
+    .section-title h2 { margin: 0; font-size: 15px; font-weight: 800; color: var(--d2-ink); background: none; }
+    .section-title small { color: var(--d2-ink-3); }
+    .cards { display: grid; gap: 12px; }
+    .sensor { padding: 14px 16px 12px; transition: box-shadow 0.6s ease; }
+    .sensor.focus { box-shadow: 0 0 0 2px var(--d2-accent), 0 0 0 7px var(--d2-accent-soft); }
+    .sensor.dim { opacity: 0.62; }
+    .s-head { display: flex; align-items: center; gap: 10px; }
+    .s-head h3 { margin: 0; font-size: 17px; font-weight: 800; color: var(--d2-ink); cursor: pointer; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .s-head h3:hover { color: var(--d2-accent); }
+    .tag { font-size: 10.5px; font-weight: 800; letter-spacing: 0.04em; padding: 1px 7px; border-radius: 5px; background: var(--d2-panel-2); color: var(--d2-ink-2); border: 1px solid var(--d2-line); }
+    .s-head .grow { flex: 1; }
+    :root .more { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--d2-line); background: var(--d2-panel-2); color: var(--d2-accent); font-weight: 700; box-shadow: none; }
+    :root .more:hover { background: var(--d2-accent); color: white; border-color: var(--d2-accent); }
+    html[data-theme="dark"] .more:hover { color: #1a1a1a; }
+    /* 위 버튼들은 :root를 붙여 theme.css의 html[data-theme] button 규칙보다 앞서게 한다 */
+    .more b { font-size: 16px; line-height: 1; }
+    .s-meta { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0 10px; font-size: 12px; color: var(--d2-ink-2); }
+    .s-meta .mac { font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+    .s-body { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .metric { background: var(--d2-panel-2); border: 1px solid var(--d2-line); border-radius: 10px; padding: 10px 12px 6px; min-width: 0; }
+    .metric span { font-size: 11.5px; color: var(--d2-ink-2); }
+    .metric .val { display: flex; align-items: baseline; gap: 4px; margin: 1px 0 4px; }
+    .metric .val b { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--d2-ink); }
+    .metric .val small { color: var(--d2-ink-3); font-size: 11.5px; }
+    .spark { position: relative; height: 96px; }
+    .spark canvas { display: block; width: 100% !important; height: 100% !important; }
+    .empty { height: 96px; display: flex; align-items: center; justify-content: center; color: var(--d2-ink-3); font-size: 12px; }
+
+    /* 센서 통계 창 */
+    .modal-back { position: fixed; inset: 0; background: rgba(10, 18, 28, 0.5); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 16px; }
+    .modal-back[hidden] { display: none; }
+    .modal { background: var(--d2-panel); color: var(--d2-ink); border-radius: 14px; width: min(1120px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 18px 20px 20px; box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); }
+    .modal-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+    .modal-top h3 { margin: 0; font-size: 19px; font-weight: 800; }
+    .modal-top small { display: block; color: var(--d2-ink-2); margin-top: 3px; }
+    :root .modal-close { background: transparent; color: var(--d2-ink-2); box-shadow: none; border: 0; font-size: 24px; width: 36px; height: 36px; padding: 0; border-radius: 8px; }
+    :root .modal-close:hover { background: var(--d2-panel-2); }
+    .cards6 { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+    .cards6 div { background: var(--d2-panel-2); border: 1px solid var(--d2-line); border-radius: 10px; padding: 9px 11px; }
+    .cards6 span { display: block; font-size: 11.5px; color: var(--d2-ink-2); }
+    .cards6 b { font-size: 18px; font-weight: 800; font-variant-numeric: tabular-nums; }
+    .cards6 small { display: block; color: var(--d2-ink-3); margin-top: 2px; font-size: 11px; }
+    .modal-tools { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-bottom: 8px; }
+    .modal-sum { font-size: 12.5px; color: var(--d2-ink-2); font-variant-numeric: tabular-nums; margin-bottom: 6px; }
+    .modal-sum b { color: var(--d2-ink); }
+    .modal-canvas { position: relative; height: min(440px, 56vh); }
+    .modal-hint { font-size: 12px; color: var(--d2-ink-3); margin-top: 6px; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+    :root .ghost { background: var(--d2-panel-2); color: var(--d2-ink); border: 1px solid var(--d2-line); box-shadow: none; height: 30px; padding: 0 12px; border-radius: 8px; }
+    .rows-head { display: flex; justify-content: space-between; align-items: baseline; margin: 16px 0 6px; }
+    .rows-head h4 { margin: 0; font-size: 14px; }
+    .rows-head small { color: var(--d2-ink-3); }
+    .rows-wrap { max-height: 300px; overflow: auto; border: 1px solid var(--d2-line); border-radius: 10px; }
+    .rows { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .rows th, .rows td { padding: 6px 10px; text-align: right; border-bottom: 1px solid var(--d2-line); white-space: nowrap; }
+    .rows th { position: sticky; top: 0; background: var(--d2-panel-2); color: var(--d2-ink-2); font-weight: 700; }
+    .rows td:first-child, .rows th:first-child { text-align: left; }
+
+    @media (max-width: 1100px) {
+      .kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .ranks { grid-template-columns: minmax(0, 1fr); }
+    }
+    @media (max-width: 760px) {
+      main.d2 { padding: 12px 10px 30px; }
+      .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .vbar { height: 160px; }
+      .s-body { grid-template-columns: minmax(0, 1fr); }
+    }
+  </style>
+</head>
+<body>
+<header>
+  <strong class="brand">센서 통계 2</strong>
+  <nav>
+    <a href="/">센서 현황</a>
+    <a href="/receiver">센서 수신 모니터</a>
+    <a href="/generator">데이터 분석 CSV</a>
+    <a href="/studio">센서 데이터 분석</a>
+    <a class="active" href="/dashboard">통계</a>
+    <a href="/settings">설정</a>
+  </nav>
+</header>
+<main class="d2">
+  <div class="d2-top">
+    <div>
+      <h1>센서별 통계</h1>
+      <p id="updatedNote">통계를 읽는 중…</p>
+    </div>
+    <div class="seg" id="period" aria-label="기간">
+      <button type="button" data-period="24h">24시간</button>
+      <button type="button" data-period="7d">7일</button>
+      <button type="button" data-period="30d">30일</button>
+      <button type="button" data-period="all">전체</button>
+    </div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="ranks" id="ranks"></div>
+  <div class="section-title"><h2>센서별 변화</h2><small id="cardsNote"></small></div>
+  <div class="cards" id="board"></div>
+</main>
+
+<div class="modal-back" id="detail" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="detailTitle">
+    <div class="modal-top">
+      <div><h3 id="detailTitle"></h3><small id="detailSub"></small></div>
+      <button type="button" class="modal-close" id="detailClose" title="닫기 (Esc)">×</button>
+    </div>
+    <div class="cards6" id="detailCards"></div>
+    <div class="modal-tools">
+      <div class="seg" id="detailMetric">
+        <button type="button" data-metric="vel">속도 RMS</button>
+        <button type="button" data-metric="rms">RMS (g)</button>
+        <button type="button" data-metric="peak">PEAK (g)</button>
+      </div>
+      <div class="seg" id="detailPeriod">
+        <button type="button" data-period="24h">24시간</button>
+        <button type="button" data-period="7d">7일</button>
+        <button type="button" data-period="30d">30일</button>
+        <button type="button" data-period="all">전체</button>
+      </div>
+      <div class="seg" id="detailBucket">
+        <button type="button" data-bucket="hour">시간별</button>
+        <button type="button" data-bucket="day">일별</button>
+      </div>
+    </div>
+    <div class="modal-sum" id="detailSum"></div>
+    <div class="modal-canvas"><canvas id="detailChart"></canvas></div>
+    <div class="modal-hint">
+      <span>그래프를 좌우로 끌면 그 구간을 확대합니다. 점에 마우스를 올리면 값이 보입니다.</span>
+      <button type="button" class="ghost" id="detailReset">확대 원래대로</button>
+    </div>
+    <div class="rows-head"><h4 id="rowsTitle">시간별 통계</h4><small id="rowsNote"></small></div>
+    <div class="rows-wrap"><table class="rows" id="detailRows"></table></div>
+  </div>
+</div>
+
+<script src="/static/chart.umd.min.js"></script>
+<script src="/static/hammer.min.js"></script>
+<script src="/static/chartjs-plugin-zoom.min.js"></script>
+<script>
+  /*
+   * 통계 2. 서버가 이미 만든 measurement 시간 줄만 읽어 그린다(계산하지 않음). 값의 뜻은 /dashboard와 같다.
+   * - GET /api/db/dashboard?period=24h|7d|30d|all. 고른 기간은 localStorage('dashboard2-period')에 기억(기본 24시간).
+   *   그래프 점: 24시간은 한 시간, 7일·30일·전체는 하루(7일 = 7점, 2026-11-24).
+   * - 속도 RMS: MEMS는 세 축 속도 RMS를 합친 SRSS(mm/s), PIEZO는 한 축 Vrms(mm/s, 환산 확인 전).
+   *   RMS(g)는 세 축 가속도 RMS 합(필터 뒤), PEAK(g)는 그 기간 세트 중 가장 큰 |가속도|.
+   * - 구간(양호·주의·경고·위험)은 기간 평균 속도로 정한다(센서 현황 경보는 '최근 한 시간' 값이라 다를 수 있다).
+   * - 센서 이름이나 '자세히'를 누르면 그 센서 통계 창(그 MAC만 다시 읽음 ?mac=&bucket=).
+   * - 이름이 없거나 설정에서 '표시'를 끈 센서, 초음파 센서는 서버가 빼서 보내지 않는다.
+   */
+  const PERIOD_TEXT = { "24h": "24시간", "7d": "7일", "30d": "30일", all: "전체" };
+  const ZONE_NAME = { good: "양호", caution: "주의", warn: "경고", over: "위험" };
+  const METRIC = {
+    vel: { name: "속도 RMS", unit: "mm/s", key: "srss_mms", color: "#7c3aed", digits: 3 },
+    rms: { name: "RMS", unit: "g", key: "rms", color: "#2563eb", digits: 4 },
+    peak: { name: "PEAK", unit: "g", key: "peak", color: "#e11d48", digits: 4 },
+  };
+  const board = document.querySelector("#board");
+  const charts = [];
+  let lastData = null;
+  let period = "24h";
+  try {
+    const saved = localStorage.getItem("dashboard2-period");
+    if (PERIOD_TEXT[saved]) period = saved;
+  } catch (error) { /* 저장소를 못 쓰면 기본 24시간 */ }
+
+  /* ---------- 작은 도우미 ---------- */
+  function esc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+  }
+  function num(value, digits) {
+    const number = Number(value);
+    return value != null && Number.isFinite(number) ? number.toFixed(digits) : "-";
+  }
+  function css(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  /* 진동 구간(서버 limits.zone_of와 같은 경계 규칙: 경계값은 위 구간). */
+  function zoneOf(value, zones) {
+    if (value == null || !Number.isFinite(value)) return "";
+    return value >= zones.limit ? "over" : value >= zones.caution ? "warn" : value >= zones.good ? "caution" : "good";
+  }
+  function zonesOf(item) {
+    const limit = Number(item.limit) || 4.5;
+    return item.zones || { good: limit * 1.4 / 4.5, caution: limit * 2.8 / 4.5, limit };
+  }
+  function zoneColor(level) {
+    return css(`--z-${level || "none"}`);
+  }
+  function valueOf(item) {
+    return Number(item.set_count) > 0 && item.srss_mms != null ? Number(item.srss_mms) : null;
+  }
+  /* 시간 줄 '2026-11-23T14:00:00' → '11-23 14시', 하루 점 '2026-11-23' → '11-23'. */
+  function pointLabel(t) {
+    const text = String(t || "");
+    if (text.length === 10) return text.slice(5);
+    return text.endsWith(":00:00") ? `${text.slice(5, 10)} ${text.slice(11, 13)}시` : text.slice(5, 16).replace("T", " ");
+  }
+  function shortTime(t) {
+    return String(t || "").slice(5, 16).replace("T", " ");
+  }
+  function stampText(updatedAt) {
+    const text = String(updatedAt || "").replace("T", " ").slice(0, 16);
+    return text.length === 16 ? text : null;
+  }
+  /* 세트 수로 가중한 평균(서버 measurement 평균과 같은 방식). */
+  function weightedMean(series, key) {
+    let sum = 0, weight = 0;
+    series.forEach((point) => {
+      const value = Number(point[key]);
+      const sets = Number(point.set_count) || 0;
+      if (point[key] != null && Number.isFinite(value) && sets > 0) { sum += value * sets; weight += sets; }
+    });
+    return weight ? sum / weight : null;
+  }
+  function itemTitle(item) {
+    return item.display_name || item.mac;
+  }
+  function pill(level) {
+    return level ? `<span class="pill ${level}">${ZONE_NAME[level]}</span>` : `<span class="pill">통계 없음</span>`;
+  }
+  /* 색에 투명도를 붙인다('#7c3aed' → rgba). 그래프 아래 채움에 쓴다. */
+  function alpha(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+  }
+
+  /* ---------- 구간별 센서 수(기간 평균 기준) ---------- */
+  function drawKpis(items) {
+    const counts = { good: 0, caution: 0, warn: 0, over: 0, none: 0 };
+    items.forEach((item) => { counts[zoneOf(valueOf(item), zonesOf(item)) || "none"] += 1; });
+    const tile = (cls, title, value, sub) => `<div class="panel kpi ${cls}"><span>${title}</span><b>${value}</b><small>${sub}</small></div>`;
+    document.querySelector("#kpis").innerHTML = [
+      tile("total", "센서", items.length, `${PERIOD_TEXT[period]} 평균 기준`),
+      tile("good", "양호", counts.good, "양호 상한 미만"),
+      tile("caution", "주의", counts.caution, "양호 상한 이상"),
+      tile("warn", "경고", counts.warn, "주의 상한 이상"),
+      tile("over", "위험", counts.over, "위험 기준 이상"),
+      tile("", "통계 없음", counts.none, "이 기간 계산된 값 없음"),
+    ].join("");
+  }
+
+  /* ---------- 세로 막대 순위(높은 순, 2026-11-24 가로 → 세로). 칸마다 아래에 이름 + 전체 MAC·위치 ---------- */
+  function rankPanel(title, note, items) {
+    if (!items.length) return "";
+    const sorted = items.slice().sort((a, b) => (valueOf(b) ?? -1) - (valueOf(a) ?? -1));
+    // 눈금 끝: 이 묶음의 값·위험 기준 중 가장 큰 값의 1.1배(묶음 안에서 같은 눈금).
+    const top = Math.max(0.001, ...sorted.map((item) => valueOf(item) || 0), ...sorted.map((item) => zonesOf(item).limit)) * 1.1;
+    const pct = (value) => `${Math.min(100, Math.max(0, (value / top) * 100))}%`;
+    // 위치는 아래에서 위로(bottom %). 막대는 값, 점선은 양호·주의 상한, 빨간 선은 위험 기준.
+    const cols = sorted.map((item) => {
+      const value = valueOf(item);
+      const zones = zonesOf(item);
+      const level = zoneOf(value, zones);
+      return `<div class="col" data-mac="${esc(item.mac)}" data-kind="${item.sensor_type}"
+          title="${esc(itemTitle(item))}&#10;${esc(item.mac)}${item.location ? " · " + esc(item.location) : ""}&#10;양호 &lt; ${num(zones.good, 2)} ≤ 주의 &lt; ${num(zones.caution, 2)} ≤ 경고 &lt; ${num(zones.limit, 2)} ≤ 위험 (mm/s)">
+        <div class="col-val">${value == null ? "<small>값 없음</small>" : `<b class="${level}-t">${num(value, 2)}</b><small>mm/s</small>`}</div>
+        <div class="vbar">
+          <i style="height:${value == null ? 0 : pct(value)};background:${zoneColor(level)}"></i>
+          <span class="mark" style="bottom:${pct(zones.good)}"></span><span class="mark" style="bottom:${pct(zones.caution)}"></span>
+          <span class="limit" style="bottom:${pct(zones.limit)}"></span>
+        </div>
+        <div class="col-name"><b>${esc(itemTitle(item))}</b><small>${item.display_name ? esc(item.mac) : "&nbsp;"}</small>${item.location ? `<small>${esc(item.location)}</small>` : ""}</div>
+      </div>`;
+    }).join("");
+    return `<section class="panel rank">
+      <div class="rank-head"><h2>${title}</h2><small>${note}</small></div>
+      <div class="cols">${cols}</div>
+      <div class="legend">
+        <span><i style="background:var(--z-good)"></i>양호</span><span><i style="background:var(--z-caution)"></i>주의</span>
+        <span><i style="background:var(--z-warn)"></i>경고</span><span><i style="background:var(--z-over)"></i>위험</span>
+        <span><i class="dash"></i>양호·주의 상한</span><span><i class="lim" style="background:var(--z-over)"></i>위험 기준</span>
+      </div>
+    </section>`;
+  }
+
+  function drawRanks(items) {
+    // 통계가 한 번도 없는 센서('통계 전')는 막대에서 뺀다(아래 카드에는 흐리게 보인다).
+    const shown = items.filter((item) => item.has_stats);
+    const mems = shown.filter((item) => item.sensor_type !== "PIEZO");
+    const piezo = shown.filter((item) => item.sensor_type === "PIEZO");
+    const box = document.querySelector("#ranks");
+    box.innerHTML = rankPanel(`MEMS 속도 RMS · ${PERIOD_TEXT[period]} 평균`, "세 축 SRSS · 높은 순 · 누르면 그 센서 카드로", mems) +
+      rankPanel(`PIEZO 속도 RMS · ${PERIOD_TEXT[period]} 평균`, "한 축 Vrms · 환산 확인 전 값", piezo);
+    box.classList.toggle("single", !(mems.length && piezo.length));
+    box.querySelectorAll(".col").forEach((row) => {
+      row.addEventListener("click", () => focusCard(row.dataset.mac, row.dataset.kind));
+    });
+  }
+
+  /* ---------- 센서 카드 ---------- */
+  function sparkChart(canvas, labels, values, color, limit) {
+    const tick = css("--d2-ink-3");
+    const grid = css("--d2-line");
+    const datasets = [{
+      data: values,
+      borderColor: color,
+      backgroundColor: alpha(color, 0.12),
+      fill: "origin",
+      borderWidth: 1.8,
+      pointRadius: values.length <= 8 ? 2.5 : 0,
+      pointHoverRadius: 4,
+      pointBackgroundColor: color,
+      tension: 0.3,
+    }];
+    // 속도 그래프: 값이 위험 기준의 60% 이상까지 오면 위험 기준 점선을 같이 그린다(낮은 센서는 곡선이 납작해지지 않게 생략).
+    const finite = values.map(Number).filter(Number.isFinite);
+    if (limit && finite.length && Math.max(...finite) >= limit * 0.6) {
+      datasets.push({ data: values.map(() => limit), borderColor: zoneColor("over"), borderDash: [4, 4], borderWidth: 1, pointRadius: 0, fill: false });
+    }
+    charts.push(new Chart(canvas, {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: { legend: { display: false }, tooltip: { enabled: true, displayColors: false, filter: (ctx) => ctx.datasetIndex === 0 } },
+        scales: {
+          x: { ticks: { maxTicksLimit: 4, font: { size: 9.5 }, color: tick, maxRotation: 0 }, grid: { display: false }, border: { display: false } },
+          y: { ticks: { maxTicksLimit: 3, font: { size: 9.5 }, color: tick }, grid: { color: grid }, border: { display: false } },
+        },
+      },
+    }));
+  }
+
+  function cardHtml(item, index) {
+    const piezo = item.sensor_type === "PIEZO";
+    const zones = zonesOf(item);
+    const value = valueOf(item);
+    const level = zoneOf(value, zones);
+    const series = item.series || [];
+    const unit = lastData.bucket === "day" ? "일" : "시간";
+    const sets = Number(item.set_count) || 0;
+    const latest = item.latest_srss_mms != null ? Number(item.latest_srss_mms) : null;
+    const latestLevel = zoneOf(latest, zones);
+    const meta = [
+      `<span class="mac">${esc(item.mac)}</span>`,
+      item.location ? `<span class="place">${esc(item.location)}</span>` : "",
+      `<span>${sets ? `${PERIOD_TEXT[period]} ${sets}세트 · ${series.length}${unit}` : item.has_stats ? "이 기간 통계 없음" : "통계 전"}</span>`,
+      latest != null && item.has_stats ? `<span>최근 한 시간 ${esc(shortTime(item.latest_at))} <b class="${latestLevel}-t">${num(latest, 3)}</b> mm/s</span>` : "",
+      `<span>위험 기준 ${num(zones.limit, 2)} mm/s</span>`,
+    ].filter(Boolean).join("");
+    const metric = (key, title, valueText, unitText) => `
+      <div class="metric">
+        <span>${title}</span>
+        <div class="val"><b>${valueText}</b><small>${unitText}</small></div>
+        ${series.length ? `<div class="spark"><canvas data-index="${index}" data-metric="${key}"></canvas></div>` : `<div class="empty">${PERIOD_TEXT[period]} 동안 값 없음</div>`}
+      </div>`;
+    return `<article class="panel sensor${item.has_stats ? "" : " dim"}" data-mac="${esc(item.mac)}" data-kind="${item.sensor_type}">
+      <div class="s-head">
+        <h3 data-index="${index}" title="이 센서 통계 크게 보기">${esc(itemTitle(item))}</h3>
+        <span class="tag">${piezo ? "PIEZO" : "MEMS"}</span>
+        ${pill(level)}
+        <span class="grow"></span>
+        <button type="button" class="more" data-index="${index}" title="이 센서 통계 크게 보기(속도 RMS부터)"><b>+</b> 자세히</button>
+      </div>
+      <div class="s-meta">${meta}</div>
+      <div class="s-body">
+        ${metric("vel", `속도 RMS ${piezo ? "(Vrms)" : "(SRSS)"} · ${PERIOD_TEXT[period]} 평균`, num(value, 3), "mm/s")}
+        ${metric("rms", `RMS · ${PERIOD_TEXT[period]} 평균`, num(item.rms, 4), "g")}
+        ${metric("peak", `PEAK · ${PERIOD_TEXT[period]} 최대`, num(item.peak, 4), "g")}
+      </div>
+    </article>`;
+  }
+
+  function paint(data) {
+    lastData = data;
+    charts.splice(0).forEach((chart) => chart.destroy());
+    const items = data.items || [];
+    const stamp = stampText(data.updated_at);
+    const profile = data.profile || {};
+    document.querySelector("#updatedNote").textContent = (stamp === null ? "아직 계산된 통계가 없습니다." : `마지막 계산 ${stamp} · 매시 정각 뒤 자동 계산`) +
+      (profile.id ? ` · 계산 기준 v${profile.id} (${profile.summary})` : "");
+    document.querySelector("#cardsNote").textContent =
+      `숫자는 ${PERIOD_TEXT[period]} 평균(PEAK는 최대) · 그래프는 ${data.bucket === "day" ? "하루" : "한 시간"}에 한 점 · 이름이나 '자세히'를 누르면 크게 봅니다`;
+    drawKpis(items);
+    if (!items.length) {
+      document.querySelector("#ranks").innerHTML = "";
+      board.innerHTML = '<div class="panel" style="padding:18px">통계를 볼 센서가 없습니다. 설정 &gt; 장치에서 이름을 붙이고 표시를 켜면 여기에 나옵니다.</div>';
+      return;
+    }
+    drawRanks(items);
+    board.innerHTML = items.map(cardHtml).join("");
+    board.querySelectorAll("canvas[data-metric]").forEach((canvas) => {
+      const item = items[Number(canvas.dataset.index)];
+      const metric = METRIC[canvas.dataset.metric];
+      const series = item.series || [];
+      sparkChart(canvas, series.map((point) => pointLabel(point.t)), series.map((point) => point[metric.key]), metric.color,
+        canvas.dataset.metric === "vel" ? zonesOf(item).limit : null);
+    });
+  }
+
+  function focusCard(mac, kind) {
+    const card = [...board.querySelectorAll(".sensor")].find((node) => node.dataset.mac === mac && node.dataset.kind === kind);
+    if (!card) return;
+    card.scrollIntoView({ block: "center", behavior: "smooth" });
+    card.classList.add("focus");
+    setTimeout(() => card.classList.remove("focus"), 2200);
+  }
+
+  async function load() {
+    const response = await fetch(`/api/db/dashboard?period=${encodeURIComponent(period)}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "통계를 읽지 못했습니다");
+    paint(data);
+  }
+
+  function markButtons(selector, attr, value) {
+    document.querySelectorAll(`${selector} button`).forEach((button) => button.classList.toggle("active", button.dataset[attr] === value));
+  }
+  document.querySelectorAll("#period button").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (button.dataset.period === period) return;
+      period = button.dataset.period;
+      try { localStorage.setItem("dashboard2-period", period); } catch (error) { /* 기억만 못 할 뿐 */ }
+      markButtons("#period", "period", period);
+      load().catch((error) => alert(error.message));
+    });
+  });
+  markButtons("#period", "period", period);
+
+  /* ---------- 센서 통계 창 ----------
+   * 그 센서만 다시 읽는다(?mac=&bucket=). 창 안의 지표·기간·시간별/일별 버튼은 이 창에만 적용된다.
+   * 기본 묶음: 24시간은 시간별, 그 밖은 일별. 7일·30일도 '시간별'을 누르면 한 시간 한 점.
+   * 확대: 그래프를 좌우로 끌기(chartjs-plugin-zoom drag, x축만). '확대 원래대로'로 되돌린다. */
+  const detailBox = document.querySelector("#detail");
+  let detail = null;
+  let detailChart = null;
+
+  async function openDetail(item, metric) {
+    detail = { mac: item.mac, kind: item.sensor_type, metric, period, bucket: period === "24h" ? "hour" : "day", item: null };
+    document.querySelector("#detailTitle").textContent = itemTitle(item);
+    document.querySelector("#detailSub").textContent = [item.sensor_type === "PIEZO" ? "PIEZO" : "MEMS", item.mac, item.location].filter(Boolean).join(" · ");
+    detailBox.hidden = false;
+    await loadDetail();
+  }
+
+  async function loadDetail() {
+    if (!detail) return;
+    markButtons("#detailMetric", "metric", detail.metric);
+    markButtons("#detailPeriod", "period", detail.period);
+    markButtons("#detailBucket", "bucket", detail.bucket);
+    const response = await fetch(`/api/db/dashboard?period=${detail.period}&mac=${encodeURIComponent(detail.mac)}&bucket=${detail.bucket}`);
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.detail || "통계를 읽지 못했습니다");
+    detail.item = (data.items || []).find((item) => item.sensor_type === detail.kind) || null;
+    detail.bucket = data.bucket;
+    drawDetail();
+  }
+
+  /* 창 위 요약: 기간 평균 속도(구간)·축별 속도 평균·RMS 평균·PEAK 최대·세트 수·최근 값. */
+  function drawCards(item) {
+    const box = document.querySelector("#detailCards");
+    if (!item) { box.innerHTML = ""; return; }
+    const zones = zonesOf(item);
+    const piezo = item.sensor_type === "PIEZO";
+    const value = valueOf(item);
+    const level = zoneOf(value, zones);
+    const series = item.series || [];
+    const axes = piezo ? "" : ["x_mms", "y_mms", "z_mms"].map((key, i) => `${"XYZ"[i]} ${num(weightedMean(series, key), 2)}`).join(" · ");
+    const latest = item.latest_srss_mms != null ? Number(item.latest_srss_mms) : null;
+    const latestLevel = zoneOf(latest, zones);
+    const card = (title, main, sub) => `<div><span>${title}</span>${main}${sub ? `<small>${sub}</small>` : ""}</div>`;
+    box.innerHTML = [
+      card(`${piezo ? "속도 Vrms" : "속도 SRSS"} · ${PERIOD_TEXT[detail.period]} 평균`, `<b class="${level}-t">${num(value, 3)}</b> mm/s`,
+        `${level ? ZONE_NAME[level] + " · " : ""}위험 기준 ${num(zones.limit, 2)}`),
+      piezo ? "" : card("축별 속도 평균 (mm/s)", `<b style="font-size:14px">${axes}</b>`, ""),
+      card(`RMS · ${PERIOD_TEXT[detail.period]} 평균`, `<b>${num(item.rms, 4)}</b> g`, ""),
+      card(`PEAK · ${PERIOD_TEXT[detail.period]} 최대`, `<b>${num(item.peak, 4)}</b> g`, ""),
+      card("세트 수", `<b>${Number(item.set_count) || 0}</b>`, `${shortTime(item.first_at)} ~ ${shortTime(item.last_at)}`),
+      card("최근 한 시간 (경보 기준)", `<b class="${latestLevel}-t">${num(latest, 3)}</b> mm/s`,
+        `${shortTime(item.latest_at)}${latestLevel ? " · " + ZONE_NAME[latestLevel] : ""}`),
+    ].join("");
+  }
+
+  /* 창 아래 표: 기간의 시간(또는 하루) 줄을 최근 것부터. 속도 칸은 그 MAC 구간 색. */
+  function drawRows(item) {
+    const table = document.querySelector("#detailRows");
+    const series = item ? (item.series || []) : [];
+    const day = detail.bucket === "day";
+    document.querySelector("#rowsTitle").textContent = day ? "일별 통계" : "시간별 통계";
+    document.querySelector("#rowsNote").textContent = series.length ? `${series.length}줄 · 최근 것부터` : "";
+    if (!series.length) { table.innerHTML = ""; return; }
+    const zones = zonesOf(item);
+    const piezo = item.sensor_type === "PIEZO";
+    const head = [day ? "날짜" : "시각", "세트", piezo ? "Vrms mm/s" : "SRSS mm/s", ...(piezo ? [] : ["X mm/s", "Y mm/s", "Z mm/s", day ? "그날 최대 SRSS" : "시간 안 최대"]), "RMS g", "PEAK g"];
+    const body = series.slice().reverse().map((point) => {
+      const v = point.srss_mms != null ? Number(point.srss_mms) : null;
+      const cells = [esc(day ? point.t : String(point.t || "").slice(0, 16).replace("T", " ")), point.set_count ?? "-",
+        `<b class="${zoneOf(v, zones)}-t">${num(v, 3)}</b>`];
+      if (!piezo) cells.push(num(point.x_mms, 3), num(point.y_mms, 3), num(point.z_mms, 3), num(point.srss_mms_max, 3));
+      cells.push(num(point.rms, 4), num(point.peak, 4));
+      return `<tr>${cells.map((cell) => `<td>${cell}</td>`).join("")}</tr>`;
+    }).join("");
+    table.innerHTML = `<thead><tr>${head.map((name) => `<th>${name}</th>`).join("")}</tr></thead><tbody>${body}</tbody>`;
+  }
+
+  function drawDetail() {
+    if (detailChart) { detailChart.destroy(); detailChart = null; }
+    const item = detail && detail.item;
+    drawCards(item);
+    drawRows(item);
+    markButtons("#detailBucket", "bucket", detail.bucket);
+    const sum = document.querySelector("#detailSum");
+    if (!item || !(item.series || []).length) {
+      sum.textContent = `${PERIOD_TEXT[detail.period]} 동안 통계가 없습니다.`;
+      return;
+    }
+    const metric = METRIC[detail.metric];
+    const series = item.series;
+    const labels = series.map((point) => pointLabel(point.t));
+    const values = series.map((point) => point[metric.key]);
+    const finite = values.map(Number).filter((value, i) => values[i] != null && Number.isFinite(value));
+    const mean = weightedMean(series, metric.key);
+    const zones = zonesOf(item);
+    const piezo = item.sensor_type === "PIEZO";
+    const tick = css("--d2-ink-3");
+    const grid = css("--d2-line");
+    const flat = (value) => series.map(() => value);
+    const datasets = [{
+      label: detail.metric === "vel" ? (piezo ? "Vrms" : "SRSS") : metric.name,
+      data: values,
+      borderColor: metric.color,
+      backgroundColor: alpha(metric.color, 0.1),
+      fill: "origin",
+      borderWidth: 2.2,
+      pointRadius: series.length > 120 ? 0 : 2.5,
+      tension: 0.25,
+    }];
+    if (detail.metric === "vel") {
+      if (!piezo) {
+        [["X축", "x_mms", "#0ea5e9"], ["Y축", "y_mms", "#22c55e"], ["Z축", "z_mms", "#f59e0b"]].forEach(([name, key, color]) => {
+          datasets.push({ label: name, data: series.map((point) => point[key]), borderColor: color, borderWidth: 1.2, pointRadius: 0, tension: 0.25, fill: false });
+        });
+        datasets.push({ label: detail.bucket === "day" ? "그날 최대 SRSS" : "시간 안 최대 SRSS", data: series.map((point) => point.srss_mms_max), borderColor: alpha(metric.color, 0.5), borderDash: [2, 3], borderWidth: 1, pointRadius: 0, fill: false });
+      }
+      [["양호 상한", zones.good, "caution"], ["주의 상한", zones.caution, "warn"], ["위험 기준", zones.limit, "over"]].forEach(([name, value, level]) => {
+        datasets.push({ label: `${name} ${num(value, 2)}`, data: flat(value), borderColor: zoneColor(level), borderDash: [6, 4], borderWidth: 1.4, pointRadius: 0, fill: false });
+      });
+    }
+    const isPeak = detail.metric === "peak";
+    sum.innerHTML = `${PERIOD_TEXT[detail.period]} · ${series.length}${detail.bucket === "day" ? "일" : "시간"} · ${item.set_count}세트 &nbsp;·&nbsp; ` +
+      (isPeak ? "" : `평균 <b>${num(mean, metric.digits)}</b> ${metric.unit} · `) +
+      `최대 <b>${num(Math.max(...finite), metric.digits)}</b> · 최소 <b>${num(Math.min(...finite), metric.digits)}</b> · 마지막 <b>${num(values[values.length - 1], metric.digits)}</b> ${metric.unit}`;
+    detailChart = new Chart(document.querySelector("#detailChart"), {
+      type: "line",
+      data: { labels, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: datasets.length > 1, labels: { color: tick, boxWidth: 16, boxHeight: 2, font: { size: 11 } } },
+          tooltip: { callbacks: { label: (context) => `${context.dataset.label}: ${num(context.raw, metric.digits)} ${metric.unit}` } },
+          zoom: {
+            zoom: { drag: { enabled: true, backgroundColor: alpha("#1f6aa5", 0.12) }, wheel: { enabled: false }, pinch: { enabled: true }, mode: "x" },
+            pan: { enabled: false },
+          },
+        },
+        scales: {
+          x: { ticks: { maxTicksLimit: 12, color: tick, font: { size: 11 }, maxRotation: 0 }, grid: { display: false } },
+          y: { beginAtZero: detail.metric === "vel" && !piezo, title: { display: true, text: metric.unit, color: tick }, ticks: { color: tick }, grid: { color: grid } },
+        },
+      },
+    });
+  }
+
+  function closeDetail() {
+    detailBox.hidden = true;
+    if (detailChart) { detailChart.destroy(); detailChart = null; }
+    detail = null;
+  }
+
+  // 카드의 '자세히'나 이름을 누르면 속도 RMS로 그 센서 창을 연다(RMS·PEAK는 창 안 버튼).
+  board.addEventListener("click", (event) => {
+    const target = event.target.closest(".more, .s-head h3");
+    if (!target || !lastData) return;
+    openDetail(lastData.items[Number(target.dataset.index)], "vel").catch((error) => alert(error.message));
+  });
+  document.querySelectorAll("#detailMetric button").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!detail) return;
+      detail.metric = button.dataset.metric;
+      markButtons("#detailMetric", "metric", detail.metric);
+      drawDetail();
+    });
+  });
+  document.querySelectorAll("#detailPeriod button").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!detail) return;
+      detail.period = button.dataset.period;
+      detail.bucket = detail.period === "24h" ? "hour" : "day";
+      loadDetail().catch((error) => alert(error.message));
+    });
+  });
+  document.querySelectorAll("#detailBucket button").forEach((button) => {
+    button.addEventListener("click", () => {
+      if (!detail || detail.bucket === button.dataset.bucket) return;
+      detail.bucket = button.dataset.bucket;
+      loadDetail().catch((error) => alert(error.message));
+    });
+  });
+  document.querySelector("#detailClose").addEventListener("click", closeDetail);
+  document.querySelector("#detailReset").addEventListener("click", () => detailChart && detailChart.resetZoom && detailChart.resetZoom());
+  detailBox.addEventListener("click", (event) => { if (event.target === detailBox) closeDetail(); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !detailBox.hidden) closeDetail(); });
+
+  // 헤더에서 테마를 바꾸면(theme.js) 색 변수가 바뀌므로 다시 그린다.
+  window.addEventListener("sensor-theme", () => {
+    if (lastData) paint(lastData);
+    if (detail && detail.item) drawDetail();
+  });
+
+  load().catch((error) => alert(error.message));
+</script>
+<script src="/static/theme.js?v=4"></script>
+</body>
+</html>

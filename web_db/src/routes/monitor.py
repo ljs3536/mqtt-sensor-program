@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException
 
 from web_db.src import core as mon
-from web_db.src.monitor_service import _sensor_config, subscribe_qos
+from web_db.src.monitor_service import _sensor_config, custom_profile, subscribe_qos
 from web_db.src.runtime import monitor
 
 router = APIRouter()
@@ -101,6 +101,9 @@ def monitor_command(body: dict):
     g_range = body.get("g_range") or "16"
     piezo_gain = body.get("piezo_gain") if body.get("piezo_gain") is not None else "30"
     try:
+        # 직접 입력(2026-11-24): custom이 참이면 목록 대신 custom_rate·custom_count를 검사해 쓴다(STOP의 normal에도).
+        if body.get("custom"):
+            profile = custom_profile(sensor, body.get("custom_rate"), body.get("custom_count"))
         if action == "query":
             if len(macs) != 1:
                 raise ValueError("현재 설정 조회는 센서 MAC 1개만 선택하세요")

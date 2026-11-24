@@ -353,6 +353,14 @@ class SiteMixin:
                         (mac, state, link, alarm, now, now),
                     )
                     continue
+                # 이름만 바뀐 경우(정상 ↔ 양호: 같은 '제때 수신·이상 없음'에서 진동 통계가 생기거나 없어짐)는
+                # 알림으로 남기지 않고 상태 칸만 고친다(2026-11-23 네 구간 도입 직후 모든 MEMS가 한꺼번에 바뀌는 것 방지).
+                if {before["state"], state} == {"ok", "good"}:
+                    self._conn.execute(
+                        "UPDATE site_state SET state=?, link=?, alarm=?, checked_at=? WHERE mac=?",
+                        (state, link, alarm, now, mac),
+                    )
+                    continue
                 if before["state"] == state:
                     self._conn.execute(
                         "UPDATE site_state SET link=?, alarm=?, checked_at=? WHERE mac=?", (link, alarm, now, mac)
@@ -396,7 +404,11 @@ class SiteMixin:
         return [dict(row) for row in rows]
 
     def unacked_problems(self):
-        """확인 안 한 문제 알림 수(위험·미수신·경보·지연으로 바뀐 기록). 대문 '최근 알림' 탭 배지."""
+        """확인 안 한 문제 알림 수(위험·미수신·경고·지연으로 바뀐 기록). 대문 '최근 알림' 탭 배지.
+
+        주의(ISO B 허용 구간)는 기록에는 남지만 배지에 세지 않는다. 값이 1.4 근처에서 오르내리면
+        매시간 알림이 쌓이기 때문이다.
+        """
         with self.lock:
             row = self._conn.execute(
                 "SELECT COUNT(*) FROM site_state_history WHERE acked_at='' AND state IN ('alarm','lost','warn','late')"
@@ -432,27 +444,32 @@ class SiteMixin:
 
         - device: 이름, 마지막 수신 시각·센서 종류·배터리
         - sensor_config: 마지막 설정 JSON(웹이 보낸 것 + 브로커 retain으로 받은 것)
-        - measurement(ADXL): **가장 최근 통계 한 줄**의 SRSS·세트 수·시각(2026-11-19 결정).
+        - measurement(ADXL·PIEZO 중 가장 늦은 줄, 종류는 stat_sensor): **가장 최근 통계 한 줄**.
+          같은 MAC이 SENSORTYPE을 바꿔 보내면 지금 보내는 종류의 통계가 판정에 쓰인다(PIEZO는 site_status.JUDGED_KINDS 밖이라 '판정 없음').의 SRSS·세트 수·시각(2026-11-19 결정).
           전체 평균으로 판정하면 지난 문제가 오래 남고 새 문제는 평균에 묻히므로 최근 줄 하나로 판정한다.
           2026-11-23부터 통계는 한 시간 한 줄이라 가장 최근 한 시간(그 시간 세트들의 평균)이다.
           지금 통계 기준 버전(stat_profile)의 줄만 본다(store_query._active_profile_id).
         - packet: 최근 패킷 120개의 (수신 시각, 종류, 축)(연결 판정용 수신 간격). 측정으로 묶는 일은 site_status가 한다.
+
+        이름(display_name)이 없거나 설정 > 장치 '표시'를 끈(visible=0) MAC은 넣지 않는다(2026-11-24). 이름을 붙인 센서만 '등록된 센서'로 보고
+        센서 현황 목록·요약 수·평면도 배치 목록·상태 변화 기록(site_watch)에서 뺀다. 수신 저장과 매시 통계는 그대로 하므로
+        설정 > 장치에서 이름을 붙이면 그 전 기록까지 바로 보인다. 이름을 붙일 곳(설정 > 장치, 센서 수신 모니터)에는 계속 보인다.
         """
         with self.lock:
             devices = self._conn.execute(
                 """
                 SELECT d.mac, d.display_name, d.last_at, d.last_sensor, d.last_battery,
                        c.payload AS config, c.updated_at AS config_at, c.action AS config_action,
-                       m.set_count AS set_count, m.srss_mms AS srss_mms,
+                       m.set_count AS set_count, m.srss_mms AS srss_mms, m.sensor_type AS stat_sensor,
                        m.last_at AS stat_last_at, m.first_at AS stat_first_at
                 FROM device d
                 LEFT JOIN sensor_config c ON c.mac=d.mac
                 LEFT JOIN measurement m ON m.id = (
                     SELECT id FROM measurement
-                    WHERE mac=d.mac AND sensor_type='ADXL' AND COALESCE(profile_id, 0)=?
+                    WHERE mac=d.mac AND sensor_type IN ('ADXL','PIEZO') AND COALESCE(profile_id, 0)=?
                     ORDER BY last_at DESC, id DESC LIMIT 1
                 )
-                WHERE d.mac IS NOT NULL AND d.mac<>''
+                WHERE d.mac IS NOT NULL AND d.mac<>'' AND TRIM(d.display_name)<>'' AND d.visible=1
                 ORDER BY d.created_at, d.mac
                 """,
                 (self._active_profile_id(),),
@@ -461,6 +478,7 @@ class SiteMixin:
             for row in devices:
                 item = dict(row)
                 item["limit"] = self._read_srss_limit(item["mac"])
+                item["zones"] = self._read_zones(item["mac"])  # 양호·주의·경고·위험 경계(limits.zone_bounds)
                 # 최근 패킷 120개의 (시각, 종류, 축). 측정 한 번 묶기(ADXL X→Y→Z)는 site_status가 한다.
                 # sensor_type·axis는 행 앞쪽 열이라 뒤쪽의 큰 HEX·샘플 열(overflow 페이지)은 읽지 않는다.
                 # 15초마다 MAC 수만큼 부르므로 이렇게 가볍게 둔다.

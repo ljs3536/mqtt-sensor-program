@@ -1,13 +1,17 @@
 /*
  * 센서 현황(대문)과 평면도 배치(설정 탭) 모양. 색은 아래 변수 한 곳에서 정하고 Gray / Dark 테마는 변수만 바꾼다.
- * 상태 색은 하나(state-*): 경보 빨강(깜빡임), 끊김 진회색, 주의 주황, 정상 초록, 대기 연회색.
+ * 상태 색은 하나(state-*): 위험 빨강(깜빡임), 미수신 진회색, 경고 주황, 지연 노랑, 주의 올리브,
+ * 양호 초록, 정상 청록(판정 기준 없는 센서), 확인 불가 연회색.
+ * 진동 네 구간 색은 ISO 20816-3 평가 그림(양호 초록 · 허용 올리브 · 개선 주황 · 위험 빨강)에 맞췄다(2026-11-23).
  */
 :root {
   --st-alarm: #dc2626;
   --st-lost: #4b5563;
   --st-warn: #f97316;
   --st-late: #eab308;
-  --st-ok: #16a34a;
+  --st-caution: #a3a01c;
+  --st-good: #16a34a;
+  --st-ok: #0d9488;
   --st-idle: #b6bec8;
   --site-plan-bg: #f4f7fa;
   --site-line: #d5dee8;
@@ -27,7 +31,9 @@ html[data-theme="gray"] {
   --site-accent: #c45c12;
 }
 html[data-theme="dark"] {
-  --st-ok: #22c55e;
+  --st-good: #22c55e;
+  --st-ok: #2dd4bf;
+  --st-caution: #c9c43a;
   --st-lost: #6b7280;
   --st-idle: #52525b;
   --site-plan-bg: #111;
@@ -44,6 +50,8 @@ html[data-theme="dark"] {
 .state-lost { --c: var(--st-lost); }
 .state-warn { --c: var(--st-warn); }
 .state-late { --c: var(--st-late); }
+.state-caution { --c: var(--st-caution); }
+.state-good { --c: var(--st-good); }
 .state-ok { --c: var(--st-ok); }
 .state-idle { --c: var(--st-idle); }
 
@@ -194,7 +202,7 @@ html[data-theme="dark"] .site-banner { background: #2b2210; color: #f5c46b; bord
 .card-close:hover { background: var(--site-plan-bg); }
 .card-state { display: flex; align-items: center; gap: 8px; margin: 8px 0 10px; font-size: 13px; font-weight: 700; }
 .state-chip { padding: 2px 10px; border-radius: 999px; background: var(--c); color: white; font-size: 12px; }
-.state-warn .state-chip { color: #3b2f00; }
+.state-warn .state-chip, .state-caution .state-chip, .state-late .state-chip { color: #2b2400; }
 .site-card dl { display: grid; grid-template-columns: 80px 1fr; gap: 4px 8px; margin: 0; font-size: 12px; }
 .site-card dt { color: var(--site-sub); }
 .site-card dd { margin: 0; overflow-wrap: anywhere; }
@@ -208,6 +216,8 @@ html[data-theme="dark"] .site-banner { background: #2b2210; color: #f5c46b; bord
 .card-alert:hover { background: color-mix(in srgb, var(--c) 20%, transparent); }
 .state-warn.card-alert { color: #9a5b00; }
 html[data-theme="dark"] .state-warn.card-alert { color: #f5c46b; }
+.state-caution.card-alert { color: #6b6a0c; }
+html[data-theme="dark"] .state-caution.card-alert { color: var(--st-caution); }
 .card-more { margin-top: 8px; font-size: 12px; }
 .card-more summary { cursor: pointer; color: var(--site-sub); margin-bottom: 4px; }
 .card-links { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 10px; font-size: 12px; }
@@ -355,6 +365,8 @@ html[data-theme="dark"] .state-warn.card-alert { color: #f5c46b; }
 .sum-chip.active { outline: 2px solid var(--c); outline-offset: 1px; }
 .sum-chip.zero b { color: var(--site-sub); opacity: 0.6; }
 .sum-chip.state-warn b, .sum-chip.state-late b { color: #b45309; }
+.sum-chip.state-caution b { color: #7a7810; }
+html[data-theme="dark"] .sum-chip.state-caution b { color: var(--st-caution); }
 
 /* ---------- 센서 아이콘(평면도·목록·카드 공통, 피드백 6번) ---------- */
 .sensor-icon { position: relative; display: inline-flex; flex: 0 0 auto; }
