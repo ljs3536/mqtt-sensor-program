@@ -35,27 +35,45 @@
           <div class="row conn-fields">
             <label>Broker<input id="host" value="127.0.0.1" /></label>
             <label>Port<input id="port" class="w-port" value="1883" /></label>
-            <label>구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#" /></label>
+            <label
+              >구독 Topic(s)<input id="topic" class="w-topic" value="V/#,D/#"
+            /></label>
             <!-- 구독 QoS(수신기 V057과 같음, 기본 1). 현재 설정 조회도 이 QoS. 설정 적용·START·STOP은 늘 QoS 1 -->
-            <label>QoS
-              <select id="qos" title="구독과 현재 설정 조회에 쓰는 QoS. 센서 명령(설정 적용·START·STOP)은 늘 QoS 1">
+            <label
+              >QoS
+              <select
+                id="qos"
+                title="구독과 현재 설정 조회에 쓰는 QoS. 센서 명령(설정 적용·START·STOP)은 늘 QoS 1"
+              >
                 <option value="0">0</option>
                 <option value="1" selected>1</option>
                 <option value="2">2</option>
               </select>
             </label>
             <button type="button" id="connect">연결</button>
-            <button type="button" class="secondary" id="disconnect">연결 해제</button>
+            <button type="button" class="secondary" id="disconnect">
+              연결 해제
+            </button>
           </div>
           <div class="conn-state">
-            <label class="check csv-toggle"><input id="csvEnabled" type="checkbox" checked /><span>CSV 저장</span></label>
+            <label class="check csv-toggle"
+              ><input id="csvEnabled" type="checkbox" checked /><span
+                >CSV 저장</span
+              ></label
+            >
             <span id="linkStatus" class="pill off">DISCONNECTED</span>
           </div>
         </div>
         <div class="conn-notes">
           <p id="connInfo" class="hint conn-info"></p>
-          <p class="hint">구독 Topic은 콤마로 여러 개 지정 · 설정 Topic S/# 는 자동으로 함께 구독</p>
-          <p id="csvInfo" class="hint">CSV 체크 시 연결 중 수신 데이터를 data_csv_web 에 저장합니다(DB에는 항상 저장).</p>
+          <p class="hint">
+            구독 Topic은 콤마로 여러 개 지정 · 설정 Topic S/# 는 자동으로 함께
+            구독
+          </p>
+          <p id="csvInfo" class="hint">
+            CSV 체크 시 연결 중 수신 데이터를 data_csv_web 에 저장합니다(DB에는
+            항상 저장).
+          </p>
         </div>
       </section>
 
@@ -66,12 +84,18 @@
             <h2>수신 MAC <small>dvicMacAddr</small></h2>
             <div class="mon-title-tools">
               <span id="macCount" class="stats">0개 선택</span>
-              <button type="button" class="secondary" id="selectAll">전체 선택</button>
-              <button type="button" class="secondary" id="clearMacs">선택 해제</button>
+              <button type="button" class="secondary" id="selectAll">
+                전체 선택
+              </button>
+              <button type="button" class="secondary" id="clearMacs">
+                선택 해제
+              </button>
             </div>
           </div>
           <div id="macs" class="macs"></div>
-          <p id="commandInfo" class="hint">MQTT: 선택한 각 MAC의 S/{MAC} retained 설정을 갱신</p>
+          <p id="commandInfo" class="hint">
+            MQTT: 선택한 각 MAC의 S/{MAC} retained 설정을 갱신
+          </p>
         </section>
 
         <!-- 센서 명령: 측정 설정 → 대상 → 동작 → 보낸 JSON → 표시 이름 순서 -->
@@ -80,7 +104,8 @@
             <h2>센서 명령 <small>S/{MAC} retain</small></h2>
           </div>
           <div class="cmd-grid">
-            <label>종류
+            <label
+              >종류
               <select id="sensor">
                 <option>ADXL</option>
                 <option>PIEZO</option>
@@ -90,15 +115,21 @@
             <div class="fsn-field">
               <label>Fs + N<select id="profile"></select></label>
               <!-- 직접 입력(2026-11-24): 관리자·개발자 시험용. 목록에 없는 Fs·N 조합을 보낸다. 값 검사는 서버(custom_profile). -->
-              <label class="fsn-check" title="목록에 없는 Fs·N 조합을 직접 보냅니다(개발·시험용). MEMS Fs는 25·50·100·200·400·800·1600·3200 Hz만, N은 16~65536.">
-                <input type="checkbox" id="customFsn" /> 직접 입력 (관리자·개발자)
+              <label
+                class="fsn-check"
+                title="목록에 없는 Fs·N 조합을 직접 보냅니다(개발·시험용). MEMS Fs는 25·50·100·200·400·800·1600·3200 Hz만, N은 16~65536."
+              >
+                <input type="checkbox" id="customFsn" /> 직접 입력
               </label>
               <div class="fsn-custom" id="fsnCustom" hidden>
-                <label>Fs (Hz)<input id="customRate" inputmode="numeric" /></label>
+                <label
+                  >Fs (Hz)<input id="customRate" inputmode="numeric"
+                /></label>
                 <label>N<input id="customCount" inputmode="numeric" /></label>
               </div>
             </div>
-            <label>센서 타입
+            <label
+              >센서 타입
               <select id="sensorType">
                 <option value="0">0</option>
                 <option value="1">1</option>
@@ -108,7 +139,8 @@
               </select>
               <span id="sensorTypeDesc" class="field-note">2: MEMS normal</span>
             </label>
-            <label>G Range
+            <label
+              >G Range
               <select id="gRange">
                 <option>2</option>
                 <option>4</option>
@@ -118,14 +150,20 @@
             </label>
             <label>게인<input id="piezoGain" value="30" disabled /></label>
           </div>
-          <label class="cmd-target">MAC 직접 입력
-            <input id="manualMac" placeholder="목록에 아직 없는 센서 MAC (감지 전)" />
+          <label class="cmd-target"
+            >MAC 직접 입력
+            <input
+              id="manualMac"
+              placeholder="목록에 아직 없는 센서 MAC (감지 전)"
+            />
           </label>
           <div class="cmd-actions">
             <button type="button" class="go" id="start">START</button>
             <button type="button" class="stop" id="stop">STOP</button>
             <button type="button" id="apply">설정 적용</button>
-            <button type="button" class="secondary" id="query">현재 설정 조회</button>
+            <button type="button" class="secondary" id="query">
+              현재 설정 조회
+            </button>
           </div>
           <div class="cmd-section cmd-json">
             <h3>전송 JSON</h3>
@@ -136,9 +174,13 @@
             <div class="cmd-name-row">
               <label>대상 MAC<select id="nameMac"></select></label>
               <label>이름<input id="deviceName" placeholder="A펌프1" /></label>
-              <button type="button" class="secondary" id="saveDeviceName">이름 저장</button>
+              <button type="button" class="secondary" id="saveDeviceName">
+                이름 저장
+              </button>
             </div>
-            <p id="savedConfig" class="hint">설정 적용 시 전송 JSON이 이 MAC의 DB에 저장됩니다.</p>
+            <p id="savedConfig" class="hint">
+              설정 적용 시 전송 JSON이 이 MAC의 DB에 저장됩니다.
+            </p>
           </div>
         </section>
       </div>
@@ -203,7 +245,9 @@
                   <option selected>진폭 보정</option>
                   <option>에너지 보정</option>
                 </select>
-                <span id="piezoWindowFactor" class="field-note window-factor">보정계수: 데이터 대기</span>
+                <span id="piezoWindowFactor" class="field-note window-factor"
+                  >보정계수: 데이터 대기</span
+                >
               </label>
               <label
                 >Window N
@@ -282,7 +326,9 @@
                   <option selected>진폭 보정</option>
                   <option>에너지 보정</option>
                 </select>
-                <span id="adxlWindowFactor" class="field-note window-factor">보정계수: 데이터 대기</span>
+                <span id="adxlWindowFactor" class="field-note window-factor"
+                  >보정계수: 데이터 대기</span
+                >
               </label>
               <label class="check"
                 ><input id="gnOn" type="checkbox" checked /><span
@@ -330,17 +376,46 @@
         <fieldset class="psd-live">
           <legend>실시간 Welch PSD · 새 패킷 자동 분석</legend>
           <div class="row">
-            <label class="check"><input id="monPsdOn" type="checkbox" /><span>PSD ON (FFT 대신 표시)</span></label>
-            <label>구간 N
+            <label class="check"
+              ><input id="monPsdOn" type="checkbox" /><span
+                >PSD ON (FFT 대신 표시)</span
+              ></label
+            >
+            <label
+              >구간 N
               <select id="monPsdSegment">
-                <option>8192</option><option>4096</option><option>2048</option><option>1024</option>
-                <option selected>512</option><option>256</option><option>128</option><option>전체</option>
+                <option>8192</option>
+                <option>4096</option>
+                <option>2048</option>
+                <option>1024</option>
+                <option selected>512</option>
+                <option>256</option>
+                <option>128</option>
+                <option>전체</option>
               </select>
             </label>
-            <label>Overlap %<input id="monPsdOverlap" class="w-num" type="number" min="0" max="95" value="50" /></label>
-            <label>평균 목표<input id="monPsdTarget" class="w-num" type="number" min="1" value="30" /></label>
+            <label
+              >Overlap %<input
+                id="monPsdOverlap"
+                class="w-num"
+                type="number"
+                min="0"
+                max="95"
+                value="50"
+            /></label>
+            <label
+              >평균 목표<input
+                id="monPsdTarget"
+                class="w-num"
+                type="number"
+                min="1"
+                value="30"
+            /></label>
           </div>
-          <p class="hint">구간 N이 패킷 샘플 수보다 크면 패킷 전체를 한 구간으로 씁니다. 저장 CSV와 수신 HEX는 그대로입니다.</p>
+          <p class="hint">
+            구간 N이 패킷 샘플 수보다 크면 패킷 전체를 한 구간으로 씁니다. 저장
+            CSV와 수신 HEX는 그대로입니다.
+          </p>
         </fieldset>
         <p id="formula" class="formula"></p>
       </details>
@@ -387,17 +462,23 @@
                 </select>
               </label>
               <label class="check"
-                ><input id="lockX" type="checkbox" /><span>X축 고정</span></label
+                ><input id="lockX" type="checkbox" /><span
+                  >X축 고정</span
+                ></label
               >
               <label class="check"
-                ><input id="lockY" type="checkbox" /><span>Y축 고정</span></label
+                ><input id="lockY" type="checkbox" /><span
+                  >Y축 고정</span
+                ></label
               >
               <label>X min<input id="xMin" class="w-num" /></label>
               <label>X max<input id="xMax" class="w-num" /></label>
               <label>Y min<input id="yMin" class="w-num" /></label>
               <label>Y max<input id="yMax" class="w-num" /></label>
               <button type="button" id="applyAxis">축 적용/고정</button>
-              <button type="button" class="secondary" id="autoAxis">축 자동</button>
+              <button type="button" class="secondary" id="autoAxis">
+                축 자동
+              </button>
             </div>
           </div>
           <div id="info" class="save-notes">수신 대기</div>
@@ -416,7 +497,9 @@
         <section id="monPsdResult" class="psd-result" hidden>
           <div class="psd-summary">
             <strong class="psd-title">PSD 결과</strong>
-            <span id="monPsdSrss" class="info-chip">XYZ 합성 SRSS: 분석 대기</span>
+            <span id="monPsdSrss" class="info-chip"
+              >XYZ 합성 SRSS: 분석 대기</span
+            >
             <span id="monPsdLimit" class="info-chip">한계값: -</span>
             <span id="monPsdJudge" class="psd-judge">판정: 분석 대기</span>
           </div>

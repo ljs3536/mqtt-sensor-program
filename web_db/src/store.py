@@ -597,8 +597,8 @@ class Store(QueryMixin, SiteMixin):
         - 중복: 같은 MAC·종류·축·수신 시각이 이미 packet에 있으면(실시간으로 받았거나 전에 가져옴) 그 묶음을
           통째로 건너뛴다. 세트 일부만 들어가 반쪽 세트가 생기지 않게 한다. 버튼을 여러 번 눌러도 안전하다.
         - set_key 'CSV|종류|MAC|n'(실시간 '종류|MAC|n'과 겹치지 않음), set_no n은 MAC·종류마다 가져온 줄의 최대+1부터.
-        - device: 없는 MAC은 등록한다. 마지막 수신(last_at 등)은 비어 있을 때만 이 묶음의 가장 늦은 시각으로
-          채운다(실시간 수신 값을 옛 값으로 덮지 않는다).
+        - device: 없는 MAC은 등록한다. 마지막 수신(last_at 등)은 이 묶음의 가장 늦은 시각이 지금 값보다 늦을 때만
+          바꾼다(실시간 수신 값을 옛 값으로 덮지 않는다).
         잠금은 이 함수 안에서만 잡고 한 commit으로 끝낸다. 부르는 쪽이 HEX 약 1MB씩 나눠 불러,
         실시간 수신 저장이 기다리는 시간은 한 번에 그 commit 시간 정도다(결과 lock_ms).
         """
@@ -657,16 +657,19 @@ class Store(QueryMixin, SiteMixin):
                     if last is None or received > last[0]:
                         latest[mac] = (received, str(item.get("gw") or ""), str(item.get("battery") or ""), sensor_type)
             now = _iso()
+            # 마지막 수신 정보는 이 묶음의 가장 늦은 시각이 지금 값보다 늦을 때만 바꾼다(빈 값 ''은 어떤 시각보다 작다).
+            # 2026-11-24 고침: 전에는 'last_at이 비어 있을 때만' 채워서, 새 DB에 가져오면 첫 묶음(가장 옛 시각)에서 멈췄다
+            # → 실시간 수신 전까지 센서 현황이 옛 시각 기준 '미수신'. 실시간 값은 늘 CSV보다 늦어 덮이지 않는다.
             for mac, (received, gw, battery, sensor_type) in latest.items():
                 self._conn.execute(
                     """
                     INSERT INTO device(mac, created_at, updated_at, last_gw, last_battery, last_sensor, last_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(mac) DO UPDATE SET
-                        last_gw=CASE WHEN device.last_at='' THEN excluded.last_gw ELSE device.last_gw END,
-                        last_battery=CASE WHEN device.last_at='' THEN excluded.last_battery ELSE device.last_battery END,
-                        last_sensor=CASE WHEN device.last_at='' THEN excluded.last_sensor ELSE device.last_sensor END,
-                        last_at=CASE WHEN device.last_at='' THEN excluded.last_at ELSE device.last_at END
+                        last_gw=CASE WHEN excluded.last_at>device.last_at THEN excluded.last_gw ELSE device.last_gw END,
+                        last_battery=CASE WHEN excluded.last_at>device.last_at THEN excluded.last_battery ELSE device.last_battery END,
+                        last_sensor=CASE WHEN excluded.last_at>device.last_at THEN excluded.last_sensor ELSE device.last_sensor END,
+                        last_at=CASE WHEN excluded.last_at>device.last_at THEN excluded.last_at ELSE device.last_at END
                     """,
                     (mac, now, now, gw, battery, sensor_type, received),
                 )

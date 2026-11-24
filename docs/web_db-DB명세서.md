@@ -44,6 +44,11 @@ DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 �
 
 SQLite 파일이 아예 없는 곳(운영 서버처럼 CSV만 있는 곳)도 같다. 빈 DB가 만들어지고 v1이 생기고, 패킷이 없어 재계산은 0세트로 바로 끝난다(v1이 지금 버전). 그 뒤 설정 > 통계 데이터 > 'CSV 데이터 가져오기'로 `data_csv_web`의 CSV를 `packet`에 넣고(2026-11-24), '지금 기준으로 다시 계산'을 누르면 모든 기간 통계가 생긴다(`web_db-구성과-데이터흐름.md` 'CSV 데이터 가져오기').
 
+빈 DB 대신 **설정만 옮긴 DB**로 시작할 수 있다(2026-11-24, `python -m web_db.src.export_settings 새경로\sensor.sqlite`).
+`device`(이름·위치·표시, 마지막 수신은 비움)·`srss_limit`·`stat_profile`+`app_setting.stat_profile_active`·`floor_plan`·`sensor_placement`와
+`site_files/`를 옮기고, `packet`·통계·상태 기록은 옮기지 않는다. MQTT 설정(`--with-mqtt`)과 `sensor_config`(`--with-sensor-config`)는 고를 때만.
+v1이 이미 지금 버전이라 시작 재계산은 돌지 않는다. 순서와 주의는 `운영-배포-절차.md`.
+
 ### packet.decoded_samples
 
 HEX를 푼 샘플 글자다. 2026-11-23부터 읽는 곳이 없다(통계·분석 모두 `sensor_data_hex`를 직접 푼다). DB 크기의 절반쯤이다.

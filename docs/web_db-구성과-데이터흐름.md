@@ -26,6 +26,8 @@
 | `web_db/src/stat_profile.py` | 통계 계산 기준(버전) 검사·기본값, 세트 하나 통계(`set_stats`), 한 시간 묶음·합치기 |
 | `web_db/src/stats_job.py` | 통계 재계산 백그라운드 작업(기준 저장·재계산 버튼·업그레이드 직후) |
 | `web_db/src/import_csv.py` | CSV 폴더를 SQLite `packet`에 다시 채우기(명령줄 전용). 아래 "CSV 폴더로 DB 채우기" |
+| `web_db/src/export_settings.py` | 설정(이름·위치·구간·평면도·통계 기준)만 담은 새 SQLite 만들기(명령줄, 2026-11-24 운영 첫 배포용). `docs/운영-배포-절차.md` |
+| `web_db/src/compact_db.py` | 쓰지 않는 `packet.decoded_samples` 열 지우기 + VACUUM(명령줄, 서버를 멈추고) |
 | `web_db/src/grouping.py` | ADXL seq로 X/Y/Z를 한 세트에 묶음 |
 | `web_db/src/decode.py` | 패킷 분류와 sensorData HEX 디코드 |
 | `web_db/src/signal.py` | 필터, FFT(Window 보정), Welch PSD, SRSS 전력 |
@@ -300,7 +302,8 @@ LPF에는 `자동 Fs/2`가 있고 기본으로 켜져 있다(V057·v070과 같�
 4. HEX 약 1MB(ADXL 약 10세트)씩 모아 `Store.import_packets`로 넣는다. 세트는 끊지 않는다. DB 잠금은 이 한 번(중복 확인 + INSERT + commit)만 잡고, 묶음 사이에 5ms 쉰다.
 5. 중복: 같은 MAC·종류·축·수신 시각이 이미 `packet`에 있으면(실시간으로 받음, 전에 가져옴, 다른 폴더의 같은 CSV) 그 묶음을 통째로 건너뛴다. 여러 번 눌러도 두 번 들어가지 않는다.
 6. 가져온 줄은 `packet.source='csv'`, `set_key = CSV|종류|MAC|n`(n은 MAC·종류마다 가져온 줄의 최대+1부터).
-7. `device`: 없는 MAC은 등록. 마지막 수신(`last_at` 등)은 비어 있을 때만 CSV 시각으로 채운다(실시간 값을 옛 값으로 덮지 않음).
+7. `device`: 없는 MAC은 등록. 마지막 수신(`last_at`·배터리·종류·게이트웨이)은 묶음의 가장 늦은 시각이 지금 값보다 늦을 때만 바꾼다(실시간 값은 늘 더 늦어 덮이지 않음). 2026-11-24 전에는 '비어 있을 때만'이라 새 DB에서 첫 묶음 시각에 멈췄다.
+8. 막지 못하는 것: **재송신**. 옛 파형을 다시 보내면 수신기가 새 수신 시각으로 CSV에 남기므로 시각 기준 중복 확인을 지나 실측처럼 들어간다. 재송신·시험 폴더는 가져오기 전에 `data_csv_web` 밖으로 옮긴다(`운영-배포-절차.md` '주의 1').
 
 수신 중에 돌려도 되는 이유
 - CSV 저장은 CsvWriter 스레드라 DB와 상관없다.
