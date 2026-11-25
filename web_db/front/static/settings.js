@@ -140,30 +140,6 @@ function appendRow(item) {
   const macCell = document.createElement("td");
   macCell.className = "settings-mac";
   macCell.textContent = item.mac;
-  // '표시'(2026-11-24): 끄면 이름이 있어도 센서 현황·분석·통계에서 숨긴다. 누르는 즉시 저장(수신·통계 계산은 그대로).
-  // 이름이 없으면 어차피 안 보이므로 칸을 끈다.
-  const showCell = document.createElement("td");
-  showCell.className = "settings-show";
-  const showBox = document.createElement("input");
-  showBox.type = "checkbox";
-  showBox.checked = item.visible == null ? true : !!item.visible;
-  showBox.disabled = !String(item.display_name || "").trim();
-  showBox.title = showBox.disabled ? "이름이 있어야 화면에 보입니다" : "센서 현황·분석·통계에 보이기";
-  showCell.appendChild(showBox);
-  showBox.onchange = async () => {
-    const response = await fetch("/api/db/device-visible", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mac: item.mac, visible: showBox.checked }),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      showBox.checked = !showBox.checked;
-      note(data.detail || "표시 저장 실패");
-      return;
-    }
-    note(data.visible ? `${item.mac} 을 센서 현황·분석·통계에 보입니다.` : `${item.mac} 을 센서 현황·분석·통계에서 숨깁니다(수신·통계 계산은 계속).`);
-  };
   const nameCell = document.createElement("td");
   const nameInput = document.createElement("input");
   nameInput.className = "w-name";
@@ -221,7 +197,7 @@ function appendRow(item) {
   deleteButton.textContent = "이름 삭제";
   deleteButton.style.marginLeft = "6px";
   actionCell.append(saveButton, deleteButton);
-  tr.append(showCell, macCell, nameCell, locationCell, limitCell, photoCell(item), packetCell, timeCell, actionCell);
+  tr.append(macCell, nameCell, locationCell, limitCell, photoCell(item), packetCell, timeCell, actionCell);
 
   saveButton.onclick = async () => {
     const limit = limitValue(limitInput);
@@ -271,7 +247,7 @@ async function load() {
   if (!data.length) {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
-    td.colSpan = 9;
+    td.colSpan = 8;
     td.textContent = "등록된 MAC이 없습니다.";
     tr.appendChild(td);
     deviceRows.appendChild(tr);
@@ -305,16 +281,18 @@ document.querySelector("#addDevice").onclick = async () => {
   }
 };
 
-load().catch((error) => note(error.message));
 
-/* ---------- 설정 탭(장치·수신 / 평면도 배치 / 통계 데이터) ----------
- * 주소 끝 #devices #plan #stats 로 바로 연다(대문의 ⚙ 버튼은 /settings#plan).
+/* ---------- 설정 탭(장치·수신 / 장치 표시 / 평면도 배치 / 통계 데이터) ----------
+ * 주소 끝 #devices #display #plan #stats 로 바로 연다(대문의 ⚙ 버튼은 /settings#plan).
  * 평면도 배치 탭은 static/site.js(편집 모드)가 그린다. */
-const TABS = ["devices", "plan", "stats"];
+const TABS = ["devices", "display", "plan", "stats"];
 function showTab(name) {
   const tab = TABS.includes(name) ? name : "devices";
   document.querySelectorAll("[data-tab]").forEach((button) => button.classList.toggle("active", button.dataset.tab === tab));
   document.querySelectorAll("[data-panel]").forEach((panel) => (panel.hidden = panel.dataset.panel !== tab));
+  // 두 탭이 같은 장치 정보를 보이므로, 탭을 열 때마다 서버 값으로 다시 그린다(다른 탭에서 바꾼 것 반영).
+  if (tab === "devices") load().catch((error) => note(error.message));
+  if (tab === "display") loadDisplay().catch((error) => displayNote(error.message));
   if (tab === "stats") {
     loadCsvImport();
     if (window.loadStatProfile) window.loadStatProfile();
@@ -388,3 +366,124 @@ document.querySelector("#csvImportRun").onclick = async () => {
   }
   loadCsvImport();
 };
+
+/* ---------- 장치 표시 탭(2026-11-25) ----------
+ * 화면에 무엇을 보일지만 정한다. 누르는 즉시 저장(장치 · 수신 탭의 '저장' 버튼과 따로).
+ * - 화면 표시(전체): device.visible. 끄면 이름이 있어도 센서 현황·분석·통계에서 숨긴다(POST /api/db/device-visible).
+ *   이름이 없으면 어차피 안 보이므로 칸을 끈다.
+ * - PIEZO / MEMS / 초음파: device.kind_view(서버 kind_view.py). 그 센서가 **실제로 보낸 적 있는 종류에만** 체크 칸이
+ *   생기고, 받은 적 없는 종류는 '–'. 끄면 그 종류만 센서 현황 판정·아이콘, 통계 화면 줄, 분석 목록에서 뺀다
+ *   (POST /api/db/device-kind). 값 -1(이미 다른 종류가 있는 센서에 새로 들어와 자동 숨김)은 주황 '새'를 붙인다.
+ * 어느 쪽이든 수신 저장·통계 계산·수신 판정은 그대로다. */
+const KIND_TEXT = { PIEZO: "PIEZO", ADXL: "MEMS", ULTRASONIC: "초음파" };
+const displayRows = document.querySelector("#displayRows");
+const displayNote = (text) => (document.querySelector("#displayNote").textContent = text);
+
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "저장 실패");
+  return data;
+}
+
+/** 줄 흐림: 이름이 없거나 전체 표시를 껐거나 보이는 종류가 하나도 없으면 화면에 안 나오는 센서. */
+function paintDisplayRow(tr, item) {
+  const view = item.kind_view || {};
+  const kinds = Object.keys(view);
+  const anyShown = !kinds.length || kinds.some((kind) => Number(view[kind]) === 1);
+  const named = !!String(item.display_name || "").trim();
+  const shown = named && !!item.visible && anyShown;
+  tr.classList.toggle("display-off", !shown);
+  tr.querySelector(".display-state").textContent = !named ? "이름 없음" : !item.visible ? "숨김" : !anyShown ? "숨김(모든 종류)" : "보임";
+}
+
+function displayRow(item) {
+  const tr = document.createElement("tr");
+  const cell = (text, className) => {
+    const td = document.createElement("td");
+    if (className) td.className = className;
+    if (text != null) td.textContent = text;
+    return td;
+  };
+  const named = !!String(item.display_name || "").trim();
+  const nameCell = cell(named ? item.display_name : "(이름 없음)", "display-name");
+  const macCell = cell(item.mac, "settings-mac");
+  const placeCell = cell(item.location || "", "settings-meta");
+  // 화면 표시(전체)
+  const allCell = cell(null, "settings-show");
+  const allBox = document.createElement("input");
+  allBox.type = "checkbox";
+  allBox.checked = item.visible == null ? true : !!item.visible;
+  allBox.disabled = !named;
+  allBox.title = named ? "끄면 이 센서를 센서 현황·분석·통계에서 숨깁니다" : "이름이 있어야 화면에 보입니다(장치 · 수신 탭에서 이름을 붙이세요)";
+  allBox.onchange = async () => {
+    try {
+      const data = await postJson("/api/db/device-visible", { mac: item.mac, visible: allBox.checked });
+      item.visible = data.visible;
+      paintDisplayRow(tr, item);
+      displayNote(data.visible ? `${item.mac} 을 화면에 보입니다.` : `${item.mac} 을 화면에서 숨깁니다(수신·통계 계산은 계속).`);
+    } catch (error) {
+      allBox.checked = !allBox.checked;
+      displayNote(error.message);
+    }
+  };
+  allCell.appendChild(allBox);
+  tr.append(nameCell, macCell, placeCell, allCell);
+  // 종류 칸
+  const view = item.kind_view || {};
+  ["PIEZO", "ADXL", "ULTRASONIC"].forEach((kind) => {
+    const td = cell(null, "settings-show display-kind");
+    if (!(kind in view)) {
+      td.textContent = "–";
+      td.title = `이 센서는 ${KIND_TEXT[kind]} 데이터를 보낸 적이 없습니다`;
+      tr.appendChild(td);
+      return;
+    }
+    const label = document.createElement("label");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.dataset.kind = kind;
+    box.checked = Number(view[kind]) === 1;
+    label.appendChild(box);
+    if (Number(view[kind]) === -1) {
+      const mark = document.createElement("span");
+      mark.className = "kind-new";
+      mark.textContent = "새";
+      mark.title = "이미 다른 종류가 있는 센서에 새로 들어온 종류라 자동으로 숨겼습니다. 체크하면 화면에 보입니다.";
+      label.appendChild(mark);
+    }
+    label.title = `${KIND_TEXT[kind]}: 끄면 이 종류만 센서 현황 판정·통계·분석 목록에서 뺍니다(저장·계산은 계속)`;
+    box.onchange = async () => {
+      try {
+        const data = await postJson("/api/db/device-kind", { mac: item.mac, kind, shown: box.checked });
+        item.kind_view = data.kind_view;
+        label.querySelector(".kind-new")?.remove();
+        paintDisplayRow(tr, item);
+        displayNote(`${item.display_name || item.mac} 의 ${KIND_TEXT[kind]}을(를) ${box.checked ? "화면에 보입니다" : "화면에서 숨깁니다(수신·통계 계산은 계속)"}.`);
+      } catch (error) {
+        box.checked = !box.checked;
+        displayNote(error.message);
+      }
+    };
+    td.appendChild(label);
+    tr.appendChild(td);
+  });
+  tr.append(cell(null, "settings-meta display-state"), cell(item.last_at || "", "settings-meta"));
+  paintDisplayRow(tr, item);
+  return tr;
+}
+
+/** 장치 표시 표를 다시 그린다. 이름 있는 센서 먼저(이름순), 이름 없는 MAC은 아래. */
+async function loadDisplay() {
+  const response = await fetch("/api/db/devices");
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.detail || "장치 목록 실패");
+  const named = (item) => !!String(item.display_name || "").trim();
+  data.sort((a, b) => (named(b) - named(a)) || String(a.display_name || a.mac).localeCompare(String(b.display_name || b.mac), "ko"));
+  displayRows.replaceChildren(...(data.length ? data.map(displayRow) : []));
+  if (!data.length) displayNote("등록된 MAC이 없습니다.");
+}

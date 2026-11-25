@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 
 from web_db.src.db_util import _float, _int, _iso, _rate
+from web_db.src import kind_view
 from web_db.src.grouping import assign_set
 from web_db.src.limits import zone_bounds
 from web_db.src.store_query import QueryMixin
@@ -76,6 +77,7 @@ class Store(QueryMixin, SiteMixin):
                 display_name TEXT NOT NULL DEFAULT '',
                 location TEXT NOT NULL DEFAULT '',
                 visible INTEGER NOT NULL DEFAULT 1,
+                kind_view TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_gw TEXT NOT NULL DEFAULT '',
@@ -244,6 +246,14 @@ class Store(QueryMixin, SiteMixin):
         # 옛 줄은 모두 보이게(1). 수신 저장·통계 계산과는 상관없다.
         if "visible" not in columns:
             self._conn.execute("ALTER TABLE device ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
+        # device.kind_view(2026-11-25): 종류(PIEZO·MEMS·초음파)별 화면 표시. 규칙은 kind_view.py.
+        # 옛 DB에 처음 만들 때는 packet에서 MAC마다 처음 받은 종류만 보임, 그 뒤에 들어온 종류는 자동 숨김(-1)으로 채운다.
+        # (packet 인덱스 idx_packet_stream만 훑으므로 한 번만 잠깐 걸린다.)
+        if "kind_view" not in columns:
+            self._conn.execute("ALTER TABLE device ADD COLUMN kind_view TEXT NOT NULL DEFAULT ''")
+            if self._conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='packet'").fetchone():
+                filled = kind_view.backfill(self._conn.execute(kind_view.backfill_sql()).fetchall())
+                self._conn.executemany("UPDATE device SET kind_view=? WHERE mac=?", [(v, m) for m, v in filled.items()])
         for table, names in (("device", ("asset_no",)),
                              ("measurement", ("packet_id", "packet_x_id", "packet_y_id", "packet_z_id"))):
             columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
@@ -315,6 +325,26 @@ class Store(QueryMixin, SiteMixin):
         if not changed:
             raise ValueError("등록되지 않은 MAC입니다")
         return {"mac": mac, "visible": bool(visible)}
+
+    def set_device_kind(self, mac, kind, shown):
+        """설정 > 장치 종류 칸(PIEZO·MEMS·초음파) 저장(2026-11-25). shown=False면 그 종류를 화면에서만 뺀다.
+
+        돌려줌: {"mac", "kind", "shown", "kind_view": {종류: 값}}. 없는 MAC·모르는 종류면 ValueError.
+        """
+        mac = str(mac or "").strip()
+        kind = kind_view.to_kind(kind)
+        if not kind:
+            raise ValueError("종류는 PIEZO, MEMS(ADXL), 초음파 중 하나여야 합니다")
+        with self.lock:
+            row = self._conn.execute("SELECT kind_view FROM device WHERE mac=?", (mac,)).fetchone()
+            if row is None:
+                raise ValueError("등록되지 않은 MAC입니다")
+            view = kind_view.parse(row["kind_view"])
+            view[kind] = kind_view.SHOWN if shown else kind_view.HIDDEN
+            text = json.dumps(view, ensure_ascii=False)
+            self._conn.execute("UPDATE device SET kind_view=?, updated_at=? WHERE mac=?", (text, _iso(), mac))
+            self._conn.commit()
+        return {"mac": mac, "kind": kind, "shown": bool(shown), "kind_view": view}
 
     def clear_display_name(self, mac):
         """표시 이름을 지운다. 수신 패킷이 없는 MAC은 목록에서도 뺀다."""
@@ -612,6 +642,7 @@ class Store(QueryMixin, SiteMixin):
         with self.lock:
             numbers = {}
             latest = {}
+            first_kind = {}  # (mac, 종류) → 이 묶음에서 가장 이른 수신 시각(kind_view 기록 순서)
             # 중복 확인: MAC마다 이 묶음의 수신 시각 범위를 (mac, received_at) 인덱스로 한 번에 읽어 둔다.
             # 줄마다 따로 물으면 SQLite가 다른 인덱스를 골라 표 본문을 읽느라 묶음당 100ms 넘게 걸렸다(2026-11-24 측정).
             span = {}
@@ -653,6 +684,8 @@ class Store(QueryMixin, SiteMixin):
                         values + [key, number, "csv"],
                     )
                     saved += 1
+                    if received and ((mac, sensor_type) not in first_kind or received < first_kind[(mac, sensor_type)]):
+                        first_kind[(mac, sensor_type)] = received
                     last = latest.get(mac)
                     if last is None or received > last[0]:
                         latest[mac] = (received, str(item.get("gw") or ""), str(item.get("battery") or ""), sensor_type)
@@ -673,6 +706,9 @@ class Store(QueryMixin, SiteMixin):
                     """,
                     (mac, now, now, gw, battery, sensor_type, received),
                 )
+            # 이 묶음에서 처음 본 종류를 kind_view에 기록한다(MAC마다 가장 이른 수신 순 → 빈 MAC은 첫 종류만 보임).
+            for (mac, _kind), _first in sorted(first_kind.items(), key=lambda pair: (pair[0][0], pair[1])):
+                kind_view.note_kind(self._conn, mac, _kind)
             self._conn.commit()
         return {"saved": saved, "duplicates": duplicates, "lock_ms": (time.perf_counter() - began) * 1000}
 
@@ -692,4 +728,6 @@ class Store(QueryMixin, SiteMixin):
             """,
             (mac, now, now, gw, battery, sensor_type, now),
         )
+        # 이 MAC이 이 종류를 처음 받았으면 kind_view에 기록(첫 종류는 보임, 그 뒤 새 종류는 자동 숨김).
+        kind_view.note_kind(self._conn, mac, sensor_type)
 

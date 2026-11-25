@@ -59,7 +59,7 @@ HEX를 푼 샘플 글자다. 2026-11-23부터 읽는 곳이 없다(통계·분�
 
 | 테이블 | 열 |
 | --- | --- |
-| `device` | `mac`(PK), `display_name`, `location`(설치 위치, 2026-11-24 다시 씀), `visible`(설정 '표시', 1 기본·0이면 센서 현황·분석·통계에서 숨김, 2026-11-24), `created_at`, `updated_at`, `last_gw`, `last_battery`, `last_sensor`, `last_at` |
+| `device` | `mac`(PK), `display_name`, `location`(설치 위치, 2026-11-24 다시 씀), `visible`(설정 '표시', 1 기본·0이면 센서 현황·분석·통계에서 숨김, 2026-11-24), `kind_view`(종류별 표시 JSON, 2026-11-25. 아래 '종류별 표시'), `created_at`, `updated_at`, `last_gw`, `last_battery`, `last_sensor`, `last_at` |
 | `packet` | `id`(PK, AUTOINCREMENT), `mac`, `received_at`, `gw_mac`, `sensor_type`(PIEZO·ADXL·ULTRASONIC), `axis`(X·Y·Z, PIEZO, H), `seq`, `tick`, `battery`, `sample_rate`, `sample_count`, `payload_bytes`, `sensor_data_hex`, `min_khz`, `interval_hz`, `freq_start_khz`, `freq_end_khz`, `set_key`, `set_no`, `source` |
 | `measurement` | 아래 measurement 절 |
 | `srss_limit` | `mac`(PK, 정규화한 키), `limit_mm_s`(위험 기준), `good_mm_s`(양호 상한), `caution_mm_s`(주의 상한), `updated_at`. 양호·주의 상한이 비어 있으면(NULL) 위험 기준 × 1.4/4.5, × 2.8/4.5(2026-11-23, 옛 DB에는 시작할 때 열을 붙인다) |
@@ -229,4 +229,24 @@ HPF 10Hz + LPF 1000Hz를 기본으로 한 이유(2026-11-23 실측, 같은 6세�
 - device 마지막 수신 정보를 가장 늦은 packet으로 맞추고, 지금 기준(v1)으로 통계를 다시 계산했다(3,784세트, 실패 0).
 - 결과: 센서 현황 12대 모두 연결 정상, 통계 7일 = 센서마다 약 160세트·7점. 채운 줄만 지우려면 `DELETE FROM packet WHERE source='fill'` 뒤 '지금 기준으로 다시 계산'.
 - 앞으로의 수신(실시간)은 평소처럼 쌓인다. 자동으로 계속 채우지는 않는다.
+
+## 종류별 표시 `device.kind_view` (2026-11-25)
+
+같은 MAC이 PIEZO·MEMS(ADXL)·초음파를 섞어 보내면(SENSORTYPE을 바꿨거나, 운영 CSV에 시험 데이터가 섞임) 통계 화면에 같은 이름이 두 줄로 나오고 센서 현황 판정이 가장 늦게 계산된 종류에 따라 바뀐다. 시연·운영 화면을 깔끔하게 하려고 MAC + 종류 단위로 화면에서만 뺀다. 규칙은 `web_db/src/kind_view.py` 한곳에 있다.
+
+| 값 | 뜻 |
+|---|---|
+| `1` | 보임 |
+| `0` | 사용자가 숨김(설정 > 장치 종류 칸을 끔) |
+| `-1` | 새 종류라 자동 숨김: 이미 다른 종류가 있는 MAC에 처음 들어온 종류 |
+| 키 없음 | 받은 적 없는 종류 → 보이는 것으로 본다 |
+| `''`·`{}` | 아직 아무 종류도 안 받음. 처음 들어온 종류가 `1`이 된다 |
+
+- 예: `{"PIEZO": 1, "ADXL": -1}` = MOP2(865872312270). PIEZO만 보이고, 뒤에 들어온 시험용 MEMS는 숨김.
+- 기록: 패킷이 들어올 때마다(`store.save_packet` → `_touch_device`, CSV 가져오기 `import_packets`) `kind_view.note_kind`가 그 종류를 처음 받았을 때만 쓴다(이미 있으면 쓰기 없음).
+- 옛 DB: 서버를 처음 켤 때 칸을 만들고 packet에서 MAC마다 **처음 받은(가장 작은 id) 종류만 1, 나머지는 -1**로 채운다.
+- 숨겨도 하는 일: 수신 저장(CSV·packet), 매시 통계 계산, 수신 판정(정상·지연·미수신). 다시 켜면 지난 값이 바로 보인다.
+- 화면에서 빠지는 곳: 센서 현황 판정 통계 줄(`store_site.site_rows`)·아이콘·진동/초음파 묶음(`site_status.sensor_kind`), 통계 화면 줄·센서 수(`store_query.dashboard`), 센서 데이터 분석 MAC 목록(탭 종류별)·조회(`/api/db/load` 400)·상태 줄 통계(`_stat_kind`). 센서 수신 모니터는 수신 원본이라 그대로 다 보인다.
+- 모든 종류를 숨기면 `visible=0`('표시' 끔)과 같다.
+- `export_settings`는 이 칸도 그대로 옮긴다(운영 DB에서 그 MAC의 운영 CSV 새 종류는 자동 숨김).
 

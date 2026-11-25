@@ -27,9 +27,43 @@
         width: 220px;
       }
       /* 저장 안내 줄: 글이 바뀌어도 아래 표가 밀리지 않게 두 줄 높이를 잡아 둔다(표시 체크를 연달아 누를 때 빗나감 방지) */
-      #settingsNote { min-height: 2.9em; margin: 4px 0; }
-      .settings-table td.settings-show { text-align: center; width: 44px; }
-      .settings-table td.settings-show input { width: 18px; height: 18px; }
+      #settingsNote {
+        min-height: 2.9em;
+        margin: 4px 0;
+      }
+      .settings-table td.settings-show {
+        text-align: center;
+        width: 44px;
+      }
+      .settings-table td.settings-show input {
+        width: 18px;
+        height: 18px;
+      }
+      /* 장치 표시 탭(2026-11-25): 화면 표시·종류 칸은 가운데, 화면에 안 나오는 줄은 흐리게. */
+      .display-table th:nth-child(n + 4):nth-child(-n + 7) {
+        text-align: center;
+        width: 76px;
+      }
+      .display-table td.display-kind label {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        cursor: pointer;
+      }
+      .display-table td.display-name {
+        font-weight: 700;
+      }
+      .display-table tr.display-off td {
+        opacity: 0.55;
+      }
+      .display-table tr.display-off td.settings-show {
+        opacity: 1;
+      }
+      .kind-new {
+        color: #c2410c;
+        font-weight: 700;
+        font-size: 11px;
+      }
       .settings-table input.w-location {
         width: 180px;
       }
@@ -93,7 +127,7 @@
       html[data-theme="dark"] .settings-meta {
         color: #9aa8b5;
       }
-      /* 설정 탭: 장치·수신 / 평면도 배치 / 통계 데이터. 주소 #devices #plan #stats 로 바로 열 수 있다. */
+      /* 설정 탭: 장치·수신 / 장치 표시 / 평면도 배치 / 통계 데이터. 주소 #devices #display #plan #stats 로 바로 열 수 있다. */
       .settings-tabs {
         display: flex;
         gap: 4px;
@@ -251,24 +285,22 @@
     <main>
       <nav class="settings-tabs" role="tablist">
         <button type="button" data-tab="devices">장치 · 수신</button>
+        <button type="button" data-tab="display">장치 표시</button>
         <button type="button" data-tab="plan">평면도 배치</button>
         <button type="button" data-tab="stats">통계 데이터</button>
       </nav>
       <div data-panel="devices">
         <section class="card">
           <h2>장치 이름 / 진동 구간</h2>
-          <p class="hint">
-            표시 이름은 통계와 분석 MAC 목록에 붙고, 위치(설치 장소)는 통계 화면 이름 아래에 보입니다.
-            이름이 없거나 '표시'를 끈 센서는 센서 현황·분석·통계에 보이지 않습니다(수신 저장·통계 계산은 계속, 이 표와 센서 수신 모니터에는 보임). 진동 구간(mm/s RMS, ISO 20816-3 Group 2 강성 지지)은
-            양호 &lt; 양호 상한 ≤ 주의 &lt; 주의 상한 ≤ 경고 &lt; 위험 기준 ≤ 위험입니다. 기본 1.4 / 2.8 / 4.5이고,
-            양호·주의 상한을 비워 두면 위험 기준의 같은 비율로 자동 계산합니다(위험 기준 15면 4.67 / 9.33).
-            위험 기준은 그래프의 SRSS 한계선과 같은 값입니다. 사진(MAC마다 한 장)은 센서 현황에서 센서를 누르면
-            정보 카드 위쪽에 보입니다.
-          </p>
           <div class="row add-row">
             <label>MAC<input id="newMac" placeholder="장치 MAC" /></label>
             <label>이름<input id="newName" placeholder="표시 이름" /></label>
-            <label>위치<input id="newLocation" placeholder="설치 위치" maxlength="100" /></label>
+            <label
+              >위치<input
+                id="newLocation"
+                placeholder="설치 위치"
+                maxlength="100"
+            /></label>
             <label
               >위험 기준 mm/s<input id="newLimit" class="w-num" value="4.5"
             /></label>
@@ -278,7 +310,6 @@
           <table class="settings-table">
             <thead>
               <tr>
-                <th title="끄면 이름이 있어도 센서 현황·분석·통계에서 숨깁니다">표시</th>
                 <th>MAC</th>
                 <th>이름</th>
                 <th>위치</th>
@@ -298,6 +329,31 @@
       평면도 배치(관리용). 대문(/)은 보기 전용이고 배치는 여기서만 바꾼다.
       static/site.js가 body의 data-site-mode="edit"로 편집 모드로 돈다.
     -->
+      <!-- 장치 표시(2026-11-25, static/settings.js loadDisplay). 누르는 즉시 저장, 수신 저장·통계 계산과 상관없음. -->
+      <div data-panel="display" hidden>
+        <section class="card">
+          <h2>장치 표시</h2>
+          <p class="hint" id="displayNote"></p>
+          <table class="settings-table display-table">
+            <thead>
+              <tr>
+                <th>이름</th>
+                <th>MAC</th>
+                <th>위치</th>
+                <th title="끄면 이 센서를 센서 현황·분석·통계에서 숨깁니다">
+                  화면 표시
+                </th>
+                <th>PIEZO</th>
+                <th>MEMS</th>
+                <th>초음파</th>
+                <th>지금</th>
+                <th>마지막 수신</th>
+              </tr>
+            </thead>
+            <tbody id="displayRows"></tbody>
+          </table>
+        </section>
+      </div>
       <div data-panel="plan" class="site-main" hidden>
         <section class="card site-editbar">
           <input
@@ -428,57 +484,144 @@
         <section class="card" id="statProfileCard">
           <h2>통계 계산 기준 <small id="spActive" class="hint"></small></h2>
           <p class="hint">
-            매시간 통계와 센서 현황 경보가 쓰는 기준입니다. 저장하면 새 버전으로 남고, 그 기준으로 지금까지
-            받은 데이터를 다시 계산합니다(계산하는 동안에도 수신 저장은 그대로 됩니다). 분석 화면 그래프의
-            서랍 설정과는 따로입니다.
+            매시간 통계와 센서 현황 경보가 쓰는 기준입니다. 저장하면 새 버전으로
+            남고, 그 기준으로 지금까지 받은 데이터를 다시 계산합니다(계산하는
+            동안에도 수신 저장은 그대로 됩니다). 분석 화면 그래프의 서랍
+            설정과는 따로입니다.
           </p>
           <div class="sp-grid">
             <fieldset>
               <legend>환산</legend>
-              <label>1 LSB당 g <input id="spLsb" type="number" step="any" /></label>
-              <label class="check"><input id="spFreqOn" type="checkbox" /><span>주파수 보정</span></label>
-              <label>주파수 나눗수 <input id="spDivisor" type="number" step="any" /></label>
-              <label class="check"><input id="spSensOn" type="checkbox" /><span>감도 보정</span></label>
-              <label>저주파 경계 Hz <input id="spLowHz" type="number" step="any" /></label>
-              <label>고주파 경계 Hz <input id="spHighHz" type="number" step="any" /></label>
-              <label>저주파 감도 <input id="spLowSens" type="number" step="any" /></label>
-              <label>중간 절편 <input id="spMidIntercept" type="number" step="any" /></label>
-              <label>중간 기울기 <input id="spMidSlope" type="number" step="any" /></label>
-              <label>고주파 감도 <input id="spHighSens" type="number" step="any" /></label>
+              <label
+                >1 LSB당 g <input id="spLsb" type="number" step="any"
+              /></label>
+              <label class="check"
+                ><input id="spFreqOn" type="checkbox" /><span
+                  >주파수 보정</span
+                ></label
+              >
+              <label
+                >주파수 나눗수 <input id="spDivisor" type="number" step="any"
+              /></label>
+              <label class="check"
+                ><input id="spSensOn" type="checkbox" /><span
+                  >감도 보정</span
+                ></label
+              >
+              <label
+                >저주파 경계 Hz <input id="spLowHz" type="number" step="any"
+              /></label>
+              <label
+                >고주파 경계 Hz <input id="spHighHz" type="number" step="any"
+              /></label>
+              <label
+                >저주파 감도 <input id="spLowSens" type="number" step="any"
+              /></label>
+              <label
+                >중간 절편 <input id="spMidIntercept" type="number" step="any"
+              /></label>
+              <label
+                >중간 기울기 <input id="spMidSlope" type="number" step="any"
+              /></label>
+              <label
+                >고주파 감도 <input id="spHighSens" type="number" step="any"
+              /></label>
             </fieldset>
             <fieldset>
               <legend>필터 (FFT·PSD 계산 전)</legend>
-              <label class="check"><input id="spHpfOn" type="checkbox" /><span>HPF</span></label>
-              <label>HPF Hz <input id="spHpfHz" type="number" step="any" /></label>
-              <label>HPF 차수 <input id="spHpfOrder" type="number" min="1" max="12" /></label>
-              <label class="check"><input id="spLpfOn" type="checkbox" /><span>LPF</span></label>
-              <label>LPF Hz <input id="spLpfHz" type="number" step="any" /></label>
-              <label>LPF 차수 <input id="spLpfOrder" type="number" min="1" max="12" /></label>
-              <label class="check"><input id="spNotchOn" type="checkbox" /><span>Notch</span></label>
-              <label>Notch Hz <input id="spNotchHz" type="number" step="any" /></label>
-              <label>Notch 폭 Hz <input id="spNotchWidth" type="number" step="any" /></label>
-              <p class="hint">세트의 Fs/2 이상인 필터는 그 세트에서만 빠집니다(계산 메모에 남음).</p>
+              <label class="check"
+                ><input id="spHpfOn" type="checkbox" /><span>HPF</span></label
+              >
+              <label
+                >HPF Hz <input id="spHpfHz" type="number" step="any"
+              /></label>
+              <label
+                >HPF 차수 <input id="spHpfOrder" type="number" min="1" max="12"
+              /></label>
+              <label class="check"
+                ><input id="spLpfOn" type="checkbox" /><span>LPF</span></label
+              >
+              <label
+                >LPF Hz <input id="spLpfHz" type="number" step="any"
+              /></label>
+              <label
+                >LPF 차수 <input id="spLpfOrder" type="number" min="1" max="12"
+              /></label>
+              <label class="check"
+                ><input id="spNotchOn" type="checkbox" /><span
+                  >Notch</span
+                ></label
+              >
+              <label
+                >Notch Hz <input id="spNotchHz" type="number" step="any"
+              /></label>
+              <label
+                >Notch 폭 Hz <input id="spNotchWidth" type="number" step="any"
+              /></label>
+              <p class="hint">
+                세트의 Fs/2 이상인 필터는 그 세트에서만 빠집니다(계산 메모에
+                남음).
+              </p>
             </fieldset>
             <fieldset>
               <legend>Welch PSD</legend>
-              <label>Window <select id="spWindow"></select></label>
-              <label>Kaiser β <input id="spBeta" type="number" step="any" /></label>
-              <label>구간 N <select id="spSegment"></select></label>
-              <label>Overlap % <input id="spOverlap" type="number" min="0" max="95" step="any" /></label>
-              <label>평균 목표 구간 <input id="spTarget" type="number" min="1" /></label>
-              <p class="hint">속도 RMS = √(Σ 속도 PSD × Δf), SRSS = √(X² + Y² + Z²). 분석 데이터 저장(ZIP)과 같은 계산입니다.</p>
+              <label
+                >Window
+                <select id="spWindow"></select
+              ></label>
+              <label
+                >Kaiser β <input id="spBeta" type="number" step="any"
+              /></label>
+              <label
+                >구간 N
+                <select id="spSegment"></select
+              ></label>
+              <label
+                >Overlap %
+                <input id="spOverlap" type="number" min="0" max="95" step="any"
+              /></label>
+              <label
+                >평균 목표 구간 <input id="spTarget" type="number" min="1"
+              /></label>
+              <p class="hint">
+                속도 RMS = √(Σ 속도 PSD × Δf), SRSS = √(X² + Y² + Z²). 분석
+                데이터 저장(ZIP)과 같은 계산입니다.
+              </p>
             </fieldset>
           </div>
           <div class="row">
-            <label>메모 <input id="spNote" type="text" maxlength="200" placeholder="바꾼 이유(선택)" /></label>
+            <label
+              >메모
+              <input
+                id="spNote"
+                type="text"
+                maxlength="200"
+                placeholder="바꾼 이유(선택)"
+            /></label>
           </div>
           <div class="row">
-            <button type="button" id="spSave" class="primary">저장하고 다시 계산</button>
-            <button type="button" id="spRebuild">지금 기준으로 다시 계산</button>
-            <button type="button" id="spFromFiles" title="그래프가 쓰는 mems_lsb_scale.json · mems_frequency_sensitivity.json 값으로 환산 칸을 채웁니다">그래프 설정 파일 값 가져오기</button>
+            <button type="button" id="spSave" class="primary">
+              저장하고 다시 계산
+            </button>
+            <button type="button" id="spRebuild">
+              지금 기준으로 다시 계산
+            </button>
+            <button
+              type="button"
+              id="spFromFiles"
+              title="그래프가 쓰는 mems_lsb_scale.json · mems_frequency_sensitivity.json 값으로 환산 칸을 채웁니다"
+            >
+              그래프 설정 파일 값 가져오기
+            </button>
             <button type="button" id="spDefaults">기본값으로 채우기</button>
             <button type="button" id="spExport">JSON 내보내기</button>
-            <label class="file-button">JSON 가져오기<input id="spImport" type="file" accept=".json,application/json" hidden /></label>
+            <label class="file-button"
+              >JSON 가져오기<input
+                id="spImport"
+                type="file"
+                accept=".json,application/json"
+                hidden
+            /></label>
             <span id="spPhase" class="hint"></span>
           </div>
           <div class="csv-progress" id="spProgress" hidden><div></div></div>
@@ -486,7 +629,15 @@
           <details>
             <summary>기준 버전 기록</summary>
             <table class="sp-history">
-              <thead><tr><th>버전</th><th>저장 시각</th><th>기준</th><th>메모</th><th></th></tr></thead>
+              <thead>
+                <tr>
+                  <th>버전</th>
+                  <th>저장 시각</th>
+                  <th>기준</th>
+                  <th>메모</th>
+                  <th></th>
+                </tr>
+              </thead>
               <tbody id="spHistory"></tbody>
             </table>
           </details>
@@ -494,9 +645,12 @@
         <section class="card">
           <h2>CSV 데이터 가져오기</h2>
           <p class="hint">
-            수신 CSV 폴더에 쌓인 데이터(MEMS X/Y/Z, PIEZO, 초음파)를 DB에 넣습니다. 이미 DB에 있는 패킷(같은 MAC·축·수신
-            시각)은 건너뛰므로 여러 번 눌러도 두 번 들어가지 않습니다. 가져오는 동안에도 센서 수신과 저장은 그대로 됩니다.
-            다 끝나면 위 <b>지금 기준으로 다시 계산</b>을 눌러 통계를 만드세요. 가져온 데이터는 센서 데이터 분석 화면에서도 열 수 있습니다.
+            수신 CSV 폴더에 쌓인 데이터(MEMS X/Y/Z, PIEZO, 초음파)를 DB에
+            넣습니다. 이미 DB에 있는 패킷(같은 MAC·축·수신 시각)은 건너뛰므로
+            여러 번 눌러도 두 번 들어가지 않습니다. 가져오는 동안에도 센서
+            수신과 저장은 그대로 됩니다. 다 끝나면 위
+            <b>지금 기준으로 다시 계산</b>을 눌러 통계를 만드세요. 가져온
+            데이터는 센서 데이터 분석 화면에서도 열 수 있습니다.
           </p>
           <dl class="csv-stats-info">
             <dt>CSV 폴더</dt>
@@ -516,7 +670,7 @@
       </div>
     </main>
     <script src="/static/api.js?v=1"></script>
-    <script src="/static/settings.js?v=15"></script>
+    <script src="/static/settings.js?v=17"></script>
     <script src="/static/stat-profile.js?v=2"></script>
     <script src="/static/site.js?v=22"></script>
     <script src="/static/theme.js?v=4"></script>

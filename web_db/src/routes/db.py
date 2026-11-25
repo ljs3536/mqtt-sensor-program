@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from web_db.src import core as gen
+from web_db.src import kind_view
 from web_db.src import stat_profile as sp
 from web_db.src.csv_import import CsvImportJob, scan
 from web_db.src.grouping import group_adxl, packet_to_template
@@ -64,6 +65,13 @@ class DeviceVisible(BaseModel):
     visible: bool = True
 
 
+class DeviceKind(BaseModel):
+    """설정 > 장치 종류 칸(PIEZO·MEMS·초음파) 저장 요청(2026-11-25). kind: PIEZO | ADXL(MEMS) | ULTRASONIC(초음파)."""
+    mac: str
+    kind: str
+    shown: bool = True
+
+
 class Zones(BaseModel):
     """진동 구간 저장 요청(mm/s RMS). good·caution을 둘 다 비우면 자동(위험 기준의 ISO 비율)."""
     mac: str
@@ -93,6 +101,9 @@ def _load_items(mac, sensor, mode="recent", limit=50, start="", end=""):
         raise ValueError("조회는 최근 또는 기간이어야 합니다")
     if mode == "range" and (not start or not end):
         raise ValueError("기간 조회는 시작과 끝이 필요합니다")
+    # 종류별 표시(2026-11-25): 설정 > 장치에서 숨긴 종류는 분석 화면에서도 열지 않는다(데이터는 DB에 있음).
+    if not kind_view.is_shown(store.kind_view_of(mac), sensor_type):
+        raise ValueError(f"이 센서의 {kind_view.KIND_TEXT[sensor_type]} 데이터는 설정 > 장치에서 숨겨 두었습니다")
     rows = store.packets_for(mac, sensor_type, mode, limit, start, end)
     if sensor == "ADXL":
         items = group_adxl(rows)
@@ -225,6 +236,18 @@ def db_device_visible(body: DeviceVisible):
     """'표시'를 끄면 이름이 있어도 센서 현황·분석·통계에서 숨긴다(2026-11-24). 수신 저장·통계 계산은 그대로."""
     try:
         return store.set_device_visible(body.mac, body.visible)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@router.post("/api/db/device-kind")
+def db_device_kind(body: DeviceKind):
+    """종류별 표시(2026-11-25, kind_view.py). 끄면 그 종류만 센서 현황 판정·통계 화면·분석 목록에서 뺀다.
+
+    수신 저장·통계 계산·수신 판정은 그대로. 응답: {mac, kind, shown, kind_view}.
+    """
+    try:
+        return store.set_device_kind(body.mac, body.kind, body.shown)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 

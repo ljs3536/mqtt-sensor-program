@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import time
 
+from web_db.src import kind_view
 from web_db.src import stat_profile as sp
 from web_db.src.db_util import _iso
 from web_db.src.grouping import complete_sets, packet_to_template, settled_through
@@ -64,6 +65,12 @@ class QueryMixin:
             ).fetchall()
         return {row["mac"]: row["display_name"] for row in rows}
 
+    def kind_view_of(self, mac):
+        """그 MAC의 종류별 표시 {종류: 1/0/-1}(kind_view.py). 없는 MAC이면 {}."""
+        with self.lock:
+            row = self._conn.execute("SELECT kind_view FROM device WHERE mac=?", (str(mac or "").strip(),)).fetchone()
+        return kind_view.parse(row["kind_view"]) if row else {}
+
     def devices(self, named=False):
         """MAC 목록과 패킷 수를 돌려준다.
 
@@ -73,7 +80,7 @@ class QueryMixin:
         with self.lock:
             rows = self._conn.execute(
                 f"""
-                SELECT d.mac, d.display_name, d.location, d.visible,
+                SELECT d.mac, d.display_name, d.location, d.visible, d.kind_view,
                        COUNT(p.id) AS packets,
                        MAX(p.received_at) AS last_at
                 FROM device d
@@ -84,6 +91,13 @@ class QueryMixin:
                 """
             ).fetchall()
         items = [dict(row) for row in rows]
+        # 종류별 표시(2026-11-25, kind_view.py): {종류: 1 보임 / 0 숨김 / -1 새 종류 자동 숨김}.
+        # 설정 > 장치 표는 이 값으로 종류 칸을 그리고, 분석 화면(named)은 고른 탭의 종류를 숨긴 MAC을 목록에서 뺀다.
+        # 모든 종류를 숨긴 MAC은 '표시' 끔과 같아 분석 목록(named)에서 뺀다.
+        for item in items:
+            item["kind_view"] = kind_view.parse(item.get("kind_view"))
+        if named:
+            items = [item for item in items if not kind_view.all_hidden(item["kind_view"])]
         for item in items:
             item["limit"] = self.get_srss_limit(item["mac"])
             item["zones"] = self.get_zones(item["mac"])  # 설정 > 장치 표의 양호·주의 상한 칸
@@ -191,6 +205,7 @@ class QueryMixin:
           수신이 멈춘 MAC은 기간 안에 줄이 없어 '이 기간 통계 없음'으로 보인다.
         - latest_*(최근 줄)는 기간과 상관없이 가장 늦은 시간 줄이다(센서 현황 경보와 같은 값).
         - 이름(display_name)이 없거나 '표시'를 끈(visible=0) MAC은 넣지 않는다(2026-11-24. 통계 계산은 그대로).
+        - 설정 > 장치에서 숨긴 종류(device.kind_view, 2026-11-25)의 줄은 넣지 않는다. 모든 종류를 숨기면 MAC째 뺀다.
         - 초음파만 보내는 MAC(통계 줄이 없고 마지막 수신 종류가 ULTRASONIC)은 넣지 않는다(2026-11-24).
           초음파는 아직 이상 판정 기준이 없어 통계 계산도 하지 않는다(STAT_SENSORS_SQL).
         """
@@ -215,7 +230,7 @@ class QueryMixin:
         with self.lock:
             active = self._active_profile_id()
             devices = self._conn.execute(
-                "SELECT mac, display_name, location, last_sensor FROM device WHERE TRIM(display_name)<>'' AND visible=1 "
+                "SELECT mac, display_name, location, last_sensor, kind_view FROM device WHERE TRIM(display_name)<>'' AND visible=1 "
                 "ORDER BY created_at, mac").fetchall()
             items = []
             pairs = []
@@ -224,10 +239,25 @@ class QueryMixin:
             for device in devices:
                 # 종류마다 한 줄. 같은 MAC이 SENSORTYPE을 바꿔 PIEZO·MEMS를 둘 다 보낸 적이 있으면(실제 865872312270)
                 # 두 줄로 따로 보인다(섞어 평균하지 않는다). 통계가 없으면 ADXL 한 줄('통계 전').
-                kinds = self._stat_kinds(device["mac"], active)
-                if not kinds and str(device["last_sensor"] or "").upper() == "ULTRASONIC":
-                    continue  # 초음파 센서는 통계 화면에 보이지 않는다
-                pairs.extend((device, kind) for kind in (kinds or ["ADXL"]))
+                # 종류별 표시(2026-11-25, kind_view.py): 설정 > 장치에서 숨긴 종류(새 종류 자동 숨김 포함)의 줄은 뺀다.
+                # 통계 계산은 그대로라 다시 켜면 지난 값이 바로 보인다.
+                view = kind_view.parse(device["kind_view"])
+                if kind_view.all_hidden(view):
+                    continue
+                kinds = [kind for kind in self._stat_kinds(device["mac"], active) if kind_view.is_shown(view, kind)]
+                if not kinds:
+                    shown = kind_view.shown_kinds(view)
+                    if shown is None:
+                        if str(device["last_sensor"] or "").upper() == "ULTRASONIC":
+                            continue  # 초음파 센서는 통계 화면에 보이지 않는다
+                        kinds = ["ADXL"]  # 통계 전
+                    else:
+                        # 보이는 진동 종류가 있으면 그 종류 한 줄('통계 전'), 초음파만 보이면 통계 화면에 넣지 않는다.
+                        vibration = [kind for kind in shown if kind in ("ADXL", "PIEZO")]
+                        if not vibration:
+                            continue
+                        kinds = vibration[:1]
+                pairs.extend((device, kind) for kind in kinds)
             for device, kind in pairs:
                 base = (device["mac"], kind, active, since)
                 row = self._conn.execute(
@@ -321,8 +351,16 @@ class QueryMixin:
         return [row["sensor_type"] for row in rows]
 
     def _stat_kind(self, mac, profile_id):
-        """lock을 가진 상태에서 그 MAC의 대표 통계 종류(ADXL 줄이 있으면 ADXL, 없고 PIEZO만 있으면 PIEZO)."""
+        """lock을 가진 상태에서 그 MAC의 대표 통계 종류(ADXL 줄이 있으면 ADXL, 없고 PIEZO만 있으면 PIEZO).
+
+        설정 > 장치에서 숨긴 종류(kind_view, 2026-11-25)는 건너뛴다. 보이는 종류에 통계가 없으면 예전 규칙대로.
+        """
         kinds = self._stat_kinds(mac, profile_id)
+        row = self._conn.execute("SELECT kind_view FROM device WHERE mac=?", (mac,)).fetchone()
+        view = kind_view.parse(row["kind_view"]) if row else {}
+        shown = [kind for kind in kinds if kind_view.is_shown(view, kind)]
+        if shown:
+            return shown[0]
         return kinds[0] if kinds else "ADXL"
 
     def stats_updated_at(self):

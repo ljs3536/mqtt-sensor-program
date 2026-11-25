@@ -142,6 +142,7 @@
 | `GET /api/db/devices`, `/stats?mac=`, `/profile?mac=` | MAC 목록과 패킷 수, 한 MAC 통계, 이름과 마지막 설정 JSON. 분석 화면 MAC 선택 상자는 `MAC · 이름`만 보이고 패킷 수는 보이지 않는다. 패킷 수는 설정 화면이 이름 삭제 때 목록에서 뺄지 정하는 데 쓴다 |
 | `POST /api/db/load` | DB 패킷을 골라 재전송 목록에 올리고 첫 미리보기를 준다 |
 | `POST /api/db/device-visible` | 설정 > 장치 '표시' 체크 저장 `{mac, visible}`(2026-11-24) |
+| `POST /api/db/device-kind` | 설정 > 장치 종류 칸 저장 `{mac, kind: PIEZO\|ADXL\|ULTRASONIC, shown}` → `{mac, kind, shown, kind_view}`(2026-11-25, `src/kind_view.py`) |
 | `GET /api/db/devices?named=` | MAC 목록(설정 표는 전부, `named=true`면 이름 있는 MAC만: 센서 데이터 분석, 2026-11-24) |
 | `GET /api/db/dashboard?period=&mac=&bucket=` | 저장된 통계 읽기(지금 기준 버전 줄만, 계산 기준 요약 포함. 기간 24h 기본·7d·30d·all. 초음파 MAC 제외. mac은 한 MAC만, bucket(hour/day)은 그래프 점 묶음 — 통계2 자세히 보기용. 최신화 API는 없앴다) |
 | `GET·POST /api/db/stat-profile` | 통계 기준 버전 목록·기본값·그래프 설정 파일 값·재계산 진행 / 새 버전 저장 + 재계산 시작(돌고 있으면 409) |

@@ -22,6 +22,7 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from web_db.src import kind_view
 from web_db.src.db_util import _iso
 
 # 평면도로 받을 이미지 형식. 확장자 → 브라우저에 보낼 media type.
@@ -447,6 +448,7 @@ class SiteMixin:
         - measurement(ADXL·PIEZO 중 가장 늦은 줄, 종류는 stat_sensor): **가장 최근 통계 한 줄**의 SRSS·세트 수·시각
           (2026-11-19 결정). 같은 MAC이 SENSORTYPE을 바꿔 보내면 지금 보내는 종류의 통계가 판정에 쓰인다
           (2026-11-25부터 PIEZO도 site_status.JUDGED_KINDS에 들어 같은 기준으로 판정).
+          설정 > 장치에서 숨긴 종류(device.kind_view, 2026-11-25)의 통계 줄은 고르지 않는다..
           전체 평균으로 판정하면 지난 문제가 오래 남고 새 문제는 평균에 묻히므로 최근 줄 하나로 판정한다.
           2026-11-23부터 통계는 한 시간 한 줄이라 가장 최근 한 시간(그 시간 세트들의 평균)이다.
           지금 통계 기준 버전(stat_profile)의 줄만 본다(store_query._active_profile_id).
@@ -459,7 +461,7 @@ class SiteMixin:
         with self.lock:
             devices = self._conn.execute(
                 """
-                SELECT d.mac, d.display_name, d.last_at, d.last_sensor, d.last_battery,
+                SELECT d.mac, d.display_name, d.last_at, d.last_sensor, d.last_battery, d.kind_view,
                        c.payload AS config, c.updated_at AS config_at, c.action AS config_action,
                        m.set_count AS set_count, m.srss_mms AS srss_mms, m.sensor_type AS stat_sensor,
                        m.last_at AS stat_last_at, m.first_at AS stat_first_at
@@ -468,16 +470,23 @@ class SiteMixin:
                 LEFT JOIN measurement m ON m.id = (
                     SELECT id FROM measurement
                     WHERE mac=d.mac AND sensor_type IN ('ADXL','PIEZO') AND COALESCE(profile_id, 0)=?
+                      AND {shown}
                     ORDER BY last_at DESC, id DESC LIMIT 1
                 )
                 WHERE d.mac IS NOT NULL AND d.mac<>'' AND TRIM(d.display_name)<>'' AND d.visible=1
                 ORDER BY d.created_at, d.mac
-                """,
+                """.replace("{shown}", kind_view.sql_shown("d", "sensor_type")),
                 (self._active_profile_id(),),
             ).fetchall()
             result = []
             for row in devices:
                 item = dict(row)
+                # 종류별 표시(2026-11-25, kind_view.py): 받은 종류를 모두 숨겼으면 '표시' 끔과 같이 뺀다.
+                # 판정용 통계 줄(위 measurement)은 보이는 종류에서만 고른다. 수신 판정용 패킷 시각(recent_times)은
+                # 숨긴 종류도 그대로 쓴다(센서가 살아 있으면 수신은 정상, 2026-11-25 결정).
+                item["kind_view"] = kind_view.parse(item.get("kind_view"))
+                if kind_view.all_hidden(item["kind_view"]):
+                    continue
                 item["limit"] = self._read_srss_limit(item["mac"])
                 item["zones"] = self._read_zones(item["mac"])  # 양호·주의·경고·위험 경계(limits.zone_bounds)
                 # 최근 패킷 120개의 (시각, 종류, 축). 측정 한 번 묶기(ADXL X→Y→Z)는 site_status가 한다.

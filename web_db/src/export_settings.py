@@ -14,7 +14,7 @@
 | 표·파일 | 내용 | 비고 |
 | --- | --- | --- |
 | device | 표시 이름, 위치, 표시(visible), 처음 본 시각 | 마지막 수신 정보(last_*)는 비운다. CSV 가져오기·실시간 수신이 다시 채운다 |
-| srss_limit | MAC별 위험 기준·양호/주의 상한 | |
+| srss_limit | MAC별 위험 기준·양호/주의 상한 | 옮기는 장치의 줄만(device에서 지운 MAC의 줄은 빼고, 2026-11-25) |
 | stat_profile + app_setting 'stat_profile_active' | 통계 계산 기준 버전(같은 id) | 운영 서버의 그래프 설정 파일이 달라도 통계 기준이 같다 |
 | floor_plan, sensor_placement, site_files/ | 평면도(이미지)와 센서 위치, 센서 사진 | |
 | app_setting 'mqtt' | 브로커 주소·자동 연결 | --with-mqtt일 때만. 로컬 주소(127.0.0.1)를 운영에 옮기지 않게 기본은 뺀다 |
@@ -96,6 +96,11 @@ def export(source, target, with_mqtt=False, with_sensor_config=False):
                         if row["mac"] in keep]
             elif table == "sensor_config":
                 rows = [row for row in rows if row["mac"] in keep]
+            elif table == "srss_limit":
+                # 옮기는 장치의 진동 구간만(2026-11-25). device에서 지운 시험용 MAC(예: TEST00000001)의 줄이 따라가지 않게.
+                # srss_limit 키는 대문자·구분자 없는 MAC이라 같은 모양으로 맞춘다.
+                kept = {str(mac or "").upper().replace(":", "").replace("-", "") for mac in keep}
+                rows = [row for row in rows if str(row["mac"] or "").upper() in kept]
             elif table == "app_setting" and not with_mqtt:
                 rows = [row for row in rows if row["key"] != "mqtt"]
             conn.execute(f"DELETE FROM {table}")  # 새 DB라 비어 있지만, 스키마가 기본 줄을 넣어도 원본 값으로

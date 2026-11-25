@@ -28,15 +28,32 @@ function describeStats(stats) {
 /**
  * 저장된 MAC 목록을 선택 상자에 채운다.
  * 이름을 붙인 센서만(?named=true, 2026-11-24). 이름 없는 MAC은 설정 > 장치·센서 수신 모니터에서 보고 이름을 붙이면 여기 나온다.
+ * 종류별 표시(2026-11-25): 지금 탭(PIEZO / MEMS / 초음파)의 종류를 설정 > 장치에서 숨긴 MAC은 목록에서 뺀다
+ * (kind_view 값 0 숨김, -1 새 종류 자동 숨김). 탭을 바꾸면 서버에 다시 묻지 않고 받아 둔 목록으로 다시 그린다.
  */
+let dbDevices = [];
+const DB_KIND = { PIEZO: "PIEZO", ADXL: "ADXL", 초음파: "ULTRASONIC" };
+
 async function loadDbMacs() {
   const response = await fetch("/api/db/devices?named=true");
-  const data = await response.json();
+  dbDevices = await response.json();
+  fillDbMacs();
+}
+
+/** 받아 둔 MAC 목록(dbDevices)에서 지금 탭 종류가 보이는 MAC만 선택 상자에 넣는다. */
+function fillDbMacs() {
   const current = dbMac.value;
+  const kind = DB_KIND[dbSensor()] || "";
+  const data = dbDevices.filter((item) => {
+    const value = (item.kind_view || {})[kind];
+    return value == null || Number(value) === 1; // 받은 적 없는 종류(키 없음)는 예전처럼 보인다
+  });
   dbMac.innerHTML = "";
   if (!data.length) {
     dbMac.innerHTML = '<option value="">이름 붙인 센서 없음</option>';
-    dbStatus.textContent = "이름을 붙인 센서가 없습니다. 설정 > 장치에서 이름을 지정하세요.";
+    dbStatus.textContent = dbDevices.length
+      ? "이 종류로 보이는 센서가 없습니다. 설정 > 장치의 종류 칸을 확인하세요."
+      : "이름을 붙인 센서가 없습니다. 설정 > 장치에서 이름을 지정하세요.";
     return;
   }
   data.forEach((item) => {
@@ -50,6 +67,11 @@ async function loadDbMacs() {
   if ([...dbMac.options].some((option) => option.value === current))
     dbMac.value = current;
 }
+
+// 탭을 바꾸면 그 종류 기준으로 목록을 다시 그린다(탭 처리 뒤에 #sensor 값이 바뀌므로 한 박자 늦게).
+document.querySelector("#sensor").addEventListener("change", () => fillDbMacs());
+document.querySelectorAll("[data-sensor-pick]").forEach((tab) =>
+  tab.addEventListener("click", () => setTimeout(fillDbMacs, 0)));
 
 /** 고른 MAC의 통계 한 줄을 상태 칸에 보여 준다. */
 async function showDbStats() {
@@ -148,7 +170,8 @@ async function openFocusedSensor(focus) {
   if (tab) tab.click();
   await loadDbMacs();
   if (![...dbMac.options].some((option) => option.value === focus.mac)) {
-    dbStatus.textContent = `${focus.mac}는 저장된 수신 기록이 없어 열 수 없습니다.`;
+    // 목록에 없는 경우: 저장된 수신 기록이 없거나, 설정 > 장치에서 이 종류(또는 센서)를 숨겼다.
+    dbStatus.textContent = `${focus.mac}는 이 종류로 열 수 있는 기록이 없습니다(수신 기록 없음 또는 설정에서 숨김).`;
     return;
   }
   dbMac.value = focus.mac;

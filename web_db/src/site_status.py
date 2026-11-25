@@ -24,6 +24,7 @@ import json
 import statistics
 from datetime import datetime
 
+from web_db.src import kind_view
 from web_db.src.limits import ZONE_TEXT, zone_bounds, zone_of
 
 # 정상: 경과 ≤ 간격 × LINK_OK_FACTOR + LINK_GRACE_S. 지연: ≤ 간격 × LINK_LATE_FACTOR + LINK_GRACE_S. 그 밖은 미수신.
@@ -258,16 +259,23 @@ def sensor_kind(row):
 
     마지막으로 받은 패킷 종류가 우선이다. 패킷 없이 retain 설정만 받은 장치는 설정의
     SENSORTYPE으로 추정한다(1·3 PIEZO, 2·4 MEMS). 0(STOP)이나 설정이 없으면 빈 값.
+    설정 > 장치에서 숨긴 종류(row['kind_view'])는 쓰지 않는다(아래).
     """
-    sensor = str(row.get("last_sensor") or "").upper()
-    if sensor.startswith("ADXL"):
-        return "ADXL"
-    if sensor.startswith("PIEZO"):
-        return "PIEZO"
-    if sensor.startswith("ULTRA"):
-        return "ULTRASONIC"
-    code = str(_config(row).get("SENSORTYPE", "")).strip()
-    return {"1": "PIEZO", "3": "PIEZO", "2": "ADXL", "4": "ADXL"}.get(code, "")
+    view = row.get("kind_view") or {}
+    if isinstance(view, str):
+        view = kind_view.parse(view)
+    shown = kind_view.shown_kinds(view)  # None = 종류 제한 없음(아직 받은 종류 없음)
+    kind = kind_view.to_kind(row.get("last_sensor"))
+    if not kind:
+        code = str(_config(row).get("SENSORTYPE", "")).strip()
+        kind = {"1": "PIEZO", "3": "PIEZO", "2": "ADXL", "4": "ADXL"}.get(code, "")
+    # 종류별 표시(2026-11-25): 마지막 패킷 종류를 숨겼으면 보이는 종류로 바꾼다. 판정에 쓴 통계 종류(stat_sensor,
+    # 보이는 종류에서만 고름)가 먼저, 없으면 처음 받은 보이는 종류. 그래서 숨긴 종류 패킷이 와도 아이콘·요약 묶음
+    # (진동/초음파)·'자세히 보기' 탭이 바뀌지 않는다.
+    if shown is not None and kind not in shown:
+        stat = kind_view.to_kind(row.get("stat_sensor"))
+        kind = stat if stat in shown else (shown[0] if shown else "")
+    return kind
 
 
 def build_status(rows, receiver, now=None):
