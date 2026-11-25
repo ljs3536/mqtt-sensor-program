@@ -202,7 +202,7 @@ HPF 10Hz + LPF 1000Hz를 기본으로 한 이유(2026-11-23 실측, 같은 6세�
 
 - 계산: `stat_profile.piezo_stats`. 분석 화면 PIEZO PSD와 같은 `graph_psd.axis_psd("PIEZO")`에 통계 기준의 필터·창·PSD 구간을 쓴다. 환산은 기준의 `piezo` {vmax 3.89, amax 4096, sensitivity 100}(분석 화면 PIEZO 칸 기본값). 기준 요약 글자에 `PIEZO 3.89V/4096·100mV/g`로 보인다.
 - Fs가 패킷마다 달라도(2560·12800·25600 Hz, 8192점) 같은 평가 대역(기본 10~1000 Hz)의 면적이라 한 시간 줄로 평균한다. Fs가 높을수록 패킷 길이가 짧고 Δf가 커서 10 Hz 부근이 덜 안정적이다.
-- 판정: 센서 현황은 가장 늦은 통계 줄(ADXL·PIEZO 중)을 본다. PIEZO 줄이면 판정하지 않는다(`site_status.JUDGED_KINDS = ("ADXL",)`). 환산이 확정되면 여기에 `"PIEZO"`를 더하면 MEMS와 같은 네 구간이 된다.
+- 판정: 센서 현황은 가장 늦은 통계 줄(ADXL·PIEZO 중)을 본다. 2026-11-25부터 PIEZO 줄도 MEMS와 같은 네 구간으로 판정한다(`site_status.JUDGED_KINDS = ("ADXL", "PIEZO")`, 기준은 srss_limit의 그 MAC 값, 기본 4.5). 다시 끄려면 `"PIEZO"`를 뺀다.
 - 실측(복사본 DB): D25871312270 평균 148 mm/s(28~208), 865872312270 1.2 mm/s. MEMS(1~6)보다 수십 배라 환산 확인이 필요하다(`단위환산.md` 15절).
 
 ### packet.source (2026-11-24)

@@ -129,27 +129,34 @@ class ReplayService:
         packed.update({"sensor": sensor, "index": index + 1, "count": len(data), "time": _packet_time(packet)})
         return packed
 
-    def velocity_history(self, start=None, count=None, options=None):
-        """불러온 ADXL 세트로 X/Y/Z 속도 RMS 시간 이력을 만든다(graph_psd.velocity_history).
+    def velocity_history(self, start=None, count=None, options=None, sensor="ADXL"):
+        """불러온 데이터로 속도 RMS 시간 이력을 만든다.
 
-        start: 1부터 세는 시작 세트(없으면 지금 고른 세트). count: 세트 수(없으면 끝까지).
-        options: 화면 그래프 옵션(PSD 구간·Overlap·목표 구간, MEMS 창·필터·보정·LSB).
+        sensor 'ADXL'(기본): X/Y/Z 세트마다(graph_psd.velocity_history). 'PIEZO'(2026-11-25): 패킷마다 Vrms
+        (graph_psd.piezo_velocity_history). 초음파는 스펙트럼만 있어 계산할 수 없다(ValueError).
+        start: 1부터 세는 시작 세트·패킷(없으면 지금 고른 것). count: 개수(없으면 끝까지).
+        options: 화면 그래프 옵션(PSD 구간·Overlap·목표 구간, 창·필터·보정·환산).
         템플릿 목록만 복사해 잠금을 풀고 계산한다(계산 중에도 송신·미리보기가 막히지 않게).
         """
+        sensor = "PIEZO" if str(sensor or "").upper() == "PIEZO" else ("초음파" if sensor == "초음파" else "ADXL")
+        if sensor == "초음파":
+            raise ValueError("초음파 H는 스펙트럼만 있어 속도 RMS 시간 이력을 계산할 수 없습니다.")
         with self.lock:
-            packets = list(self.templates.get("ADXL") or [])
-            current = self.index.get("ADXL", 0)
+            packets = list(self.templates.get(sensor) or [])
+            current = self.index.get(sensor, 0)
             if options is not None:
                 self.view_options = options
             view = self.view_options
         if not packets:
-            raise ValueError("ADXL X/Y/Z 데이터를 먼저 불러와 주세요.")
+            raise ValueError("PIEZO 데이터를 먼저 불러와 주세요." if sensor == "PIEZO" else "ADXL X/Y/Z 데이터를 먼저 불러와 주세요.")
         if start in (None, ""):
             start = current + 1
-        result = analysis.velocity_history(packets, analysis.resolve_options(view), start=start, count=count)
+        compute = analysis.piezo_velocity_history if sensor == "PIEZO" else analysis.velocity_history
+        result = compute(packets, analysis.resolve_options(view), start=start, count=count)
+        unit = "패킷" if sensor == "PIEZO" else "세트"
         self.log(
-            f"[RMS 시간 이력] {result['start']}번부터 {result['count']}세트 분석, "
-            f"성공 {len(result['rows'])}세트 / 제외 {len(result['skipped'])}세트"
+            f"[{sensor} RMS 시간 이력] {result['start']}번부터 {result['count']}{unit} 분석, "
+            f"성공 {len(result['rows'])}{unit} / 제외 {len(result['skipped'])}{unit}"
         )
         return result
 

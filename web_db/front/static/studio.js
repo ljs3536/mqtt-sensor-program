@@ -11,6 +11,9 @@ function showPanels() {
   adxlBox.hidden = sensor !== "ADXL";
   ultraBox.hidden = sensor !== "초음파";
   fftCard.hidden = sensor === "초음파";
+  // 초음파는 320점 스펙트럼만 있어 FFT·PSD·시간 이력·FFT 검증 설정을 서버가 쓰지 않는다 → 공통 칸을 숨긴다(2026-11-25).
+  const common = document.getElementById("commonBox");
+  if (common) common.style.display = sensor === "초음파" ? "none" : ""; // .stack의 display가 hidden 속성을 덮으므로
   const single = document.getElementById("singleFile");
   const xyz = document.getElementById("xyzFiles");
   if (single) single.hidden = sensor === "ADXL";

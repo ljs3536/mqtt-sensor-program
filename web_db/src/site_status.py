@@ -9,7 +9,7 @@
 2. 알람(alarm): 가장 최근 통계 한 줄(measurement)의 SRSS(mm/s)로 판정한다(2026-11-19).
    2026-11-23부터 ISO 20816-3 Group 2(강성 지지) 네 구간: 양호 good < 1.4 ≤ 주의 caution < 2.8 ≤ 경고 warn
    < 4.5 ≤ 위험 over (mm/s RMS). 경계는 MAC마다 설정 > 장치에서 바꾸며, 비어 있으면 위험 기준(예전 SRSS 한계)의
-   ISO 비율(limits.zone_bounds). ADXL만 해당(PIEZO·초음파는 기준이 없다).
+   ISO 비율(limits.zone_bounds). ADXL·PIEZO 해당(PIEZO는 2026-11-25부터, 초음파는 기준이 없다).
    예전(2026-11-23 전)에는 ≥ 한계 → 위험, ≥ 한계×80% → 경보 두 단계였다.
 3. 배터리(battery): 센서가 보내는 batteryRmin(0~10). 3 이하면 low. 상태(state)와는 따로 표시한다.
 
@@ -43,6 +43,11 @@ MIN_MEASURES = 3
 MIN_INTERVAL_S = 60.0
 # 배터리(batteryRmin, 0~10). 이 값 이하면 부족(빨강).
 BATTERY_LOW = 3.0
+# 배터리 표시 고정값(2026-11-25). 지금 센서는 batteryRmin을 늘 0으로 보낸다(하드웨어 팀에 전달함, 펌웨어 반영 전).
+# 0을 그대로 보이면 모든 센서가 '배터리 부족'으로 보여서, 반영될 때까지 화면 값만 이 숫자로 보인다.
+# 저장(CSV·packet.battery·device.last_battery)은 받은 값(0) 그대로다. 센서가 실제 값을 보내기 시작하면
+# **None으로 바꾸면** 받은 값을 그대로 보이고 3 이하 '부족' 판정도 다시 한다. API의 battery는 늘 받은 값.
+BATTERY_DISPLAY_FIXED = 10.0
 
 # 화면 문구와 색 이름. 화면(site.js)은 state 값으로 색을 고른다.
 # 2026-11-23 피드백(docs/센서-현황-작업.md 3·4번): 끊김 → '미수신', 대기 → '확인 불가',
@@ -56,7 +61,7 @@ LINK_TEXT = {
     "unknown": "주기 미상",
     "offline": "수신 꺼짐",
 }
-# 측정 판정(진동, 2026-11-23): 양호 / 주의 / 경고 / 위험. 'na' = 판정 기준 없음(PIEZO·초음파, 표시만).
+# 측정 판정(진동, 2026-11-23): 양호 / 주의 / 경고 / 위험. 'na' = 판정 기준 없음(초음파, 표시만. PIEZO는 2026-11-25부터 판정).
 ALARM_TEXT = dict(ZONE_TEXT, none="통계 없음", na="기준 없음")
 
 # 수신 상태 묶음(위쪽 요약 '수신 정상 / 이상 / 확인 불가').
@@ -65,7 +70,7 @@ LINK_GROUP = {"ok": "ok", "late": "bad", "lost": "bad",
 
 # 화면에 보이는 '하나의 상태'(아이콘 색). 측정과 수신 판정 중 더 나쁜 쪽 하나로 줄인다.
 # 순서(나쁜 것부터): 위험 > 미수신 > 경고 > 지연 > 주의 > 양호 > 정상 > 확인 불가.
-# 양호는 제때 수신 중이고 진동이 양호 구간인 MEMS, 정상은 제때 수신 중이지만 판정 기준이 없는 센서(PIEZO·초음파)
+# 양호는 제때 수신 중이고 진동이 양호 구간인 MEMS·PIEZO, 정상은 제때 수신 중이지만 판정 기준이 없는 센서(초음파)
 # 또는 아직 통계가 없는 MEMS다. 키 'warn'은 예전 '경보'(한계 80%) 자리를 이어 '경고'(ISO C 구간)로 쓴다.
 STATE_TEXT = {"alarm": "위험", "lost": "미수신", "warn": "경고", "late": "지연", "caution": "주의",
               "good": "양호", "ok": "정상", "idle": "확인 불가"}
@@ -81,7 +86,7 @@ def overall_state(link, alarm):
     - 지연(late): 원래 간격 + 30초를 넘겼지만 ×2 + 30초 안.
     - 주의(caution): 제때 수신 중이고 SRSS ≥ 양호 상한(1.4).
     - 양호(good): 제때 수신 중이고 SRSS < 양호 상한.
-    - 정상(ok): 제때 수신 중이지만 진동 판정이 없음(PIEZO·초음파, 통계 전 MEMS).
+    - 정상(ok): 제때 수신 중이지만 진동 판정이 없음(초음파, 통계 전 MEMS·PIEZO).
     - 확인 불가(idle): 판단할 수 없음(수신 꺼짐, 측정 중지, 받은 데이터 없음, 주기 미상).
     진동 값은 마지막 통계라 수신이 끊겨도 남는다. 그래서 위험·경고는 수신 상태보다 앞서 보이고,
     주의·양호는 제때 수신 중일 때만 보인다(끊긴 센서를 '양호'로 보이지 않게).
@@ -211,7 +216,12 @@ def link_state(row, receiver_on, now):
 
 
 def battery_state(row):
-    """(배터리 값 또는 None, 'low' | 'ok' | 'none'). 값이 없거나 숫자가 아니면 'none'."""
+    """(배터리 값 또는 None, 'low' | 'ok' | 'none'). 값이 없거나 숫자가 아니면 'none'.
+
+    BATTERY_DISPLAY_FIXED가 있으면 받은 값과 상관없이 그 값·'ok'(수신 기록이 없는 센서는 그대로 'none').
+    """
+    if BATTERY_DISPLAY_FIXED is not None and str(row.get("last_battery") or "").strip() != "":
+        return float(BATTERY_DISPLAY_FIXED), "ok"
     try:
         value = float(str(row.get("last_battery") or "").strip())
     except ValueError:
@@ -219,13 +229,15 @@ def battery_state(row):
     return value, ("low" if value <= BATTERY_LOW else "ok")
 
 
-# 진동 구간 판정을 하는 통계 종류. PIEZO는 2026-11-23부터 통계(Vrms)는 내지만, 환산(Vmax/Amax/감도·게인)이
-# 확정되지 않아(실측 D25871312270 28~208 mm/s, MEMS 1~6 mm/s) ISO 경계로 판정하지 않는다. 확정되면 "PIEZO"를 더한다.
-JUDGED_KINDS = ("ADXL",)
+# 진동 구간 판정을 하는 통계 종류.
+# 2026-11-25부터 PIEZO도 판정한다: 설정 > 장치의 MAC별 기준(기본 4.5 mm/s, 통계 화면 기준선과 같은 값)으로
+# MEMS와 같은 ISO 네 구간. PIEZO 값은 한 축 Vrms(통계 stat_profile 환산). 환산 상수(Vmax/Amax/감도·게인)가
+# 확정되면 그 MAC의 기준만 설정에서 조정한다. 판정을 다시 끄려면 "PIEZO"를 빼면 된다.
+JUDGED_KINDS = ("ADXL", "PIEZO")
 
 
 def alarm_state(row):
-    """알람 판정 (구간, 최근 통계 SRSS 또는 None, 구간 경계 dict). MEMS(ADXL)가 아닌 센서는 'na'.
+    """알람 판정 (구간, 최근 통계 SRSS 또는 None, 구간 경계 dict). MEMS(ADXL)·PIEZO가 아닌 센서는 'na'.
 
     구간: good 양호 / caution 주의 / warn 경고 / over 위험(limits.zone_of). 경계는 row['zones'](store.site_rows),
     없으면 row['limit']를 위험 기준으로 ISO 비율.
@@ -233,11 +245,11 @@ def alarm_state(row):
     zones = row.get("zones") or zone_bounds(row.get("limit") or 4.5)
     value = row.get("srss_mms")
     if value is None:
-        # 통계가 없으면: MEMS면 아직 최신화 전('none'), 그 밖(PIEZO·초음파·종류 모름)은 알람 대상 아님.
-        return ("none" if sensor_kind(row) == "ADXL" else "na"), None, zones
+        # 통계가 없으면: 판정 대상(MEMS·PIEZO)이면 아직 최신화 전('none'), 그 밖(초음파·종류 모름)은 알람 대상 아님.
+        return ("none" if sensor_kind(row) in JUDGED_KINDS else "na"), None, zones
     value = float(value)
     if (row.get("stat_sensor") or "ADXL") not in JUDGED_KINDS:
-        return "na", value, zones  # 값은 있지만 판정 안 함(PIEZO, 위 JUDGED_KINDS)
+        return "na", value, zones  # 값은 있지만 판정 안 함(위 JUDGED_KINDS 밖)
     return zone_of(value, zones), value, zones
 
 
@@ -283,6 +295,8 @@ def build_status(rows, receiver, now=None):
             "kind": sensor_kind(row),
             "last_at": row.get("last_at") or "",
             "age_s": age,
+            # battery = 센서가 보낸 값 그대로(화면은 쓰지 않는다). 화면은 battery_level(고정값이면 BATTERY_DISPLAY_FIXED)만 쓴다.
+            # 고정 여부를 알리는 필드는 두지 않는다(2026-11-25, 시연 때 티가 나지 않게).
             "battery": row.get("last_battery") or "",
             "battery_level": battery,
             "battery_state": battery_flag,

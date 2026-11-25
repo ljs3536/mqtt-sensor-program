@@ -9,7 +9,18 @@ from web_db.src import core as mon
 
 
 # "자동 (g RMS)"(2026-11-24): MEMS 자동 가속도와 같이 g RMS를 g/mg/µg 중 보기 좋은 눈금으로(graph_curves._scaled_unit).
+# PIEZO 표시 단위(2026-11-25): MEMS처럼 RAW와 FFT를 따로 고른다. 순서·기본(첫 값)도 MEMS와 같고, PIEZO만 전압(mV)이 더 있다.
+PIEZO_RAW_UNITS = ("자동 (g/mg/µg)", "Count", "mV", "g", "mg", "µg")
+PIEZO_FFT_UNITS = ("자동 (g RMS)", "Count Peak", "mV Peak", "g Peak", "g RMS", "mm/s RMS")
+# 옛 한 칸 단위(piezo.unit, 2026-11-25 전). 그 값을 보내는 옛 화면·저장 설정은 piezo_units가 RAW·FFT 쌍으로 바꾼다.
 PIEZO_UNITS = ("Count", "mV", "자동 (g RMS)", "g RMS", "mm/s RMS")
+LEGACY_PIEZO_UNIT = {
+    "Count": ("Count", "Count Peak"),
+    "mV": ("mV", "mV Peak"),
+    "자동 (g RMS)": ("자동 (g/mg/µg)", "자동 (g RMS)"),
+    "g RMS": ("g", "g RMS"),
+    "mm/s RMS": ("g", "mm/s RMS"),
+}
 PIEZO_WINDOWS = ("Blackman", "Hann", "Hamming", "Rectangular")
 SRSS_MISSING = "SRSS: 완전한 XYZ 데이터 없음"
 ADXL_RAW_UNITS = ("자동 (g/mg/µg)", "Count", "g", "mg", "µg")
@@ -71,7 +82,9 @@ def default_options():
         # segment: 구간 N(전체/8192…128), overlap: %, target: 축마다 평균할 목표 구간 수.
         "psd": {"on": False, "segment": "전체", "overlap": 50, "target": 30},
         "piezo": {
-            "unit": "mV",
+            # MEMS와 같은 기본값(2026-11-25, 전에는 한 칸 'mV'): RAW 자동 가속도, FFT 자동 가속도 g RMS.
+            "raw_unit": PIEZO_RAW_UNITS[0],
+            "fft_unit": PIEZO_FFT_UNITS[0],
             "vmax": 3.89,
             "amax": 4096,
             "sensitivity": 100,
@@ -97,6 +110,16 @@ def default_options():
             "rot_type": "미지정",
         },
     }
+
+
+def piezo_units(piezo):
+    """PIEZO 칸 → (RAW 단위, FFT 단위). 옛 한 칸 단위(unit)를 보내면 그 값을 쌍으로 바꿔 쓴다."""
+    piezo = piezo or {}
+    if piezo.get("unit") in LEGACY_PIEZO_UNIT:
+        return LEGACY_PIEZO_UNIT[piezo["unit"]]
+    raw = piezo.get("raw_unit") if piezo.get("raw_unit") in PIEZO_RAW_UNITS else PIEZO_RAW_UNITS[0]
+    fft = piezo.get("fft_unit") if piezo.get("fft_unit") in PIEZO_FFT_UNITS else PIEZO_FFT_UNITS[0]
+    return raw, fft
 
 
 def resolve_options(raw):

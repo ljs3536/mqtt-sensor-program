@@ -1,4 +1,4 @@
-"""화면 HTML. /, /generator, /studio, /dashboard, /dashboard2, /settings.
+"""화면 HTML. /, /generator, /studio, /dashboard(통계, 파일은 dashboard2.html), /dashboard-old, /settings.
 
 /generator와 /studio는 설정 서랍이 같다. 서랍은 front/partials/drawer.html 하나에 두고,
 페이지를 보낼 때 `<!-- @include partials/drawer.html -->` 자리에 넣어 한 장의 HTML로 보낸다.
@@ -61,17 +61,15 @@ def studio_page():
 
 @router.get("/dashboard")
 def dashboard_page():
-    """MAC별 최신 SRSS, RMS, PEAK."""
-    return FileResponse(FRONT / "dashboard.html")
-
-
-@router.get("/dashboard2")
-def dashboard2_page():
-    """통계2(2026-11-24): 위쪽 센서별 SRSS 세로 막대 + 센서마다 속도 RMS·RMS g·PEAK 꺾은선, '+'로 크게 보기.
-
-    /dashboard와 같은 API(/api/db/dashboard)를 읽는 다른 모양의 화면이다. 메뉴에는 없고 주소로 연다.
-    """
+    """통계(2026-11-25부터 통계 2 화면): 위쪽 구간별 수·센서별 SRSS 세로 막대, 센서마다 속도 RMS·RMS g·PEAK 꺾은선,
+    '+ 자세히'로 그 센서 통계 창. 메뉴 '통계'가 여기로 온다. 센서 현황 '통계 보기'의 강조(sessionStorage 'dashboard-focus')도 받는다."""
     return FileResponse(FRONT / "dashboard2.html")
+
+
+@router.get("/dashboard-old")
+def dashboard_old_page():
+    """2026-11-24까지의 통계 화면(막대 + 센서 줄). 메뉴에는 없다. 비교용으로만 남겨 두고, 필요 없어지면 지운다."""
+    return FileResponse(FRONT / "dashboard.html")
 
 
 @router.get("/settings")

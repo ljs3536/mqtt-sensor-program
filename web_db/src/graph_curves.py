@@ -11,6 +11,7 @@ from web_db.src.graph_options import (
     ADXL_FFT_UNITS,
     ADXL_RAW_UNITS,
     PIEZO_UNITS,
+    piezo_units,
     PIEZO_WINDOWS,
     SRSS_MISSING,
     _filter_kwargs,
@@ -102,7 +103,7 @@ def _average(sensor, packets, index, options):
     Fs·샘플 수·주파수 칸이 첫 패킷과 다른 패킷은 빼고, ADXL은 X/Y/Z를 따로 센다.
     """
     if not _flag(options.get("fft_avg")):
-        return {}, "평균 OFF — 현재 패킷 FFT 표시"
+        return {}, "평균 OFF — 현재 패킷 FFT 표시", ""
     # 지금 패킷부터 뒤로, 파일 끝이면 앞쪽으로 채운다(graph_options.avg_window).
     chosen, amount, fill_note = avg_window(packets, index, options)
     piezo = options["piezo"]
@@ -110,6 +111,7 @@ def _average(sensor, packets, index, options):
     axes = ("PIEZO",) if sensor == "PIEZO" else ("X", "Y", "Z")
     result = {}
     messages = []
+    chips = []  # 정보 칩(접힌 '계산식' 칸을 열지 않아도 보이게, 2026-11-25)
     for axis in axes:
         reference_f = None
         reference_shape = None
@@ -118,10 +120,14 @@ def _average(sensor, packets, index, options):
         display_f = None
         accepted = 0
         skipped = 0
+        # 제외 이유별 수(2026-11-25). 'Fs·N 다름'이 가장 흔하다: 같은 MAC도 설정을 바꾸면(예: 12800 → 2560 Hz)
+        # 주파수 칸이 달라져 같은 칸끼리 더할 수 없다. 기준은 지금 패킷(목록 맨 앞, avg_window).
+        mismatch = failed = missing = 0
         for packet in chosen:
             obj = packet if sensor == "PIEZO" else packet.get(axis)
             if obj is None:
                 skipped += 1
+                missing += 1
                 continue
             try:
                 raw, fs = decode_wave("ADXL" if sensor == "ADXL" else "PIEZO", obj)
@@ -158,12 +164,14 @@ def _average(sensor, packets, index, options):
                     or not np.array_equal(converted_f, display_f)
                 ):
                     skipped += 1
+                    mismatch += 1
                     continue
                 summed += amp
                 summed_converted += converted_amp
                 accepted += 1
             except (ValueError, TypeError, OverflowError):
                 skipped += 1
+                failed += 1
         if accepted:
             if sensor == "ADXL":
                 result[axis] = (reference_f, summed / accepted, accepted, display_f, summed_converted / accepted)
@@ -171,7 +179,16 @@ def _average(sensor, packets, index, options):
                 result[axis] = (reference_f, summed / accepted, accepted)
         note = f"{axis}: {accepted}/{len(chosen)}회"
         if skipped:
-            note += f" (제외 {skipped})"
+            reasons = []
+            if mismatch:
+                base = f"{reference_shape[0]:g} Hz·{reference_shape[1]}점" if reference_shape else "지금 패킷"
+                reasons.append(f"Fs·N이 기준({base})과 다름 {mismatch}")
+            if failed:
+                reasons.append(f"디코드·창 N 오류 {failed}")
+            if missing:
+                reasons.append(f"축 없음 {missing}")
+            note += f" (제외 {skipped}: {', '.join(reasons)})"
+            chips.append(f"{axis} {accepted}/{len(chosen)}" + (f", Fs·N 다름 {mismatch} 제외" if mismatch else f", {skipped} 제외"))
         messages.append(note)
     trailing = "" if len(chosen) == amount else f" | 파일 전체가 {len(chosen)}개라 요청 {amount}회 중 {len(chosen)}회 사용"
     if fill_note:
@@ -180,7 +197,8 @@ def _average(sensor, packets, index, options):
     formula = ("Linear Averaging: A_avg(f_k) = [A₁(f_k)+...+Aₘ(f_k)]/M | M=실제 유효 패킷 수 | "
                + " / ".join(f"{axis} M={item[2]}" for axis, item in result.items())
                + " | 각 패킷 필터·FFT·단위 환산·보정 완료 후 평균 (RAW/MQTT 변경 없음)")
-    return result, " | ".join(messages) + trailing + "\n" + formula
+    chip = ("FFT 평균 " + " · ".join(chips)) if chips else ""
+    return result, " | ".join(messages) + trailing + "\n" + formula, chip
 
 
 def _piezo_curves(packet, averaged, options):
@@ -211,44 +229,49 @@ def _piezo_curves(packet, averaged, options):
     factor = gen.window_correction_label(gen.fft_window(count or raw.size, window), correction_mode)
     if averaged and "PIEZO" in averaged:
         freq, peak, _used = averaged["PIEZO"]
-    unit = piezo.get("unit") if piezo.get("unit") in PIEZO_UNITS else "mV"
-    if unit == "Count":
-        wave, wave_label = filtered, "Count (centered)"
-        spectrum, fft_label = peak, "Count Peak"
-        detail = "RAW C[n]−mean(C) | FFT Count Peak"
-    elif unit == "mV":
-        wave, wave_label = filtered * scale, "mV (AC)"
-        spectrum, fft_label = peak * scale, "mV Peak"
-        detail = f"K=1000×{vmax:g}/{amax:g}={scale:.6g} mV/Count | RAW=(C−mean)×K | FFT=Count Peak×K"
-    elif unit == "g RMS":
-        # RAW g = (Count−평균) × K / 감도. FFT g RMS = Count Peak × K / (감도 × √2).
-        # 축 이름(2026-11-24): 예전 'g (instantaneous AC)' / 'g RMS / bin' → 'PIEZO g' / 'g RMS'. 값과 식은 그대로.
-        wave, wave_label = filtered * scale / sens, "PIEZO g"
-        spectrum, fft_label = peak * scale / sens / np.sqrt(2.0), "g RMS"
-        total = float(np.std(raw * scale / sens))
-        detail = f"전체 AC g RMS={total:.6g} | RAW=(C−mean)×K/감도 | FFT=Count Peak×K/(감도×√2)"
-    elif unit.startswith("자동"):
-        # 자동 가속도(2026-11-24): MEMS '자동 가속도 (g RMS)'와 같은 규칙. 값은 g RMS 식 그대로이고,
-        # 최댓값이 1 미만이면 mg(×1000), 0.001 미만이면 µg(×1e6)로 눈금만 바꾼다(_scaled_unit). RAW·FFT 따로 고른다.
-        wave_g = filtered * scale / sens
-        spectrum_g = peak * scale / sens / np.sqrt(2.0)
-        raw_factor, raw_unit = _scaled_unit([wave_g], "")
-        fft_factor, fft_label = _scaled_unit([spectrum_g[1:]], " RMS")
-        wave, wave_label = wave_g * raw_factor, f"PIEZO {raw_unit}"
-        spectrum = spectrum_g * fft_factor
-        total = float(np.std(raw * scale / sens))
-        detail = (f"전체 AC g RMS={total:.6g} | RAW=(C−mean)×K/감도 ×{raw_factor:g} [{raw_unit}] | "
-                  f"FFT=Count Peak×K/(감도×√2) ×{fft_factor:g} [{fft_label}] | 자동: 최댓값 1 미만 mg, 0.001 미만 µg")
+    # 표시 단위(2026-11-25): MEMS처럼 RAW와 FFT를 따로 고른다(piezo_units, 옛 한 칸 unit도 받음).
+    # 축 이름도 MEMS('ADXL 단위')와 같은 규칙 'PIEZO 단위'(전에는 'Count (centered)', 'mV (AC)' 등).
+    # RAW는 평균을 뺀 값(AC)이다. MEMS RAW는 중력이 남는 것과 다르다(PIEZO는 상수 오프셋 Amax/2만 빠짐).
+    raw_mode, fft_mode = piezo_units(piezo)
+    g_per_count = scale / sens  # g / Count = K / 감도
+    total = float(np.std(raw * g_per_count))
+    # RAW: Count → mV(×K) → g(×K/감도). 자동은 g 최댓값으로 g·mg·µg 눈금을 고른다(_scaled_unit).
+    if raw_mode.startswith("자동"):
+        raw_factor, raw_unit = _scaled_unit([filtered * g_per_count], "")
+        raw_factor *= g_per_count
+        raw_text = f"(C−mean)×K/감도 ×{raw_factor / g_per_count:g} [{raw_unit}]"
     else:
-        wave = filtered * scale / sens
-        wave_label = "PIEZO g"
-        grms = peak * scale / sens / np.sqrt(2.0)
+        raw_factor, raw_unit, raw_text = {
+            "Count": (1.0, "Count", "C−mean"),
+            "mV": (scale, "mV", "(C−mean)×K"),
+            "g": (g_per_count, "g", "(C−mean)×K/감도"),
+            "mg": (g_per_count * 1e3, "mg", "(C−mean)×K/감도×1000"),
+            "µg": (g_per_count * 1e6, "µg", "(C−mean)×K/감도×1e6"),
+        }[raw_mode]
+    wave, wave_label = filtered * raw_factor, f"PIEZO {raw_unit}"
+    # FFT: peak는 Count Peak. g RMS = Count Peak × K / (감도 × √2). 속도 = g RMS × 9806.65 / (2πf), f>0.
+    grms = peak * g_per_count / np.sqrt(2.0)
+    if fft_mode.startswith("자동"):
+        fft_factor, fft_label = _scaled_unit([grms[1:]], " RMS")
+        spectrum = grms * fft_factor
+        fft_text = f"Count Peak×K/(감도×√2) ×{fft_factor:g} [{fft_label}]"
+    elif fft_mode == "mm/s RMS":
         spectrum = np.zeros_like(grms)
         positive = freq > 0
-        # mm/s RMS = g RMS × 9806.65 / (2πf), f > 0. RAW Y는 g와 같다.
         spectrum[positive] = grms[positive] * 9806.65 / (2 * np.pi * freq[positive])
-        fft_label = "mm/s RMS"
-        detail = "FFT velocity = g RMS × 9806.65 / (2πf), f>0"
+        fft_label, fft_text = "mm/s RMS", "g RMS×9806.65/(2πf), f>0"
+    else:
+        # 이름 주의: 위 factor(Window 보정계수 문구)와 겹치지 않게 unit_scale.
+        unit_scale, fft_label, fft_text = {
+            "Count Peak": (1.0, "Count Peak", "Count Peak"),
+            "mV Peak": (scale, "mV Peak", "Count Peak×K"),
+            "g Peak": (g_per_count, "g Peak", "Count Peak×K/감도"),
+            "g RMS": (g_per_count / np.sqrt(2.0), "g RMS", "Count Peak×K/(감도×√2)"),
+        }[fft_mode]
+        spectrum = peak * unit_scale
+    detail = (f"K=1000×{vmax:g}/{amax:g}={scale:.6g} mV/Count | 전체 AC g RMS={total:.6g} | "
+              f"RAW={raw_text} | FFT={fft_text}"
+              + (" | 자동: 최댓값 1 미만 mg, 0.001 미만 µg" if raw_mode.startswith("자동") or fft_mode.startswith("자동") else ""))
     time_ms = np.arange(raw.size, dtype=np.float64) / fs * 1000.0
     peak_note = ""
     if spectrum.size > 1:
@@ -636,9 +659,9 @@ def generator_curves(sensor, packet, packets, index, options):
     """
     options = resolve_options(options)
     psd_mode = sensor in ("PIEZO", "ADXL") and _flag((options.get("psd") or {}).get("on"))
-    averaged, status = ({}, "")
+    averaged, status, avg_chip = ({}, "", "")
     if sensor in ("PIEZO", "ADXL") and not psd_mode:
-        averaged, status = _average(sensor, packets, index, options)
+        averaged, status, avg_chip = _average(sensor, packets, index, options)
     if sensor == "초음파":
         curves = _ultrasonic(packet)
     elif sensor == "PIEZO":
@@ -648,6 +671,8 @@ def generator_curves(sensor, packet, packets, index, options):
     else:
         raise ValueError("알 수 없는 센서")
     curves["avg_status"] = status
+    if avg_chip:  # 평균에서 뺀 패킷이 있으면 위 정보 칩에도 한 줄(예: 'FFT 평균 PIEZO 7/16, Fs·N 다름 9 제외')
+        curves["info"] = f"{curves.get('info') or ''} | {avg_chip}"
     if psd_mode:
         device = str(options.get("device") or _packet_mac(packet) or "")
         try:

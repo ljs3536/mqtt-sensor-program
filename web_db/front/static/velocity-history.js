@@ -1,5 +1,8 @@
 /*
- * ADXL X/Y/Z 속도 RMS 시간 이력 창(발생기 v070 기능). /generator와 /studio가 같이 쓴다.
+ * 속도 RMS 시간 이력 창(발생기 v070 기능). /generator와 /studio가 같이 쓴다.
+ * 2026-11-25: 지금 센서(#sensor)가 PIEZO면 PIEZO 패킷마다 Vrms 한 선으로 그린다(graph_psd.piezo_velocity_history).
+ *   PIEZO는 한계·판정이 없어(환산 상수 미확정) 한계 점선·축별 허용치·분석 데이터 저장(ADXL 전용)을 숨긴다.
+ *   초음파는 스펙트럼만 있어 계산할 수 없으므로 서랍 버튼을 숨긴다. 버튼 글자도 센서에 맞춘다(syncButton).
  *
  * 흐름
  * 1. 서랍의 'X/Y/Z 속도 RMS 시간 이력' 버튼 → 창을 열고 시작 세트를 지금 고른 세트로 맞춘 뒤 계산한다.
@@ -33,6 +36,66 @@
   let plot = null;
   let busy = false;
   let lastData = null;
+  // 창을 연 때의 센서('ADXL' | 'PIEZO'). 다시 계산·저장은 이 센서로 한다.
+  let modalSensor = "ADXL";
+
+  /** 지금 화면이 보고 있는 센서(#sensor: PIEZO / ADXL / 초음파). 없으면 ADXL. */
+  function currentSensor() {
+    const pick = document.getElementById("sensor");
+    return (pick && pick.value) || "ADXL";
+  }
+  /** 서랍 버튼 글자·보이기를 지금 센서에 맞춘다. 초음파면 숨긴다. */
+  function syncButton() {
+    const sensor = currentSensor();
+    openButton.style.display = sensor === "초음파" ? "none" : "";
+    openButton.textContent = sensor === "PIEZO" ? "PIEZO 속도 RMS 시간 이력" : "X/Y/Z 속도 RMS 시간 이력";
+  }
+  /** 창의 글자·칸을 센서에 맞춘다(제목, 시작·개수 이름, 표 머리, 안내, ADXL 전용 칸). */
+  function syncModal(sensor) {
+    const piezo = sensor === "PIEZO";
+    const unit = piezo ? "패킷" : "세트";
+    const set = (id, text) => {
+      const box = document.getElementById(id);
+      if (box) box.textContent = text;
+    };
+    set("historyTitle", piezo ? "PIEZO 속도 RMS(Vrms) 시간 이력 (수신 시각)" : "ADXL X/Y/Z 속도 RMS 시간 이력 (수신 시각)");
+    set("historyStartText", `시작 ${unit}`);
+    set("historyCountText", `${unit} 수`);
+    set("historySkipText", `제외 ${unit}`);
+    set(
+      "historyHelp",
+      piezo
+        ? "패킷마다 PSD를 따로 구해(패킷끼리 평균하지 않음) Vrms = √(Σ Pv×Δf). PSD 구간 N·Overlap·목표 구간과 " +
+            "PIEZO 창·필터·환산(Vmax·Amax·감도)은 서랍 값을 씁니다. PIEZO는 판정 기준이 없어 한계선이 없습니다. 표의 줄을 누르면 그 패킷으로 이동합니다."
+        : "세트마다 PSD를 따로 구해(세트끼리 평균하지 않음) vRMS = √(Σ Pv×Δf), SRSS = √(X²+Y²+Z²). " +
+            "PSD 구간 N·Overlap·목표 구간과 MEMS 창·필터·보정은 서랍 값을 씁니다. 표의 줄을 누르면 그 세트로 이동합니다.",
+    );
+    const head = document.getElementById("historyHead");
+    if (head) {
+      const names = piezo
+        ? [unit, "packet_no", "received_at", "Vrms (mm/s)"]
+        : [unit, "packet_no", "X received_at", "X (mm/s)", "Y (mm/s)", "Z (mm/s)", "SRSS (mm/s)", "판정"];
+      head.innerHTML = names.map((name) => `<th>${name}</th>`).join("");
+    }
+    // hidden 속성은 페이지 CSS(display:flex 등)에 덮이므로 style.display로 숨긴다.
+    const axisBox = modal.querySelector(".history-axis-limits");
+    if (axisBox) axisBox.style.display = piezo ? "none" : "";
+    const exportBox = document.getElementById("historyExport");
+    if (exportBox) exportBox.style.display = piezo ? "none" : "";
+  }
+  // 센서가 바뀌는 길: 센서 탭(/studio), #sensor 값 변경, 새 미리보기(draw). 코드가 #sensor 값을 바로 바꾸는
+  // 곳(파일 열기 등)은 이벤트가 없어 draw를 감싸 맞춘다(studio.js가 draw를 감싸는 것과 같은 방식).
+  if (typeof draw === "function") {
+    const drawBefore = draw;
+    draw = function drawWithHistoryButton(preview) {
+      drawBefore(preview);
+      syncButton();
+    };
+  }
+  const sensorBox = document.getElementById("sensor");
+  if (sensorBox) sensorBox.addEventListener("change", syncButton);
+  document.querySelectorAll("[data-sensor-pick]").forEach((button) => button.addEventListener("click", syncButton));
+  syncButton();
 
   // ---------- 축별 허용치(화면 전용) ----------
   const LIMIT_KEY = "velocity-axis-limits";
@@ -145,13 +208,14 @@
     plot.options.plugins.tooltip.callbacks = {
       title: (items) => {
         const row = items.length && items[0].raw && items[0].raw.row;
-        if (row) return `세트 ${row.set} · packet_no=${row.packet_no}`;
+        if (row) return `${lastData && lastData.sensor === "PIEZO" ? "패킷" : "세트"} ${row.set} · packet_no=${row.packet_no}`;
         return items.length ? items[0].dataset.label : "";
       },
       label: (item) => `현재: ${item.dataset.label} ${fixed(item.parsed.y)} mm/s RMS`,
       afterBody: (items) => {
         const row = items.length && items[0].raw && items[0].raw.row;
         if (!row) return [];
+        if (lastData && lastData.sensor === "PIEZO") return [`수신: ${row.received_at}`, "PIEZO는 판정 기준이 없습니다"];
         const limits = enabledLimits();
         const axisText = Object.keys(limits).length
           ? Object.entries(limits).map(([axis, value]) => `${axis}=${value}`).join(", ")
@@ -178,6 +242,12 @@
     const last = rows.length ? rows[rows.length - 1].t : 0;
     const withDate = last - first > 24 * 3600 * 1000;
     const series = (key) => rows.map((row) => ({ x: row.t, y: row[key], row }));
+    const piezo = data.sensor === "PIEZO";
+    syncModal(piezo ? "PIEZO" : "ADXL");
+    if (piezo) {
+      renderPiezo(data, chart, series, withDate);
+      return;
+    }
     chart.data.datasets = [
       { label: "X", borderColor: lineColors.X, backgroundColor: lineColors.X, data: series("x") },
       { label: "Y", borderColor: lineColors.Y, backgroundColor: lineColors.Y, data: series("y") },
@@ -229,7 +299,57 @@
     const overCount = rows.filter((row) => row.over).length;
     note.textContent =
       `${data.start}번부터 ${data.count}세트 / 전체 ${data.total}세트 → 성공 ${rows.length}, 제외 ${skipped.length}` +
-      (overCount ? `, 한계 초과 ${overCount}` : "");
+      (overCount ? `, 한계 초과 ${overCount}` : "") +
+      filterWarning("ADXL");
+    startBox.value = data.start;
+  }
+
+  /**
+   * 속도는 가속도 ÷ (2πf)라 FFT용 HPF가 꺼져 있으면 0 Hz 근처 성분이 값을 크게 키운다(2026-11-25 확인: PIEZO 같은 패킷이
+   * HPF 끔 283~2517 mm/s, 통계 기준 HPF 10·LPF 1000이면 68~311 mm/s). 통계(DB 계산 기준)와 다를 수 있음을 안내 줄에 붙인다.
+   */
+  function filterWarning(sensor) {
+    try {
+      const block = viewOptions()[sensor === "PIEZO" ? "piezo" : "adxl"] || {};
+      const hpf = (block.filters || {}).HPF || {};
+      if (hpf.fft) return "";
+    } catch (_error) {
+      return "";
+    }
+    return " · 주의: 서랍의 FFT HPF가 꺼져 있어 저주파가 속도를 크게 키웁니다(통계는 HPF 10 Hz·LPF 1000 Hz). 통계와 비교하려면 FFT HPF·LPF를 켜세요.";
+  }
+
+  /** PIEZO 결과: Vrms 한 선, 한계선 없음, 표는 패킷·packet_no·수신 시각·Vrms. */
+  function renderPiezo(data, chart, series, withDate) {
+    const rows = data.rows || [];
+    chart.data.datasets = [
+      { label: "Vrms", borderColor: lineColors.SRSS, backgroundColor: lineColors.SRSS, borderWidth: 2, data: series("vrms") },
+    ];
+    chart.options.scales.x.type = "linear";
+    chart.options.scales.y.type = "linear";
+    chart.options.scales.x.ticks.callback = (value) => clock(value, withDate);
+    chart.$pinTickText = true;
+    GraphView.axes(chart, "수신 시각 (received_at)", "속도 RMS (mm/s RMS)");
+    chart.options.plugins.title = {
+      display: true,
+      text:
+        `PIEZO 속도 RMS 시간 이력 | PSD 구간 N=${data.settings.segment} | Overlap=${data.settings.overlap}% | 목표 ${data.settings.target}구간` +
+        ` | 장치 ${data.device || "-"}`,
+    };
+    if (typeof chart.resetZoom === "function") chart.resetZoom();
+    chart.update("none");
+    tableBody.innerHTML = rows
+      .map(
+        (row) =>
+          `<tr data-set="${row.set}"><td>${row.set}</td><td>${escapeText(row.packet_no)}</td>` +
+          `<td>${escapeText(row.received_at)}</td><td>${fixed(row.vrms)}</td></tr>`,
+      )
+      .join("");
+    const skipped = data.skipped || [];
+    skipCount.textContent = skipped.length;
+    skipList.innerHTML = skipped.map((text) => `<li>${escapeText(text)}</li>`).join("");
+    note.textContent =
+      `${data.start}번부터 ${data.count}패킷 / 전체 ${data.total}패킷 → 성공 ${rows.length}, 제외 ${skipped.length}` + filterWarning("PIEZO");
     startBox.value = data.start;
   }
 
@@ -244,6 +364,7 @@
         start: num(startBox.value, 1),
         count: count ? num(count, null) : null,
         options: viewOptions(),
+        sensor: modalSensor,
       });
       if (!response.ok) throw new Error(data.detail || "시간 이력 계산 실패");
       render(data);
@@ -262,6 +383,10 @@
     // 시작 세트 기본값 = 메인 화면에서 지금 보고 있는 패킷 번호(v070과 같음).
     const current = document.querySelector("#index");
     startBox.value = (current && current.value) || "1";
+    modalSensor = currentSensor() === "PIEZO" ? "PIEZO" : "ADXL";
+    syncModal(modalSensor);
+    // 다른 센서로 그렸던 이전 결과는 비운다(PIEZO ↔ MEMS를 오가며 열 때 옛 표가 잠깐 보이지 않게).
+    tableBody.innerHTML = "";
     modal.hidden = false;
     run();
   };

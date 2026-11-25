@@ -446,7 +446,7 @@ class SiteMixin:
         - sensor_config: 마지막 설정 JSON(웹이 보낸 것 + 브로커 retain으로 받은 것)
         - measurement(ADXL·PIEZO 중 가장 늦은 줄, 종류는 stat_sensor): **가장 최근 통계 한 줄**의 SRSS·세트 수·시각
           (2026-11-19 결정). 같은 MAC이 SENSORTYPE을 바꿔 보내면 지금 보내는 종류의 통계가 판정에 쓰인다
-          (PIEZO는 site_status.JUDGED_KINDS 밖이라 '판정 없음').
+          (2026-11-25부터 PIEZO도 site_status.JUDGED_KINDS에 들어 같은 기준으로 판정).
           전체 평균으로 판정하면 지난 문제가 오래 남고 새 문제는 평균에 묻히므로 최근 줄 하나로 판정한다.
           2026-11-23부터 통계는 한 시간 한 줄이라 가장 최근 한 시간(그 시간 세트들의 평균)이다.
           지금 통계 기준 버전(stat_profile)의 줄만 본다(store_query._active_profile_id).

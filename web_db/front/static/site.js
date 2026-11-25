@@ -38,7 +38,7 @@
   let timer = null;
 
   // 하나의 상태(아이콘 색). 서버 site_status.STATE_TEXT와 같다(2026-11-23: 끊김 → 미수신, 대기 → 확인 불가,
-  // 진동은 ISO 20816-3 네 구간 양호/주의/경고/위험, 수신 지연은 따로). 정상 = 제때 수신, 판정 기준 없음(PIEZO·초음파).
+  // 진동은 ISO 20816-3 네 구간 양호/주의/경고/위험, 수신 지연은 따로). 정상 = 제때 수신, 판정 기준 없음(초음파. PIEZO는 2026-11-25부터 판정).
   const STATES = [
     ["alarm", "위험"],
     ["lost", "미수신"],
@@ -119,6 +119,7 @@
   function batteryHtml(s, withMax) {
     if (s.battery_level == null) return "";
     const low = s.battery_state === "low";
+    // battery_level은 서버가 정한 표시값(site_status.BATTERY_DISPLAY_FIXED면 고정값)이다. 화면에는 고정 여부·받은 값을 보이지 않는다(시연용).
     return `<span class="battery${low ? " low" : ""}" title="배터리 ${s.battery_level} / 10${low ? " (부족)" : ""}">` +
       `<i style="width:${Math.max(0, Math.min(10, s.battery_level)) * 10}%"></i></span>` +
       `<span class="battery-num${low ? " low" : ""}">${esc(s.battery_level)}${withMax ? " / 10" : ""}</span>`;
@@ -317,7 +318,7 @@
   /**
    * view: 위쪽 요약(2026-11-23 피드백 3번). 진동 / 초음파로 나눠
    *   [총 N개]  상태 [경보 n · 위험 n]  수신 [정상 n · 이상 n · 확인 불가 n]
-   * - 상태(측정 이상): 진동은 Type2(MEMS)만 판정한다. Type1(PIEZO)·초음파는 기준이 없어 '기준 없음'만 표시.
+   * - 상태(측정 이상): 진동은 Type1(PIEZO)·Type2(MEMS)를 판정한다(PIEZO는 2026-11-25부터). 초음파는 기준이 없어 '기준 없음'만 표시.
    * - 수신: 정상 = 제때 받음, 이상 = 지연 + 미수신, 확인 불가 = 수신 꺼짐·측정 중지·데이터 없음·주기 미상.
    * 수신 꺼짐 안내 줄도 여기서 그린다.
    */
@@ -368,13 +369,13 @@
       .join("");
     const rules = status.rules || {};
     $("legendInfo").title =
-      "진동(최근 한 시간 통계 SRSS, mm/s RMS, ISO 20816-3 Group 2 강성 지지 기본값)\n" +
+      "진동(최근 한 시간 통계, Type2 SRSS·Type1 Vrms, mm/s RMS, ISO 20816-3 Group 2 강성 지지 기본값)\n" +
       "  양호 < 1.4 ≤ 주의 < 2.8 ≤ 경고 < 4.5 ≤ 위험 (MAC마다 설정 > 장치에서 바꿈)\n" +
       `지연: 원래 수신 간격 + ${rules.grace_s}초를 넘김\n` +
       `미수신: 원래 수신 간격 ×${rules.late_factor} + ${rules.grace_s}초보다 오래 수신 없음\n` +
-      "정상: 제때 수신 중, 진동 판정 기준 없음(Type1·Type3) 또는 통계 전\n" +
+      "정상: 제때 수신 중, 진동 판정 기준 없음(Type3) 또는 통계 전\n" +
       "확인 불가: 수신 꺼짐·측정 중지·받은 데이터 없음·주기 미상\n" +
-      "Type1(PIEZO)·Type3(초음파)는 판정 기준이 아직 없다(표시만).\n" +
+      "Type3(초음파)는 판정 기준이 아직 없다(표시만).\n" +
       "진동 값은 매시 정각 뒤 자동으로 계산되는 통계(가장 최근 한 시간)입니다.";
   }
 

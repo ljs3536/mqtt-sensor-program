@@ -209,12 +209,25 @@
           <fieldset>
             <legend>PIEZO 그래프 옵션 (수신기 방식 · 미리보기만 변경)</legend>
             <div class="row">
+              <!-- PIEZO 표시 단위: MEMS처럼 RAW·FFT 따로(2026-11-25, 전에는 한 칸 piezoUnit). 기본 자동 가속도. 축 이름 "PIEZO 단위". -->
               <label
-                >표시 단위
-                <select id="piezoUnit">
+                >RAW 단위
+                <select id="piezoRaw">
+                  <option value="자동 (g/mg/µg)" selected>자동 가속도 (g/mg/µg)</option>
                   <option value="Count">ADC (Count)</option>
-                  <option value="mV" selected>전압 (mV)</option>
-                  <option value="자동 (g RMS)">자동 가속도 (g RMS)</option>
+                  <option value="mV">전압 (mV)</option>
+                  <option value="g">가속도 (g)</option>
+                  <option value="mg">가속도 (mg)</option>
+                  <option value="µg">가속도 (µg)</option>
+                </select>
+              </label>
+              <label
+                >FFT 단위
+                <select id="piezoFft">
+                  <option value="자동 (g RMS)" selected>자동 가속도 (g RMS)</option>
+                  <option value="Count Peak">ADC (Count Peak)</option>
+                  <option value="mV Peak">전압 (mV Peak)</option>
+                  <option value="g Peak">가속도 (g Peak)</option>
                   <option value="g RMS">가속도 (g RMS)</option>
                   <option value="mm/s RMS">속도 (mm/s RMS)</option>
                 </select>
@@ -530,7 +543,7 @@
     <script src="/static/api.js?v=1"></script>
     <script src="/static/graph.js?v=18"></script>
     <script src="/static/filters.js?v=1"></script>
-    <script src="/static/monitor-draw.js?v=8"></script>
+    <script src="/static/monitor-draw.js?v=9"></script>
     <script src="/static/monitor-api.js?v=10"></script>
     <script src="/static/monitor.js?v=23"></script>
     <script src="/static/monitor-db.js?v=4"></script>

@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
   <meta charset="utf-8">
-  <title>센서 통계 2</title>
+  <title>센서 통계</title>
   <script>
     (function () {
       var theme = localStorage.getItem("sensor-theme") || "white";
@@ -13,7 +13,7 @@
   <link rel="stylesheet" href="/static/theme.css?v=14">
   <style>
     /*
-     * 통계 2 (/dashboard2, 2026-11-24 다시 꾸밈). /dashboard와 같은 값(/api/db/dashboard)을 보기 좋게 정리한 화면.
+     * 통계 (/dashboard, 2026-11-25부터 메뉴 '통계'. 2026-11-24 /dashboard2로 만들고 다시 꾸밈). /dashboard와 같은 값(/api/db/dashboard)을 보기 좋게 정리한 화면.
      * - 위: 제목·마지막 계산·기간 버튼 → 구간별 센서 수 → 센서별 속도 RMS 기간 평균 세로 막대(높은 순, MEMS / PIEZO 따로).
      * - 아래: 센서 카드(이름·구간·자세히 / 전체 MAC·위치·세트 수·최근 값 / 속도 RMS·RMS·PEAK 작은 그래프).
      * - '자세히'는 그 센서 통계 창(요약 칸, 큰 그래프, 시간·일별 표).
@@ -195,7 +195,7 @@
 </head>
 <body>
 <header>
-  <strong class="brand">센서 통계 2</strong>
+  <strong class="brand">센서 통계</strong>
   <nav>
     <a href="/">센서 현황</a>
     <a href="/receiver">센서 수신 모니터</a>
@@ -525,11 +525,32 @@
     setTimeout(() => card.classList.remove("focus"), 2200);
   }
 
+  /*
+   * 센서 현황 카드의 '통계 보기'(2026-11-25, /dashboard가 이 화면이 된 뒤): site.js가 sessionStorage('dashboard-focus')에
+   * MAC을 넣고 온다. 처음 그린 뒤 한 번만 그 센서 카드로 옮겨 약 5초 강조하고 바로 지운다(주소에 MAC을 남기지 않음).
+   */
+  let pendingFocus = null;
+  try {
+    pendingFocus = sessionStorage.getItem("dashboard-focus");
+    sessionStorage.removeItem("dashboard-focus");
+  } catch (error) {
+    pendingFocus = null;
+  }
+
   async function load() {
     const response = await fetch(`/api/db/dashboard?period=${encodeURIComponent(period)}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.detail || "통계를 읽지 못했습니다");
     paint(data);
+    if (pendingFocus) {
+      const card = [...board.querySelectorAll(".sensor")].find((node) => node.dataset.mac === pendingFocus);
+      pendingFocus = null;
+      if (card) {
+        card.scrollIntoView({ block: "center" });
+        card.classList.add("focus");
+        setTimeout(() => card.classList.remove("focus"), 5000);
+      }
+    }
   }
 
   function markButtons(selector, attr, value) {

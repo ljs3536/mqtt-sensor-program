@@ -111,13 +111,14 @@ async def generator_preview_post(body: dict):
 
 @router.post("/api/generator/velocity-history")
 async def generator_velocity_history(body: dict):
-    """ADXL X/Y/Z 속도 RMS 시간 이력(발생기 v070). /generator CSV와 /studio DB 세트 모두.
+    """속도 RMS 시간 이력. ADXL X/Y/Z(발생기 v070)와 PIEZO Vrms(2026-11-25). /generator CSV와 /studio DB 모두.
 
-    본문: {"start": 시작 세트(1부터, 생략=현재 세트), "count": 세트 수(생략=끝까지), "options": 그래프 옵션}
-    응답: graph_psd.velocity_history 결과(rows, skipped, limit, settings …).
+    본문: {"start": 시작(1부터, 생략=현재), "count": 개수(생략=끝까지), "options": 그래프 옵션,
+           "sensor": "ADXL"(기본) | "PIEZO"}. 초음파는 400(스펙트럼만 있어 계산 불가).
+    응답: graph_psd.velocity_history / piezo_velocity_history 결과(sensor, rows, skipped, limit, settings …).
     """
     try:
-        return replay.velocity_history(body.get("start"), body.get("count"), body.get("options"))
+        return replay.velocity_history(body.get("start"), body.get("count"), body.get("options"), body.get("sensor") or "ADXL")
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
 

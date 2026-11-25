@@ -38,7 +38,9 @@ function viewOptions() {
     fft_log_x: fftLogX.checked,
     fft_log_y: fftLogY.checked,
     piezo: {
-      unit: piezoUnit.value,
+      // RAW·FFT 단위 따로(2026-11-25). 서버 graph_options.piezo_units.
+      raw_unit: piezoRaw.value,
+      fft_unit: piezoFft.value,
       vmax: num(piezoVmax.value, 3.89),
       amax: num(piezoAmax.value, 4096),
       sensitivity: num(piezoSens.value, 100),

@@ -32,6 +32,7 @@ from web_db.src import core as gen
 from web_db.src.graph_options import (
     ADXL_FFT_UNITS,
     PIEZO_UNITS,
+    piezo_units,
     PIEZO_WINDOWS,
     _filter_kwargs,
     _flag,
@@ -82,8 +83,10 @@ def base_unit(sensor, options):
     Peak/RMS 구분은 밀도에는 의미가 없어서 버린다(PSD 적분이 곧 RMS).
     """
     if sensor == "PIEZO":
-        unit = options["piezo"].get("unit")
-        unit = unit if unit in PIEZO_UNITS else "mV"
+        # PIEZO도 FFT 단위 칸으로 정한다(2026-11-25 RAW·FFT 분리). mV Peak → mV.
+        unit = piezo_units(options["piezo"])[1]
+        if unit == "mV Peak":
+            unit = "mV"
     else:
         unit = options["adxl"].get("fft_unit")
         unit = unit if unit in ADXL_FFT_UNITS else ADXL_FFT_UNITS[0]
@@ -433,9 +436,84 @@ def velocity_history(packets, options, start=1, count=None, device=""):
     if not rows:
         raise ValueError("유효한 RMS를 계산하지 못했습니다. " + " / ".join(skipped[:3]))
     return {
+        "sensor": "ADXL",
         "rows": rows,
         "skipped": skipped,
         "limit": limit,
+        "device": device,
+        "start": start,
+        "count": len(chosen),
+        "total": total,
+        "settings": {
+            "segment": settings["segment_text"],
+            "overlap": settings["overlap"],
+            "target": settings["target"],
+        },
+    }
+
+
+def piezo_velocity_history(packets, options, start=1, count=None, device=""):
+    """PIEZO 패킷마다 독립 PSD로 속도 RMS(Vrms)를 구한 시간 이력(2026-11-25, 센서 데이터 분석 PIEZO 설정).
+
+    ADXL velocity_history와 같은 길이다. 다른 점만:
+    - PIEZO는 한 축이라 패킷 하나 = 점 하나(세트 대신 '패킷'). 값은 vrms 하나(SRSS 없음).
+    - 환산은 서랍 PIEZO 칸(Vmax·Amax·감도)과 PIEZO 창·FFT 필터(axis_psd 'PIEZO', 단위 mm/s).
+      매시간 통계(stat_profile.piezo_stats)는 DB 통계 기준 값을 쓰므로, 서랍 값이 다르면 두 값도 다르다.
+    - 이 창에는 한계선을 그리지 않는다(서랍 환산 값이라 통계 값과 다를 수 있음). 센서 현황 판정은 통계 Vrms와 설정 기준으로 한다(site_status.JUDGED_KINDS).
+    - 시각: 패킷의 received_at(_received_at). 없으면 건너뛴다.
+    돌려주는 dict: sensor='PIEZO', rows, skipped, limit=None, settings, start, count, total, device.
+    """
+    settings = psd_settings(options)
+    total = len(packets)
+    if total == 0:
+        raise ValueError("PIEZO 데이터가 없습니다.")
+    start = int(start)
+    if not 1 <= start <= total:
+        raise ValueError(f"시작 패킷 번호는 1~{total} 사이여야 합니다.")
+    count = total - start + 1 if count in (None, "") else int(count)
+    if count < 1:
+        raise ValueError("분석 패킷 수는 1 이상이어야 합니다.")
+    chosen = list(packets[start - 1:start - 1 + count])
+    if not device and chosen and isinstance(chosen[0], dict):
+        device = str(chosen[0].get("dvicMacAddr") or "")
+    rows = []
+    skipped = []
+    for offset, packet in enumerate(chosen):
+        number = start + offset
+        if not isinstance(packet, dict):
+            skipped.append(f"{number}번째 패킷: 형식 오류")
+            continue
+        stamp = str(packet.get("_received_at") or "")
+        if not stamp:
+            skipped.append(f"{number}번째 패킷: received_at 없음")
+            continue
+        try:
+            when = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+            freq, density, k, _fs, _n = axis_psd(
+                "PIEZO", packet, options, settings, "mm/s", max_segments=settings["target"]
+            )
+            level = _rms(freq, density)
+            if k < 1 or level is None:
+                raise ValueError("PSD 구간 부족")
+            rows.append({
+                "set": number,
+                "packet_no": str(packet.get("_packet_no") or number),
+                "received_at": stamp,
+                "t": when.timestamp() * 1000.0,
+                "vrms": level,
+                "over": False,
+                "segments": {"PIEZO": k},
+            })
+        except (ValueError, TypeError, KeyError, OverflowError, ZeroDivisionError) as exc:
+            skipped.append(f"{number}번째 패킷: {exc}")
+    rows.sort(key=lambda row: row["t"])
+    if not rows:
+        raise ValueError("유효한 RMS를 계산하지 못했습니다. " + " / ".join(skipped[:3]))
+    return {
+        "sensor": "PIEZO",
+        "rows": rows,
+        "skipped": skipped,
+        "limit": None,
         "device": device,
         "start": start,
         "count": len(chosen),

@@ -20,3 +20,6 @@ docker-bundle/
 # 수신 CSV(로컬·개발·운영 공통 이름) / Docker DB 폴더
 data_csv_web/
 sensor_web_db/
+
+# 운영 배포용 설정 DB(export_settings 결과, 2026-11-25). 저장소에 넣지 않는다.
+deploy/

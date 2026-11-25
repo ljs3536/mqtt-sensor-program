@@ -7,4 +7,4 @@ PSD(Welch)와 속도 RMS 시간 이력은 graph_psd(packet_psd, velocity_history
 
 from web_db.src.graph_curves import *  # noqa: F401,F403
 from web_db.src.graph_options import *  # noqa: F401,F403
-from web_db.src.graph_psd import packet_psd, velocity_history  # noqa: F401
+from web_db.src.graph_psd import packet_psd, piezo_velocity_history, velocity_history  # noqa: F401
