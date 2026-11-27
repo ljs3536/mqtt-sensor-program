@@ -86,7 +86,10 @@ async function refresh(reuse = false) {
   const data = await (await fetch(`/api/monitor/state${query}`)).json();
   monitorLive = !!data.connected;
   profiles = data.profiles || profiles;
-  if (!document.querySelector("#profile").options.length) fillProfiles();
+  if (!document.querySelector("#profile").options.length) {
+    fillProfiles();
+    MonitorJson.schedulePreview(); // Fs+N 목록이 처음 채워졌으니 보낼 JSON도 만든다
+  }
   showConnection(data);
   csvInfo.textContent = data.csv_dir
     ? `저장 폴더: ${data.csv_dir}`
@@ -107,10 +110,9 @@ async function refresh(reuse = false) {
   // latest_same = 서버가 '화면 그래프 그대로'라고 알려 준 경우. 다시 그리지 않는다(확대 상태 등도 유지).
   if (!data.latest_same) draw((data.latest || {})[shown] || {});
   latestKey = data.latest_key || "";
-  const mac = selectedList()[0];
-  if (mac && data.configs && data.configs[mac]) {
-    preview.textContent = JSON.stringify(data.configs[mac], null, 2);
-  }
+  // 명령 대상이 MAC 하나면 '현재 retain' 탭에 그 MAC의 S/{MAC} 설정(2026-11-27, monitor-json.js).
+  // 전에는 이 값이 '전송 JSON' 칸을 1초마다 덮어써 방금 보낸 JSON과 섞여 보였다.
+  MonitorJson.update(data);
 }
 
 /** 화면의 그래프 옵션을 서버에 보내고 곡선을 다시 그린다. */
@@ -139,7 +141,7 @@ async function command(action) {
   buttons.forEach((button) => (button.disabled = true));
   // 설정 적용에서 센서 타입 0을 고르면 서버가 STOP 3단계로 보낸다(수신기 V063).
   const stopping = action === "stop" || (action === "apply" && document.querySelector("#sensorType") && sensorType.value === "0");
-  if (stopping) preview.textContent = "STOP 3단계 전송 중(STOP → retain 삭제 → normal, 단계마다 PUBACK 대기)…";
+  if (stopping) MonitorJson.status("STOP 3단계 전송 중(단계마다 PUBACK 대기)…");
   const { response, data } = await postJson("/api/monitor/command", {
     action,
     macs,
@@ -157,10 +159,11 @@ async function command(action) {
     piezo_gain: document.querySelector("#piezoGain") ? piezoGain.value : "30",
   }).finally(() => buttons.forEach((button) => (button.disabled = false)));
   if (!response.ok) {
+    if (stopping) MonitorJson.status("");
     alert(data.detail || "명령 실패");
     return false;
   }
-  preview.textContent = data.payload || "";
+  MonitorJson.sent(label, macs, data.payload || "");
   return true;
 }
 

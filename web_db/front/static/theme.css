@@ -327,7 +327,7 @@ html[data-theme="dark"] input[type="checkbox"]:checked {
 html[data-theme="dark"] :is(
   .hint, label, legend, summary, .stats, .formula, .fft-previews p, .file-name,
   .dash-note, .metric-title, .metric-value, .mac, .mac small, .mac-time, .mac-addr,
-  #info, #commandInfo, #csvInfo, #savedConfig, #sensorTypeDesc, #formula, #adxlFftHint,
+  #info, #commandInfo, #csvInfo, #nameStatus, #sensorTypeDesc, #formula, #adxlFftHint,
   #linkStatus.pill.off
 ) {
   color: #e6e6e6;
@@ -343,7 +343,7 @@ html[data-theme="dark"] input:disabled {
   background-color: #1a1a1a;
 }
 html[data-theme="gray"] :is(
-  .hint, #commandInfo, #csvInfo, #savedConfig, #sensorTypeDesc, #formula, #adxlFftHint, .file-name
+  .hint, #commandInfo, #csvInfo, #nameStatus, #sensorTypeDesc, #formula, #adxlFftHint, .file-name
 ) {
   color: #2c3338;
 }
@@ -385,3 +385,22 @@ html[data-theme="dark"] .filter-row input.freq.locked { background: #1a1a1a; col
 html[data-theme="gray"] input:disabled,
 html[data-theme="gray"] select:disabled { background: #dfe5e9; color: #5c6d7a; }
 
+
+/* 센서 명령 '보낼 JSON / 현재 retain' (2026-11-27) */
+html[data-theme="gray"] .json-tabs { background: #d3dce2; }
+html[data-theme="gray"] .json-tabs .json-tab { color: #46525b; }
+html[data-theme="gray"] .json-tabs .json-tab.active { background: #eef3f6; color: #c45c12; }
+html[data-theme="gray"] .cmd-json .json-view { background: #eef3f6; color: #2c3338; border-color: #9aa8b2; }
+html[data-theme="gray"] .json-note, html[data-theme="gray"] .json-meta { color: #5b6872; }
+html[data-theme="gray"] .json-note[data-tone="edit"], html[data-theme="gray"] .json-foot button.link-btn { color: #c45c12; }
+html[data-theme="dark"] .json-tabs { background: #1a1a1a; }
+html[data-theme="dark"] .json-tabs .json-tab { color: #9aa8b5; }
+html[data-theme="dark"] .json-tabs .json-tab:hover { background: #262626; }
+html[data-theme="dark"] .json-tabs .json-tab.active { background: #3d3d3d; color: #f0a05a; box-shadow: none; }
+html[data-theme="dark"] .cmd-json .json-edit { background: #111; border-color: #333; color: #d7e4f0; }
+html[data-theme="dark"] .cmd-json .json-view { background: #1a1a1a; color: #d7e4f0; border-color: #444; }
+html[data-theme="dark"] .json-note, html[data-theme="dark"] .json-meta { color: #8f9aa5; }
+html[data-theme="dark"] .json-note[data-tone="bad"] { color: #f87171; }
+html[data-theme="dark"] .json-note[data-tone="warn"], html[data-theme="dark"] .json-meta[data-tone="busy"] { color: #f5c46b; }
+html[data-theme="dark"] .json-note[data-tone="edit"], html[data-theme="dark"] .json-foot button.link-btn { color: #f0a05a; }
+html[data-theme="dark"] .json-meta[data-tone="ok"] { color: #7dffa2; }

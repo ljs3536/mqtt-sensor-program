@@ -101,6 +101,7 @@ function setSensorTypeBox(collection) {
   if (!document.querySelector("#sensorType")) return;
   sensorType.value = sensor.value === "PIEZO" ? (collection ? "3" : "1") : (collection ? "4" : "2");
   syncSensorType(false);
+  MonitorJson.schedulePreview(); // 칸을 코드로 바꿔 change가 없으므로 보낼 JSON을 직접 다시 만든다
 }
 // 수신기 V063과 같게(2026-11-23 결정):
 // - START: 센서 타입 칸과 상관없이 collection으로 시작한다(PIEZO 3, MEMS 4). 서버도 같은 값으로 바꿔 보낸다.

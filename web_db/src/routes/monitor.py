@@ -1,9 +1,11 @@
 """/api/monitor. 수신 연결, 최신 그래프, 센서 명령."""
 
+import json
+
 from fastapi import APIRouter, HTTPException
 
 from web_db.src import core as mon
-from web_db.src.monitor_service import _sensor_config, custom_profile, subscribe_qos
+from web_db.src.monitor_service import _sensor_config, command_text, custom_profile, subscribe_qos
 from web_db.src.runtime import monitor
 
 router = APIRouter()
@@ -85,15 +87,11 @@ async def monitor_view(body: dict):
     return monitor.state(str(body.get("device") or ""))
 
 
-@router.post("/api/monitor/command")
-def monitor_command(body: dict):
-    """고른 MAC에 START, STOP, 설정 적용, 설정 조회를 보낸다.
+def _command_fields(body):
+    """화면 칸 값(종류·주기·Fs+N·G Range·게인)을 명령에 쓰는 값으로 읽는다. 명령·미리보기가 같이 쓴다.
 
-    async가 아니라 def다. STOP은 단계마다 PUBACK을 최대 10초 기다리므로, 스레드 풀에서 돌아야
-    그동안 다른 화면 요청(상태 조회 등)이 막히지 않는다.
+    돌려주는 것: (sensor, period, profile, g_range, piezo_gain). Fs+N 직접 입력이 잘못되면 ValueError.
     """
-    action = str(body.get("action") or "")
-    macs = [str(item).strip() for item in body.get("macs") or [] if str(item).strip()]
     sensor = str(body.get("sensor") or "ADXL").upper()
     # 0도 올바른 주기다. 값이 아예 없을 때만 1을 쓴다(예전 `or 1`은 0을 1로 바꿨다).
     period = body.get("period")
@@ -103,10 +101,69 @@ def monitor_command(body: dict):
     profile = body.get("profile") or labels[-1]
     g_range = body.get("g_range") or "16"
     piezo_gain = body.get("piezo_gain") if body.get("piezo_gain") is not None else "30"
+    # 직접 입력(2026-11-24): custom이 참이면 목록 대신 custom_rate·custom_count를 검사해 쓴다(STOP의 normal에도).
+    if body.get("custom"):
+        profile = custom_profile(sensor, body.get("custom_rate"), body.get("custom_count"))
+    return sensor, period, profile, g_range, piezo_gain
+
+
+def _raw_payload(text):
+    """'JSON 그대로 보내기'(2026-11-27)의 본문을 검사해 dict로 돌려준다. 잘못되면 ValueError(이유).
+
+    - JSON 객체({ … })여야 하고 비어 있으면 안 된다. 키 순서는 적힌 그대로 보낸다.
+    - 크기(CR 포함 1024바이트)는 command_text가 검사한다(다른 명령과 같다).
+    - 값의 종류(글자 "4" / 숫자 4)는 고치지 않는다. 보낸 사람이 적은 그대로 나간다.
+    """
     try:
-        # 직접 입력(2026-11-24): custom이 참이면 목록 대신 custom_rate·custom_count를 검사해 쓴다(STOP의 normal에도).
-        if body.get("custom"):
-            profile = custom_profile(sensor, body.get("custom_rate"), body.get("custom_count"))
+        payload = json.loads(str(text or ""))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON 형식이 아닙니다: {exc.msg} (줄 {exc.lineno}, 칸 {exc.colno})") from None
+    if not isinstance(payload, dict) or not payload:
+        raise ValueError("JSON 객체({ … })를 넣어 주세요. 비어 있으면 보내지 않습니다")
+    command_text(payload)
+    return payload
+
+
+@router.post("/api/monitor/command/preview")
+def monitor_command_preview(body: dict):
+    """화면 칸 값으로 '설정 적용'이 보낼 JSON을 만들어 돌려준다(2026-11-27, 보내지 않음).
+
+    화면의 '보낼 JSON' 칸이 칸을 바꿀 때마다 부른다. 실제 전송과 같은 함수(_sensor_config)로 만들어
+    화면 미리보기와 실제로 나가는 내용이 어긋나지 않는다.
+    - 센서 타입 0이면 {"COMMPATH":"0","SENSORTYPE":"0"}과 함께, '설정 적용'으로 누르면 STOP 3단계로 간다는 note.
+    - 칸 값이 잘못되면 400(이유).
+    """
+    try:
+        sensor, period, profile, g_range, piezo_gain = _command_fields(body)
+        payload = _sensor_config(sensor, period, profile, sensor_type=body.get("sensor_type"),
+                                 g_range=g_range, piezo_gain=piezo_gain)
+        text = command_text(payload)
+    except Exception as exc:
+        raise HTTPException(400, str(exc)) from exc
+    stopping = str(body.get("sensor_type") or "").strip() == "0"
+    return {
+        "payload": payload,
+        "bytes": len(text.encode("utf-8")) + 1,
+        "note": "센서 타입 0: '설정 적용'은 STOP 3단계(STOP → retain 삭제 → normal)로 보냅니다" if stopping else "",
+    }
+
+
+@router.post("/api/monitor/command")
+def monitor_command(body: dict):
+    """고른 MAC에 START, STOP, 설정 적용, 설정 조회, JSON 그대로 보내기를 한다.
+
+    async가 아니라 def다. STOP은 단계마다 PUBACK을 최대 10초 기다리므로, 스레드 풀에서 돌아야
+    그동안 다른 화면 요청(상태 조회 등)이 막히지 않는다.
+    action "raw"(2026-11-27): body["raw"]의 JSON을 그대로 S/{MAC}에 retain으로 보낸다(설정 적용과 같은 QoS·retain·DB 기록).
+    SENSORTYPE 0이 들어 있어도 STOP 3단계로 바꾸지 않고 한 번만 보낸다(화면이 보내기 전에 경고한다).
+    """
+    action = str(body.get("action") or "")
+    macs = [str(item).strip() for item in body.get("macs") or [] if str(item).strip()]
+    try:
+        if action == "raw":
+            payload = monitor.publish_config(macs, _raw_payload(body.get("raw")), "JSON 직접 전송")
+            return {"payload": payload, "state": monitor.state()}
+        sensor, period, profile, g_range, piezo_gain = _command_fields(body)
         if action == "query":
             if len(macs) != 1:
                 raise ValueError("현재 설정 조회는 센서 MAC 1개만 선택하세요")
@@ -142,7 +199,7 @@ def monitor_command(body: dict):
                 label,
             )
         else:
-            raise ValueError("명령은 start, stop, apply, query 중 하나여야 합니다")
+            raise ValueError("명령은 start, stop, apply, query, raw 중 하나여야 합니다")
     except Exception as exc:
         raise HTTPException(400, str(exc)) from exc
     return {"payload": payload, "state": monitor.state()}

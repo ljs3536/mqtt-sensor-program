@@ -10,8 +10,8 @@
         document.documentElement.setAttribute("data-theme", theme);
       })();
     </script>
-    <link rel="stylesheet" href="/static/style.css?v=32" />
-    <link rel="stylesheet" href="/static/theme.css?v=14" />
+    <link rel="stylesheet" href="/static/style.css?v=34" />
+    <link rel="stylesheet" href="/static/theme.css?v=16" />
   </head>
   <body>
     <header>
@@ -165,9 +165,36 @@
               현재 설정 조회
             </button>
           </div>
+          <!--
+            보낼 JSON / 현재 retain (2026-11-27). 탭 두 개가 한 자리를 나눠 써서 카드 높이를 크게 늘리지 않는다.
+            - 보낼 JSON: 위 칸 값으로 서버가 만든 '설정 적용' JSON(칸을 바꾸면 자동으로 다시 채움). 직접 고쳐서
+              'JSON 그대로 보내기'로 보낼 수 있다. 고친 뒤에는 칸을 바꿔도 덮어쓰지 않는다('칸 값으로 다시 채우기').
+            - 현재 retain: MAC을 하나만 고르면 그 MAC의 S/{MAC} retain 값과 받은 시각(읽기 전용).
+            스크립트는 static/monitor-json.js.
+          -->
           <div class="cmd-section cmd-json">
-            <h3>전송 JSON</h3>
-            <pre id="preview" class="short"></pre>
+            <div class="json-head">
+              <div class="json-tabs" role="tablist" aria-label="JSON 보기">
+                <button type="button" role="tab" class="json-tab active" data-json-tab="send" aria-selected="true">보낼 JSON</button>
+                <button type="button" role="tab" class="json-tab" data-json-tab="retain" aria-selected="false">현재 retain<i id="retainDot" class="json-dot" hidden></i></button>
+              </div>
+              <span id="jsonMeta" class="json-meta"></span>
+            </div>
+            <div class="json-pane" data-json-pane="send" role="tabpanel">
+              <textarea id="rawJson" class="json-edit" spellcheck="false" autocomplete="off" aria-label="보낼 JSON"></textarea>
+              <div class="json-foot">
+                <span id="rawNote" class="json-note"></span>
+                <button type="button" class="link-btn" id="rawReset" hidden>칸 값으로 다시 채우기</button>
+                <button type="button" class="secondary" id="sendRaw">JSON 그대로 보내기</button>
+              </div>
+            </div>
+            <div class="json-pane" data-json-pane="retain" role="tabpanel" hidden>
+              <pre id="retainJson" class="json-view"></pre>
+              <div class="json-foot">
+                <span id="retainNote" class="json-note"></span>
+                <button type="button" class="secondary" id="retainToSend" disabled>보낼 JSON으로 가져오기</button>
+              </div>
+            </div>
           </div>
           <div class="cmd-section">
             <h3>표시 이름</h3>
@@ -178,9 +205,8 @@
                 이름 저장
               </button>
             </div>
-            <p id="savedConfig" class="hint">
-              설정 적용 시 전송 JSON이 이 MAC의 DB에 저장됩니다.
-            </p>
+            <!-- 이름 저장 결과·오류만 보인다. 그 MAC의 설정 값은 위 '현재 retain' 탭에서 본다(2026-11-27). -->
+            <p id="nameStatus" class="hint" aria-live="polite"></p>
           </div>
         </section>
       </div>
@@ -544,9 +570,10 @@
     <script src="/static/graph.js?v=18"></script>
     <script src="/static/filters.js?v=1"></script>
     <script src="/static/monitor-draw.js?v=9"></script>
-    <script src="/static/monitor-api.js?v=11"></script>
-    <script src="/static/monitor.js?v=24"></script>
-    <script src="/static/monitor-db.js?v=4"></script>
+    <script src="/static/monitor-api.js?v=12"></script>
+    <script src="/static/monitor-json.js?v=1"></script>
+    <script src="/static/monitor.js?v=25"></script>
+    <script src="/static/monitor-db.js?v=5"></script>
     <script src="/static/theme.js?v=4"></script>
   </body>
 </html>

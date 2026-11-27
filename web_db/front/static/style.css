@@ -290,14 +290,17 @@ pre.short { height: 72px; }
 #linkStatus.on::before { animation: link-pulse 1.6s ease-in-out infinite; }
 @keyframes link-pulse { 50% { opacity: 0.25; } }
 
-/* 수신 MAC과 센서 명령 두 카드 */
+/* 수신 MAC과 센서 명령 두 카드.
+ * 2026-11-27: 센서 명령에 '보낼 JSON / 현재 retain'이 들어가 칸이 늘어서 비율을 1.4 : 1 → 1.15 : 1로 바꿨다.
+ * 두 카드 높이는 같게 맞추고(줄 높이 = 센서 명령 카드), 수신 MAC 목록이 남는 높이를 채운 뒤 넘치면 스크롤한다. */
 .mon-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(380px, 1fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(420px, 1fr);
   gap: 8px;
   margin-bottom: 8px;
 }
 .mon-grid > .card { margin: 0; }
+.mon-grid > .mon-macs { display: flex; flex-direction: column; min-height: 0; }
 .mon-title {
   display: flex;
   justify-content: space-between;
@@ -320,8 +323,9 @@ pre.short { height: 72px; }
   grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
   gap: 6px;
   align-content: start;
-  min-height: 0;
-  max-height: 320px;
+  /* 높이 0에서 시작해 카드의 남는 높이를 채운다(MAC이 많아도 카드를 키우지 않고 스크롤). 최소 200px. */
+  flex: 1 1 0;
+  min-height: 200px;
   margin: 0 0 8px;
   overflow: auto;
 }
@@ -366,24 +370,61 @@ p.window-factor { margin: 0; }
 .cmd-actions button { width: 100%; }
 .cmd-section { margin-top: 12px; padding-top: 10px; border-top: 1px solid #e1e8ef; }
 .mon-cmd h3 { margin: 0 0 6px; font-size: 12px; font-weight: 700; color: #5d6e80; }
-.cmd-json pre { height: auto; max-height: 120px; margin: 0; }
-/* 아직 보낸 명령이 없으면 검은 상자 대신 안내 문장을 보여 준다. */
-.cmd-json pre:empty { display: none; }
-.cmd-json:has(pre:empty) h3::after { content: " · 명령을 보내면 여기에 표시됩니다"; font-weight: 400; color: #8b99a7; }
+/* 보낼 JSON / 현재 retain (2026-11-27, monitor-json.js). 탭 두 개가 같은 자리를 쓴다. */
+.json-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; min-width: 0; }
+.json-tabs { display: inline-flex; flex: none; padding: 2px; gap: 2px; border-radius: 8px; background: #edf2f7; }
+.json-tabs .json-tab {
+  height: 26px; padding: 0 10px; border: 0; border-radius: 6px; box-shadow: none;
+  background: transparent; color: #5d6e80; font-size: 12px; font-weight: 650;
+}
+.json-tabs .json-tab:hover { background: rgba(31, 106, 165, 0.08); }
+.json-tabs .json-tab.active { background: white; color: #1f6aa5; box-shadow: 0 1px 2px rgba(18, 42, 66, 0.15); }
+.json-dot { display: inline-block; width: 6px; height: 6px; margin-left: 5px; border-radius: 50%; background: #0e7a45; vertical-align: 2px; }
+.json-dot[hidden] { display: none; }
+.json-meta { flex: 1; min-width: 0; text-align: right; font-size: 11px; color: #7b8b9c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.json-meta[data-tone="ok"] { color: #0e7a45; }
+.json-meta[data-tone="busy"] { color: #b45309; }
+.json-pane[hidden] { display: none; }
+/* 보낼 JSON 입력칸과 retain 보기는 같은 높이(탭을 바꿔도 카드 높이가 그대로) */
+.cmd-json .json-edit, .cmd-json .json-view {
+  display: block; box-sizing: border-box; width: 100%; height: 148px; margin: 0;
+  padding: 8px 10px; border-radius: 6px; font: 12px/1.45 Consolas, "D2Coding", monospace;
+}
+.cmd-json .json-edit { resize: vertical; min-height: 96px; background: #12202e; color: #d7e4f0; border: 1px solid #12202e; }
+.cmd-json .json-edit:focus { outline: 2px solid rgba(31, 106, 165, 0.35); border-color: #1f6aa5; }
+.cmd-json .json-view { overflow: auto; background: #f4f7fa; color: #1c2833; border: 1px dashed #c5d0dc; }
+.cmd-json .json-view:empty { background: transparent; }
+.json-foot { display: flex; align-items: center; gap: 8px; margin-top: 6px; min-height: 30px; }
+.json-note { flex: 1; min-width: 0; font-size: 11px; color: #7b8b9c; }
+.json-note[data-tone="bad"] { color: #b42318; font-weight: 650; }
+.json-note[data-tone="warn"] { color: #b45309; }
+.json-note[data-tone="edit"] { color: #1f6aa5; font-weight: 650; }
+.json-foot button { flex: none; height: 30px; padding: 0 12px; font-size: 12px; }
+.json-foot button.link-btn {
+  padding: 0 4px; border: 0; background: none; box-shadow: none; color: #1f6aa5; font-weight: 650; text-decoration: underline;
+}
+.json-foot button.link-btn[hidden] { display: none; }
+.json-foot button:disabled { opacity: 0.5; cursor: not-allowed; }
 .cmd-name-row {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto;
   gap: 8px;
   align-items: end;
 }
-.mon-cmd #savedConfig { margin: 6px 0 0; }
+.mon-cmd #nameStatus { margin: 6px 0 0; overflow-wrap: anywhere; } /* 이름 저장 결과 한 줄. 비어 있으면 자리를 차지하지 않는다 */
+.mon-cmd #nameStatus:empty { display: none; }
 @media (max-width: 1180px) {
   .mon-grid { grid-template-columns: 1fr; }
+  /* 한 줄로 쌓이면 카드 높이를 맞출 대상이 없으므로 목록은 내용만큼(최대 320px) */
+  .mon-macs .macs { flex: none; min-height: 0; max-height: 320px; }
 }
 @media (max-width: 640px) {
   .cmd-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .cmd-actions { grid-template-columns: 1fr 1fr; }
   .cmd-name-row { grid-template-columns: 1fr; }
+  .json-head { flex-wrap: wrap; }
+  .json-meta { flex-basis: 100%; text-align: left; }
+  .json-foot { flex-wrap: wrap; }
 }
 .graph-head {
   display: grid;

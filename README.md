@@ -122,8 +122,6 @@ docker compose up -d --force-recreate
 
 자세한 절차는 [docs/운영-배포-절차.md](docs/운영-배포-절차.md).
 
-AI 서버의 운영 배포 방법(이미지·compose)은 아직 정하지 않았다([docs/AI-분석-연동-작업계획.md](docs/AI-분석-연동-작업계획.md) 8장).
-
 ## 4. 문서 (`docs/`)
 
 | 문서                                                            | 내용                       |

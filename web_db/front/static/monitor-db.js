@@ -1,7 +1,7 @@
-// 8081 수신 모니터. 설정 적용 JSON과 표시 이름을 SQLite에 남긴다.
+// 8081 수신 모니터. MAC 표시 이름을 SQLite에서 읽고 저장한다.
 const nameMac = document.querySelector("#nameMac");
 const deviceName = document.querySelector("#deviceName");
-const savedConfig = document.querySelector("#savedConfig");
+const nameStatus = document.querySelector("#nameStatus"); // 이름 저장 결과·오류 한 줄
 
 /** 화면에 있는 MAC과 직접 입력 MAC을 이름 선택 목록으로 모은다. */
 function listedMacs() {
@@ -30,8 +30,13 @@ function refreshNameMacs() {
   if (values.includes(current)) nameMac.value = current;
 }
 
-/** 고른 MAC의 표시 이름과 저장된 설정 JSON을 읽어 칸에 넣는다. */
+/**
+ * 고른 MAC의 표시 이름을 읽어 칸에 넣는다.
+ * 예전에는 아래 줄에 '저장된 설정 {action} {시각} {JSON}'도 보였는데, 보낸 방법(설정 적용·START·JSON 그대로)에 따라
+ * 글이 계속 바뀌기만 하고 '현재 retain' 탭과 겹쳐 2026-11-27에 뺐다. 보낸 JSON의 DB 기록(sensor_config)은 서버가 그대로 남긴다.
+ */
 async function loadProfile() {
+  nameStatus.textContent = "";
   if (!nameMac.value) {
     deviceName.value = "";
     return;
@@ -39,33 +44,25 @@ async function loadProfile() {
   const response = await fetch(`/api/db/profile?mac=${encodeURIComponent(nameMac.value)}`);
   const data = await response.json();
   if (!response.ok) {
-    savedConfig.textContent = data.detail || "이름 조회 실패";
+    nameStatus.textContent = data.detail || "이름 조회 실패";
     return;
   }
   deviceName.value = data.display_name || "";
-  if (data.payload) {
-    savedConfig.textContent = `저장된 설정 ${data.action || ""} ${data.updated_at || ""} ${JSON.stringify(data.payload)}`;
-  } else {
-    savedConfig.textContent = "저장된 설정 JSON이 없습니다. 설정 적용을 누르면 이 MAC에 남습니다.";
-  }
 }
+
+/** 이름을 못 읽었을 때 아래 줄에 이유를 보인다. */
+const showProfileError = (error) => { nameStatus.textContent = error.message; };
 
 document.querySelector("#macs").addEventListener("change", (event) => {
   const input = event.target;
   if (input && input.value && input.checked) {
     refreshNameMacs();
     nameMac.value = input.value;
-    loadProfile().catch((error) => {
-      savedConfig.textContent = error.message;
-    });
+    loadProfile().catch(showProfileError);
   }
 });
 
-nameMac.addEventListener("change", () => {
-  loadProfile().catch((error) => {
-    savedConfig.textContent = error.message;
-  });
-});
+nameMac.addEventListener("change", () => loadProfile().catch(showProfileError));
 
 document.querySelector("#saveDeviceName").onclick = async () => {
   refreshNameMacs();
@@ -83,23 +80,21 @@ document.querySelector("#saveDeviceName").onclick = async () => {
     alert(data.detail || "이름 저장 실패");
     return;
   }
-  savedConfig.textContent = `${data.mac} 이름을 '${data.display_name}'로 저장했습니다.`;
+  nameStatus.textContent = `${data.mac} 이름을 '${data.display_name}'로 저장했습니다.`;
   // MAC 칩의 이름을 바로 바꾼다. 연결이 끊겨 있으면 1초 갱신이 없으므로 직접 한 번 읽는다.
   refresh().catch(() => {});
 };
 
 /**
- * 설정 적용 뒤에 이름 목록과 저장된 JSON을 다시 읽는다.
+ * 명령을 보낸 뒤 이름 대상 MAC 목록을 맞춘다(직접 입력 MAC이 새로 생겼을 수 있다).
  * 원래 command()의 결과(보냈으면 true)를 그대로 돌려준다. STOP 버튼이 이 값을 보고
- * 센서 타입 칸을 normal로 돌려놓는다(예전에는 결과를 버려서 칸이 그대로 남았다).
+ * 센서 타입 칸을 normal로 돌려놓는다.
+ * 예전에는 여기서 저장된 설정 JSON도 다시 읽었지만, 그 줄을 빼서 이제 읽지 않는다.
  */
 const monitorCommand = command;
 command = async function saveCommand(action) {
   const sent = await monitorCommand(action);
-  if (action === "apply" || action === "start" || action === "stop") {
-    refreshNameMacs();
-    await loadProfile();
-  }
+  if (action === "apply" || action === "start" || action === "stop") refreshNameMacs();
   return sent;
 };
 

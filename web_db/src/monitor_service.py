@@ -189,6 +189,8 @@ class MonitorService:
         self.device_stats = {}
         self.latest_device = ""
         self.configs = {}
+        # MAC별 마지막 S/{MAC} 설정을 받은 시각('MM-DD HH:MM:SS', 2026-11-27). 수신 모니터 '현재 retain' 칸에 보인다.
+        self.config_times = {}
         self.connected = False
         self.mode = ""
         self.window = "전체"
@@ -231,6 +233,7 @@ class MonitorService:
             if str(obj.get("CONFIG", "")).strip() == "?":
                 return
             self.configs[mac] = obj
+            self.config_times[mac] = datetime.now().strftime("%m-%d %H:%M:%S")
             if mac not in self.devices:
                 self.devices.append(mac)
             self.log(f"설정 수신 S/{mac}")
@@ -770,6 +773,7 @@ class MonitorService:
                 "graph_devices": names,
                 "latest_device": self.latest_device,
                 "configs": self.configs,
+                "config_times": dict(self.config_times),
                 "window": window,
                 "csv_enabled": self.csv.enabled,
                 "csv_dir": str(self.csv.session_dir or ""),

@@ -64,8 +64,9 @@
 | `theme.js` | White / Gray / Dark. 차트가 다시 그려질 때 눈금 색을 맞춘다. 나중에 만드는 차트는 `SensorTheme.watch`로 붙인다 |
 | `monitor-draw.js` | 수신 화면의 그래프 옵션과 곡선 그리기 |
 | `monitor-api.js` | `/api/monitor/state`, 명령, `/api/monitor/view` |
+| `monitor-json.js` | 센서 명령의 '보낼 JSON / 현재 retain' 탭(2026-11-27): 칸 값 미리보기(`/api/monitor/command/preview`), 직접 고친 JSON 검사·보내기(`raw`), 고른 MAC의 retain 값과 받은 시각 |
 | `monitor.js` | 수신 화면 버튼을 위 함수에 연결. MQTT가 연결된 동안, **탭이 보일 때만** 1초마다 상태를 다시 읽는다(앞 요청이 안 끝났으면 건너뜀). 탭이 다시 보이면 바로 한 번 읽는다(2026-11-26) |
-| `monitor-db.js` | 표시 이름과 설정 JSON. 설정 적용 뒤에 그 MAC 프로필을 다시 읽는다 |
+| `monitor-db.js` | 표시 이름 읽기·저장. 예전에 보이던 '저장된 설정 …' JSON 줄은 2026-11-27에 뺐다(설정 값은 '현재 retain' 탭에서 본다. 보낸 JSON의 DB 기록 `sensor_config`는 그대로 남긴다) |
 | `generator-draw.js` | 분석 화면의 그래프 옵션과 미리보기 그리기. 초음파 스펙트럼은 RAW 칸에만 둔다. PSD 결과 칸(`showPsd`) |
 | `velocity-history.js` | X/Y/Z 속도 RMS 시간 이력 창. `/api/generator/velocity-history` 결과를 차트·표·제외 목록으로 그린다 |
 | `generator-api.js` | 파일 업로드, 미리보기, 송신 시작·중지, 송신 상태 |
@@ -133,7 +134,8 @@
 | `POST /api/monitor/connect`, `/disconnect` | 수신 MQTT 연결·해제. 본문 `host`, `port`, `topic`, `qos`(0/1/2, 기본 1), `csv_enabled`. 연결 때 CSV 폴더를 연다 |
 | `GET /api/monitor/state?device=&have=` | 연결 상태, MAC 목록, 로그, 최신 그래프와 그 지문(`latest_key`). 연결된 동안 화면이 1초마다 부른다. `have`가 지금 그래프 지문과 같으면 그래프(`latest`)를 빼고 `latest_same: true`만 보낸다(2026-11-26, 약 417KB → 약 1.3KB) |
 | `POST /api/monitor/view` | 수신 그래프 옵션과 창 길이를 바꾸고 다시 그린다 |
-| `POST /api/monitor/command` | `start`, `stop`(3단계, PUBACK 대기), `apply`, `query`를 `S/{MAC}`에 보낸다 |
+| `POST /api/monitor/command` | `start`, `stop`(3단계, PUBACK 대기), `apply`, `query`, `raw`(본문 `raw`의 JSON을 그대로 retain, 2026-11-27)를 `S/{MAC}`에 보낸다 |
+| `POST /api/monitor/command/preview` | 칸 값으로 '설정 적용' JSON을 만들어 돌려준다(보내지 않음). 화면 '보낼 JSON' 칸이 쓴다 |
 | `POST /api/monitor/fft-check`, `/logs/clear` | 수신 RAW의 FFT 왕복 검사, 로그 비우기 |
 | `POST /api/generator/upload`, `/upload-adxl-csv` | 파일을 임시 파일로 읽어 재전송 목록에 올리고 바로 지운다 |
 | `POST /api/generator/preview`, `/fft-check` | 재전송 목록의 패킷 하나를 옵션대로 그린다(옵션 `psd.on`이면 FFT 칸이 PSD), FFT 왕복 검사 |
