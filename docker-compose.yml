@@ -13,15 +13,16 @@
 # 컨테이너는 ./data_csv_web 주인과 같은 사용자로 돈다(이미지 안 시작 스크립트). 폴더가 없으면 Docker가 root로 만든다.
 #
 # 이미지 만들기(소스 PC): python docker/make_bundle.py  → docker-bundle/ 에 sensor-web.tar 와 이 파일
-# 포트를 바꾸려면 아래 "8060"만 고친다(컨테이너 안은 8081 고정). 8060 = 운영 서버 예전 웹과 같은 포트.
-# MQTT 브로커 주소는 설정 화면 '수신 MQTT'에 넣는다. 같은 서버의 브로커면 host.docker.internal.
+# 포트를 바꾸려면 아래 "8060:8060"의 앞쪽(서버 쪽)만 고친다. 뒤쪽은 컨테이너 안 포트로 이미지에 8060 고정(2026-11-27 8081에서 바꿈).
+# 8060 = 운영 서버 예전 웹과 같은 포트. 안팎을 같은 번호로 맞춰 헷갈리지 않게 했다.
+# MQTT 브로커 주소는 화면 '센서 수신 모니터'에서 연결할 때 넣는다(서버가 기억해 다시 켜져도 자동 연결). 같은 서버의 브로커면 host.docker.internal(127.0.0.1은 컨테이너 자신).
 services:
   web:
     image: sensor-web:latest
     container_name: sensor-web
     restart: unless-stopped
     ports:
-      - "8060:8081"
+      - "8060:8060"
     volumes:
       - ./sensor_web_db:/data
       - ./data_csv_web:/data/data_csv_web

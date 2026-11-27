@@ -59,9 +59,12 @@ def monitor_clear_logs():
 
 
 @router.get("/api/monitor/state")
-def monitor_state(device: str = ""):
-    """지금 수신 상태와 최신 그래프를 돌려준다."""
-    return monitor.state(device)
+def monitor_state(device: str = "", have: str = ""):
+    """지금 수신 상태와 최신 그래프를 돌려준다.
+
+    have = 화면이 가진 그래프 지문. 같으면 그래프(latest)를 빼고 보낸다(MonitorService.state 참고).
+    """
+    return monitor.state(device, have)
 
 
 @router.post("/api/monitor/fft-check")

@@ -1,6 +1,6 @@
 # web_db 구성과 데이터 흐름
 
-기준 프로세스는 `http://127.0.0.1:8081`이다.
+기준 프로세스는 이 PC에서 바로 띄운 `http://127.0.0.1:8081`이다(Docker는 컨테이너 안·밖 모두 8060).
 
 ```text
 .\.venv\Scripts\python.exe -m uvicorn web_db.server:app --host 127.0.0.1 --port 8081
@@ -48,7 +48,7 @@
 | `/generator` | `front/generator.html` + `partials/drawer.html` | 외부 CSV 분석과 MQTT 재전송 |
 | `/studio` | `front/studio.html` + `partials/drawer.html` | DB 패킷 분석과 MQTT 재전송 |
 | `/dashboard` | `front/dashboard.html` | 저장된 SRSS, RMS, PEAK만 조회 |
-| `/settings` | `front/settings.html` | MAC 표시 이름과 SRSS 한계 |
+| `/settings` | `front/settings.html` | 탭 네 개: 장치 · 수신(이름·위치·구간·사진) / 장치 표시(MAC·종류별 표시) / 평면도 배치 / 통계 데이터(CSV 가져오기·통계 기준) |
 
 `/generator`와 `/studio`의 설정 서랍(필터, 단위, FFT, SRSS, MEMS 보정, 전송, 로그)은 내용이 같아서 `partials/drawer.html` 한 파일에 둔다. 두 페이지 HTML에는 그 자리에 `<!-- @include partials/drawer.html -->`, `<!-- @include partials/psd-history.html -->` 주석만 있고, `routes/pages.py`의 `_with_includes`가 요청마다 파일을 읽어 그 자리에 넣은 뒤 한 장의 HTML로 보낸다. 브라우저가 따로 불러오는 방식이 아니라서, 스크립트가 처음 실행될 때 서랍의 입력 칸이 이미 있다. 서랍을 고칠 때는 이 파일 하나만 고치면 되고, 서버를 다시 켜지 않아도 새로고침하면 반영된다. 화면별 차이(전송 체크와 Topic 숨김 등)는 `studio.js`가 불러온 뒤에 처리한다.
 
@@ -64,7 +64,7 @@
 | `theme.js` | White / Gray / Dark. 차트가 다시 그려질 때 눈금 색을 맞춘다. 나중에 만드는 차트는 `SensorTheme.watch`로 붙인다 |
 | `monitor-draw.js` | 수신 화면의 그래프 옵션과 곡선 그리기 |
 | `monitor-api.js` | `/api/monitor/state`, 명령, `/api/monitor/view` |
-| `monitor.js` | 수신 화면 버튼을 위 함수에 연결. MQTT가 연결된 동안만 1초마다 상태를 다시 읽는다 |
+| `monitor.js` | 수신 화면 버튼을 위 함수에 연결. MQTT가 연결된 동안, **탭이 보일 때만** 1초마다 상태를 다시 읽는다(앞 요청이 안 끝났으면 건너뜀). 탭이 다시 보이면 바로 한 번 읽는다(2026-11-26) |
 | `monitor-db.js` | 표시 이름과 설정 JSON. 설정 적용 뒤에 그 MAC 프로필을 다시 읽는다 |
 | `generator-draw.js` | 분석 화면의 그래프 옵션과 미리보기 그리기. 초음파 스펙트럼은 RAW 칸에만 둔다. PSD 결과 칸(`showPsd`) |
 | `velocity-history.js` | X/Y/Z 속도 RMS 시간 이력 창. `/api/generator/velocity-history` 결과를 차트·표·제외 목록으로 그린다 |
@@ -74,7 +74,8 @@
 | `db.js` | `/api/db/devices`, `/api/db/stats`, `/api/db/load`. 연 패킷은 `draw`로 넘긴다 |
 | `settings.js` | 설정 탭, 장치 이름과 SRSS 한계 저장, CSV 데이터 가져오기. `/api/db/device-name`, `/api/db/csv-import` |
 | `stat-profile.js` | 설정 > 통계 데이터의 '통계 계산 기준'(버전 저장·재계산·JSON 내보내기/가져오기). `/api/db/stat-profile`, `/api/db/stat-rebuild` |
-| `site.js` | 대문. 평면도 탭(여러 장, 탭마다 문제 수 배지), 아이콘 그리기, 정보 카드, 배치 편집(평면도 추가·교체·이름·순서·삭제, 끌어 놓기·이동·빼기·저장), 15초 상태 갱신 |
+| `site.js` | 대문. 평면도 탭(여러 장, 탭마다 문제 수 배지), 아이콘 그리기, 정보 카드, 배치 편집(평면도 추가·교체·이름·순서·삭제, 끌어 놓기·이동·빼기·저장), 15초 상태 갱신. 정보 카드 위쪽 진동 안내는 `site-stat.js` 창을 연다 |
+| `site-stat.js` | 센서 현황 진동 간단 통계 창(2026-11-27). `/api/db/dashboard?period=&mac=&bucket=hour` 한 MAC만 읽어 최근 값·기간 평균·최대·구간별 시간·시간별 그래프. Chart.js는 처음 열 때만 불러옴 |
 
 수신 화면의 흐름은 `monitor.js` 버튼 → `monitor-api.js` → 서버 → `monitor-draw.js`다. 분석 화면은 `generator.js` 또는 `db.js` → `generator-api.js` → 서버 → `generator-draw.js`다. 통계와 설정 화면은 각자 `dashboard.html`, `settings.js` 안에서 같은 방식으로 서버 JSON만 읽고 쓴다.
 
@@ -88,7 +89,7 @@
      옛 DB로 새 버전을 켤 때 일어나는 일과 `decoded_samples` 정리(`compact_db`)는 `docs/web_db-DB명세서.md` "기존 DB로 새 버전을 켤 때".
    - `MonitorService(store)`는 CSV 기록 스레드를 켠다. MQTT에는 아직 붙지 않는다.
    - `ReplayService()`는 빈 재전송 목록으로 시작한다.
-2. FastAPI 앱에 `/static`과 라우터 다섯 개(`pages`, `generator`, `monitor`, `analysis`, `db`)를 붙인다.
+2. FastAPI 앱에 `/static`과 라우터 여섯 개(`pages`, `generator`, `monitor`, `analysis`, `db`, `site`)를 붙인다. 응답은 1KB 넘으면 gzip으로 압축한다(2026-11-26).
 3. `start_daily_stats()`가 매시간 통계 스레드를 켠다. 이미 살아 있으면 새로 만들지 않는다. 통계 기준 버전이 없으면 첫 버전을 만들고, 지금 버전이 없으면(하루 통계에서 업그레이드한 직후) 그 버전으로 재계산을 백그라운드로 시작한다.
 
 4. 수신 모니터에서 마지막으로 '연결'한 뒤 '연결 해제'를 하지 않았으면 `monitor.auto_connect()`가 기억한 주소·Topic·CSV 체크로 백그라운드 연결을 시작한다. 브로커가 꺼져 있어도 서버는 뜨고, paho가 1~30초 간격으로 다시 붙기를 시도한다.
@@ -130,7 +131,7 @@
 | `POST /api/site/placements` | 모든 평면도의 센서 위치를 통째로 저장 `[{plan_id, mac, x, y}]`(x·y는 0~1). 같은 MAC은 마지막 한 곳만 |
 | `GET /api/site/mqtt` | 마지막 수신 연결 값(수신 모니터 '연결' 때 저장)과 지금 연결 상태. 저장 API는 없다(연결·해제가 저장한다) |
 | `POST /api/monitor/connect`, `/disconnect` | 수신 MQTT 연결·해제. 본문 `host`, `port`, `topic`, `qos`(0/1/2, 기본 1), `csv_enabled`. 연결 때 CSV 폴더를 연다 |
-| `GET /api/monitor/state?device=` | 연결 상태, MAC 목록, 로그, 최신 그래프. 연결된 동안 화면이 1초마다 부른다 |
+| `GET /api/monitor/state?device=&have=` | 연결 상태, MAC 목록, 로그, 최신 그래프와 그 지문(`latest_key`). 연결된 동안 화면이 1초마다 부른다. `have`가 지금 그래프 지문과 같으면 그래프(`latest`)를 빼고 `latest_same: true`만 보낸다(2026-11-26, 약 417KB → 약 1.3KB) |
 | `POST /api/monitor/view` | 수신 그래프 옵션과 창 길이를 바꾸고 다시 그린다 |
 | `POST /api/monitor/command` | `start`, `stop`(3단계, PUBACK 대기), `apply`, `query`를 `S/{MAC}`에 보낸다 |
 | `POST /api/monitor/fft-check`, `/logs/clear` | 수신 RAW의 FFT 왕복 검사, 로그 비우기 |
@@ -348,7 +349,7 @@ python -m web_db.src.import_csv D:\20261106_100046           # 지우지 않고 
    - 주기는 화면 값, 또는 자동 주기면 `numofsample / samplerate`다. Jitter와 손실(Loss) 옵션을 적용한다.
    - ADXL은 X, Y, Z를 `xyz_gap` ms 간격으로 보낸다. seq 자동이면 `SequenceState`가 수신 쪽이 한 세트로 묶을 수 있는 seq를 붙인다.
    - 앞부분만 복구한 ADXL 패킷은 보내지 않는다.
-   - publish가 실패하면 그 센서 스레드는 로그를 남기고 멈춘다. 브로커에 다시 붙지 않는다.
+   - publish가 실패하면 로그를 남기고 **모든 센서 송신이 멈춘다**(발생기 v070·v073도 같다). 브로커에 다시 붙지 않는다.
 5. `GET /api/generator/status`는 메모리의 숫자와 로그만 돌려준다. 브로커에 접속하지 않는다.
 
 ## 통계

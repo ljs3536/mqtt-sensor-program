@@ -1,6 +1,6 @@
 # web_db DB 명세서
 
-기준은 `http://127.0.0.1:8081` 의 `web_db/sensor.sqlite`다. 이 문서는 통계를 위해 정한 저장 계획이다. 수신 화면의 RAW, FFT는 이 테이블을 쓰지 않는다.
+기준은 이 PC에서 바로 띄운 `http://127.0.0.1:8081`의 `web_db/sensor.sqlite`다(Docker는 8060, DB는 `/data/sensor.sqlite`). 이 문서는 통계를 위해 정한 저장 계획이다. 수신 화면의 RAW, FFT는 이 테이블을 쓰지 않는다.
 
 DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 쌓이고, 통계를 만들려면 그 파일 전부를 찾아 해당하는 CSV를 모두 읽어야 했다. 원본은 `packet`에 쌓아 두고, 통계 숫자는 그 테이블만 읽어 `measurement`에 만든다.
 
@@ -16,7 +16,7 @@ DB로 바꾼 이유는 CSV다. 패킷은 연결할 때마다 폴더에 계속 �
 | `stat_profile` | 통계 계산 기준 버전(g/LSB, MEMS 보정, 필터, Window, Welch). 저장할 때마다 새 줄, 지우지 않는다 |
 | `stat_cursor` | 통계가 이미 본 마지막 packet id. 다음 최신화는 그 다음부터 읽는다. 키: ADXL 실시간 `MAC`, ADXL 가져온 CSV `CSV|MAC`, PIEZO `PIEZO|MAC` |
 | `stat_meta` | `measurement`를 마지막으로 만든 시각. 키는 `measurement` 하나다. 매시간 스케줄러가 이 시각의 '시'로 이번 시간에 돌았는지 본다 |
-| `app_setting` | 키 하나에 JSON 하나인 앱 설정. `mqtt`(설정 화면의 수신 Broker·Port·Topic·CSV·자동 연결), `stat_profile_active`(지금 통계 기준 버전 `{"id": n}`) |
+| `app_setting` | 키 하나에 JSON 하나인 앱 설정. `mqtt`(마지막 수신 연결 값 Broker·Port·Topic·구독 QoS·CSV·자동 연결. 센서 수신 모니터의 연결·해제가 쓴다, 설정 화면 칸은 2026-11-19에 없앰), `stat_profile_active`(지금 통계 기준 버전 `{"id": n}`) |
 | `floor_plan` | 대문 평면도 이미지 정보. 여러 장(층·구역마다 한 장, 화면은 탭). 이미지 파일은 DB 옆 `site_files/`에 둔다 |
 | `site_state` | 센서별 지금 상태(경보·끊김·주의·정상·대기)와 그 상태가 시작된 시각(`since`). `site_watch`가 1분마다 고친다. MAC당 한 줄 |
 | `site_state_history` | 상태가 바뀔 때마다 한 줄(`prev_state` → `state`, `changed_at`). 수신이 꺼져 있을 때는 기록하지 않는다. 180일보다 오래된 줄은 지운다 |

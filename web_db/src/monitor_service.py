@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -282,7 +283,8 @@ class MonitorService:
         self.records.setdefault(device_id, {})[axis] = record
         stat = self.device_stats.setdefault(device_id, {"count": 0, "last": ""})
         stat["count"] += 1
-        stat["last"] = datetime.now().strftime("%H:%M:%S")
+        # 2026-11-26: 날짜도 붙인다(월-일 시:분:초). 센서가 1시간 주기라 며칠 뒤 화면을 열면 시각만으로는 오늘인지 알 수 없었다.
+        stat["last"] = datetime.now().strftime("%m-%d %H:%M:%S")
         self.latest_device = device_id
         self._save_csv(obj, kind, axis, sensor_hex, samples if kind != "ULTRASONIC" else record["y"], meta if kind == "ULTRASONIC" else None)
         rms = ""
@@ -728,8 +730,17 @@ class MonitorService:
         self.log(f"{label} 완료: {len(macs)}개 센서, normal 복귀 {normal_text}")
         return f"{stop_text}\n(retain 삭제)\n{normal_text}"
 
-    def state(self, device=""):
-        """연결 상태, MAC 목록, 최신 그래프를 한 덩어리로 돌려준다."""
+    def state(self, device="", have=""):
+        """연결 상태, MAC 목록, 최신 그래프를 한 덩어리로 돌려준다.
+
+        have: 화면이 지금 그려 둔 그래프의 지문(직전 응답의 latest_key).
+        2026-11-26(LTE 데이터 절약): 그래프(latest)는 RAW 8192점·FFT·PSD라 응답의 거의 전부(약 417KB)인데,
+        센서는 1시간·분 단위로 보내므로 1초 갱신 대부분은 같은 그래프를 다시 보내고 있었다.
+        그래서 매번 그래프를 계산한 뒤 그 내용의 지문(MD5)을 latest_key로 함께 보내고,
+        화면이 보낸 have와 같으면 latest를 빼고 latest_same=True만 보낸다(상태·로그·MAC 목록은 늘 보냄).
+        지문은 '계산 결과' 자체로 만들기 때문에 새 패킷, 장치 선택, 그래프 옵션, 설정의 g/LSB·SRSS 구간
+        변경 등 그래프가 달라지는 이유가 무엇이든 지문이 바뀌어 다시 보낸다(놓치는 경우가 없다).
+        """
         with self.lock:
             names = list(self.records)
             target = device if device in self.records else ""
@@ -771,5 +782,12 @@ class MonitorService:
             payload["names"] = self.store.display_names()
         except Exception:
             payload["names"] = {}
-        payload["latest"] = {target: self._device_views(snapshot, window, options)} if target else {}
+        latest = {target: self._device_views(snapshot, window, options)} if target else {}
+        # 지문: 장치 이름 + 계산된 그래프 전체. numpy 값이 섞여도 default=str로 글자로 만들어 비교만 한다.
+        key = hashlib.md5(json.dumps(latest, default=str, separators=(",", ":")).encode("utf-8")).hexdigest() if latest else ""
+        payload["latest_key"] = key
+        if key and have == key:
+            payload["latest_same"] = True  # 화면에 있는 그래프 그대로 두면 된다
+        else:
+            payload["latest"] = latest
         return payload

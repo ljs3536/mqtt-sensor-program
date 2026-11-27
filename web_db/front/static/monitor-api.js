@@ -66,9 +66,23 @@ async function fillSavedMqtt() {
   }
 }
 
-/** 연결 상태, MAC 목록, 최신 곡선을 받아 화면에 반영한다. */
-async function refresh() {
-  const query = graphDevice ? `?device=${encodeURIComponent(graphDevice)}` : "";
+/*
+ * 화면에 그려 둔 그래프의 지문(서버 latest_key). 2026-11-26 LTE 데이터 절약.
+ * 1초 갱신은 이 값을 have로 보내고, 서버는 그래프가 그대로면 그래프(약 417KB)를 빼고 상태·로그만 보낸다.
+ */
+let latestKey = "";
+
+/**
+ * 연결 상태, MAC 목록, 최신 곡선을 받아 화면에 반영한다.
+ * reuse=true(1초 자동 갱신·탭 복귀)면 지금 그래프의 지문을 보내 바뀌지 않은 그래프는 받지 않는다.
+ * 버튼·장치 선택·그래프 옵션 변경 등 직접 부를 때는 기본값 false라 늘 그래프 전체를 받아 다시 그린다
+ * (화면에서만 바뀌는 옵션도 확실히 다시 그리기 위해).
+ */
+async function refresh(reuse = false) {
+  const params = new URLSearchParams();
+  if (graphDevice) params.set("device", graphDevice);
+  if (reuse && latestKey) params.set("have", latestKey);
+  const query = params.toString() ? `?${params}` : "";
   const data = await (await fetch(`/api/monitor/state${query}`)).json();
   monitorLive = !!data.connected;
   profiles = data.profiles || profiles;
@@ -90,7 +104,9 @@ async function refresh() {
   else box.value = "";
   graphDevice = box.value;
   const shown = box.value || data.latest_device || "";
-  draw((data.latest || {})[shown] || {});
+  // latest_same = 서버가 '화면 그래프 그대로'라고 알려 준 경우. 다시 그리지 않는다(확대 상태 등도 유지).
+  if (!data.latest_same) draw((data.latest || {})[shown] || {});
+  latestKey = data.latest_key || "";
   const mac = selectedList()[0];
   if (mac && data.configs && data.configs[mac]) {
     preview.textContent = JSON.stringify(data.configs[mac], null, 2);

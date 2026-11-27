@@ -10,16 +10,16 @@ from pathlib import Path
 
 import numpy as np
 
-from web_db.src.paths import ROOT, SETTINGS_DIR
+from web_db.src.paths import MEMS_DEFAULT_DIR, MEMS_DIR
 
-# 저장 위치. Docker에서는 SENSOR_DATA_DIR(볼륨)이고, 그냥 실행하면 저장소 루트다(paths.py).
-APP_DIR = SETTINGS_DIR
+# 저장 위치. Docker에서는 SENSOR_DATA_DIR(볼륨)이고, 그냥 실행하면 web_db/다(paths.py, 2026-11-27 전에는 저장소 루트).
+APP_DIR = MEMS_DIR
 
 
 def _settings_file(name):
-    """읽을 보정 파일. 데이터 폴더에 아직 없으면(Docker 첫 실행) 저장소 루트의 기본 파일을 읽는다."""
+    """읽을 보정 파일. 데이터 폴더에 아직 없으면(Docker 첫 실행) web_db/의 기본 파일을 읽는다."""
     path = APP_DIR / name
-    return path if path.exists() else ROOT / name
+    return path if path.exists() else MEMS_DEFAULT_DIR / name
 
 
 # ---------- 설정 파일 읽기 캐시 (2026-11-23) ----------

@@ -82,6 +82,8 @@ PIEZO는 이 규칙을 쓴다(수신기 V057 `decode_piezo_samples`가 되돌림
 
 ## C. 문서와 코드가 다른 곳(이번 작업과 상관없는 것)
 
+2026-11-27: 아래 항목은 모두 해당 문서에서 고쳤다(로컬 실행 포트는 8081, Docker는 8060으로 통일). 세트 PEAK는 지금 `web_db-DB명세서.md`가 '필터 출력 |값|의 최댓값'으로 적혀 있어 맞다. 표는 기록으로 남긴다.
+
 | 문서 | 내용 | 실제 |
 | --- | --- | --- |
 | `웹-기능상세.md` "그래프 조작" | "더블클릭 = 자동 범위" | `graph.js`에 더블클릭 처리가 없다. 전체 보기는 '그래프 전체 보기' 버튼과 우클릭 메뉴 |
@@ -142,7 +144,7 @@ PIEZO는 이 규칙을 쓴다(수신기 V057 `decode_piezo_samples`가 되돌림
 ### D-13. SciPy 비교 그래프 — 작업량 중, 필요성 낮음
 
 - 프로그램: 별도 창에서 같은 패킷을 SciPy(`scipy.signal` 필터, `scipy.fft`)로 계산한 결과와 자체 계산을 겹쳐 그린다. 계산이 맞는지 검증하는 개발용 기능이다.
-- 웹: 없음. Docker 이미지에 SciPy가 없다(`requirements-web.txt`).
+- 웹: 없음. Docker 이미지에 SciPy가 없다(`web_db/requirements.txt`, 전 이름 `requirements-web.txt`).
 
 ### D-14. ADXL CSV를 X/Y/Z 세트가 모인 뒤 기록 — 작업량 중, 선택 필요
 

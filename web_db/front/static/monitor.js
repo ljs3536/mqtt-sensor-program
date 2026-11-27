@@ -142,6 +142,22 @@ loadDefaults()
   .then(() => { ready = true; });
 // 연결 중일 때만 1초마다 최신 파형·로그·MAC 목록을 가져온다.
 // 연결이 끊긴 것을 본 조회 다음부터는 서버를 부르지 않는다.
+//
+// 2026-11-26 LTE 데이터 절약:
+// - 탭이 안 보이면(다른 탭·창 최소화) 부르지 않는다. 그동안에도 서버는 MQTT를 계속 받고
+//   MAC 목록·개수·마지막 파형·로그를 메모리에 들고 있으므로, 탭으로 돌아오는 순간 한 번 받아 그대로 보인다.
+// - 그래프는 바뀌었을 때만 받는다(refresh(true) → 지문 비교, monitor-api.js).
+// - 앞 요청이 아직 안 끝났으면(느린 LTE) 다음 요청을 겹쳐 보내지 않는다.
+let refreshing = false;
+function liveRefresh() {
+  if (refreshing || document.hidden) return;
+  refreshing = true;
+  refresh(true).catch(() => {}).finally(() => { refreshing = false; });
+}
 setInterval(() => {
-  if (monitorLive) refresh().catch(() => {});
+  if (monitorLive) liveRefresh();
 }, 1000);
+// 탭이 다시 보이면 연결 여부와 상관없이 한 번 바로 읽는다(숨어 있는 동안 연결·해제됐을 수도 있다).
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) liveRefresh();
+});

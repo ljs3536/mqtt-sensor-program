@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +28,11 @@ from web_db.src.runtime import monitor, store
 from web_db.src.site_watch import start_site_watch
 
 app = FastAPI(title="sensor-program-db")
+# 응답 압축(gzip). 2026-11-26: 운영 서버를 LTE로 밖에서 볼 때 데이터 사용량을 줄이려고 켰다.
+# 브라우저가 'Accept-Encoding: gzip'을 보내면 서버가 압축해 보내고 브라우저가 알아서 푼다(화면 코드 변경 없음).
+# 그래프 JSON(숫자 글자)은 약 1/4.5로 줄어든다(수신 모니터 417KB → 약 91KB). 1KB 미만 응답은 그대로 보낸다.
+# 이 서버에는 스트리밍(SSE) 응답이 없어 압축이 실시간 전달을 막는 곳은 없다.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.mount("/static", StaticFiles(directory=FRONT / "static"), name="static")
 app.include_router(pages_router)
 app.include_router(generator_router)

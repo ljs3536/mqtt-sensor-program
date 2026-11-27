@@ -1,0 +1,11 @@
+{
+  "frequency_enabled": true,
+  "sensitivity_enabled": true,
+  "frequency_divisor": 1.022,
+  "low_hz": 60.0,
+  "high_hz": 360.0,
+  "low_sensitivity": 0.99,
+  "mid_intercept": 1.07,
+  "mid_slope": 0.0005,
+  "high_sensitivity": 0.89
+}

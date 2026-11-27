@@ -601,7 +601,7 @@
       </div>
       ${photoHtml(s)}
       <div class="card-state state-${s.state}"><span class="state-chip">${esc(s.state_text)}${lasting(s) ? ` · ${lasting(s)}` : ""}</span>${esc(reason(s))}</div>
-      ${vibration ? `<a class="card-alert state-${vibrationState}" href="${dashLink}" data-focus="${esc(s.mac)}">${vibration} · 통계에서 확인 →</a>` : ""}
+      ${vibration ? `<a class="card-alert state-${vibrationState}" href="${dashLink}" data-stat-pop="${esc(s.mac)}" data-kind="${esc(s.kind)}">${vibration} · 통계에서 확인 →</a>` : ""}
       <dl>
         <dt>마지막 수신</dt><dd>${s.last_at ? `${ago(s.age_s)} <small>${esc(s.last_at.replace("T", " ").slice(0, 19))}</small>` : "-"}</dd>
         <dt>배터리</dt><dd>${batteryHtml(s, true) || "-"}${s.battery_state === "low" ? ' <b class="battery-warn">부족</b>' : ""}</dd>
@@ -645,6 +645,19 @@
   if (card) {
     card.addEventListener("click", (event) => {
       if (event.target.closest(".card-close")) hideCard();
+      // 위쪽 진동 안내 '통계에서 확인 →'(2026-11-27 요청): 통계 페이지로 가지 않고 그 센서 간단 통계 창을 띄운다(site-stat.js).
+      // 카드는 닫지 않는다(창을 닫으면 카드가 그대로 있다). site-stat.js가 없으면 링크대로 통계 페이지로 가며 그 센서를 강조한다.
+      const pop = event.target.closest("[data-stat-pop]");
+      if (pop) {
+        const sensor = sensorBy(pop.dataset.statPop);
+        if (window.SiteStat) {
+          event.preventDefault();
+          window.SiteStat.open({ mac: pop.dataset.statPop, kind: pop.dataset.kind, title: sensor ? label(sensor) : pop.dataset.statPop });
+        } else {
+          try { sessionStorage.setItem("dashboard-focus", pop.dataset.statPop); } catch (_) { /* 강조만 빠짐 */ }
+        }
+        return;
+      }
       const link = event.target.closest("[data-focus]");
       if (link) {
         try {

@@ -39,7 +39,7 @@ def main(argv=None):
         shutil.rmtree(OUT)
     OUT.mkdir()
     if not args.no_build:
-        run("docker", "build", "-t", IMAGE, ".")
+        run("docker", "build", "-f", "web_db/Dockerfile", "-t", IMAGE, ".")  # Dockerfile은 web_db/ 안(2026-11-27), 기준 폴더는 루트
     run("docker", "save", "-o", str(OUT / "sensor-web.tar"), IMAGE)
     shutil.copy2(ROOT / "docker-compose.yml", OUT / "docker-compose.yml")
     size = (OUT / "sensor-web.tar").stat().st_size / 1e6

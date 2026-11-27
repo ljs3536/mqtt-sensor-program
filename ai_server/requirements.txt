@@ -1,0 +1,22 @@
+# AI 판정 서버(ai_server) 패키지. Python 3.11 (web_db와 같은 버전, 2026-11-27).
+# 버전은 이 PC ai_server\.venv에서 추론 시험을 통과한 값으로 고정한다.
+#   py -3.11 -m venv ai_server\.venv
+#   ai_server\.venv\Scripts\python.exe -m pip install -r ai_server\requirements.txt
+# torch는 CPU판(아래 주소). GPU 없음.
+# LDMS 원본과 다른 점: numpy<2.0 조건을 뺐다(numpy 2.4.6에서 같은 결과 확인, web_db 이미지와 같은 버전).
+#                    paho-mqtt는 ai_server 코드가 쓰지 않아 뺐다.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# 서버
+fastapi==0.165.0
+uvicorn==0.54.0
+
+# 딥러닝·수학
+torch==2.15.0+cpu
+lightning==2.6.6
+pytorch-lightning==2.6.6
+torchmetrics==1.9.0
+numpy==2.4.6
+scipy==1.17.1
+scikit-learn==1.9.1
+pandas==3.1.1

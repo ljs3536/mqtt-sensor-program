@@ -17,9 +17,10 @@ web
 web_db/sensor.sqlite*
 web_db/site_files
 *.spec
-mqtt_wave_replay_generator_*.py
-new_piezo_adc_*.py
-requirements.txt
+# 데스크톱 프로그램(2026-11-27 program/으로 옮김)과 AI 서버(ai_server/, 따로 이미지)
+program
+ai_server
+web_db/Dockerfile
 docker-data
 docker-bundle
 docker/make_bundle.py
